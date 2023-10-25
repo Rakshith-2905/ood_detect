@@ -11,7 +11,7 @@ from tqdm import tqdm
 from dataloader import WildsDataLoader
 from models.resnet import CustomResNet
 
-def train_one_epoch(train_loader, model, criterion, optimizer, epoch, device):
+def train_one_epoch(train_loader, model, criterion, optimizer, device, epoch):
     model.train()
     total_loss, total_correct, total_samples = 0, 0, len(train_loader.dataset)
     
@@ -68,9 +68,12 @@ def main(args):
     
     train_set = WildsDataLoader(dataset_name=args.dataset, split="train", image_size=args.image_size, batch_size=args.batch_size, class_percentage=args.class_percentage, seed=args.seed)
     train_loader = train_set.load_data()
+    train_set.display_details()
     train_classes = train_set.selected_classes
+
     val_set= WildsDataLoader(dataset_name=args.dataset, split="val", image_size=args.image_size, batch_size=args.batch_size, class_percentage=0.5, selected_classes=train_set.selected_classes, use_train_classes=True)
     val_loader = val_set.load_data()
+    val_set.display_details()
     val_classes = val_set.selected_classes
 
     # Compare the selected classes in the train and validation sets if they dont match assert
@@ -98,8 +101,8 @@ def main(args):
     
     best_val_accuracy = 0.0
     for epoch in range(args.num_epochs):
-        train_loss, train_acc = train_one_epoch(train_loader, model, criterion, optimizer, device)
-        val_loss, val_acc = validate(val_loader, model, criterion, device)
+        train_loss, train_acc = train_one_epoch(train_loader, model, criterion, optimizer, device, epoch)
+        val_loss, val_acc = validate(val_loader, model, criterion, device, epoch)
         
         train_losses.append(train_loss)
         train_accuracies.append(train_acc)

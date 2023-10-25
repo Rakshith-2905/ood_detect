@@ -12,6 +12,10 @@ from torch.utils.data import Subset
 from torch.utils.data import DataLoader
 from torch.utils.data import Dataset
 
+import ssl
+ssl._create_default_https_context = ssl._create_unverified_context
+
+
 class TransformedSubset(Dataset):
     def __init__(self, subset, transform=None, class_mapping=None):
         self.subset = subset
@@ -49,14 +53,16 @@ class WildsDataLoader:
         unique_classes = np.unique(dataset.y_array)
         
         if self.selected_classes is None:
-            num_selected_classes = int(len(unique_classes) * self.class_percentage)
-            self.selected_classes = np.random.choice(unique_classes, num_selected_classes, replace=False)
+            if not self.use_train_classes and self.split != 'train':
+                remaining_classes = np.setdiff1d(unique_classes, self.selected_classes)
+                self.selected_classes = remaining_classes
+            else:
+                num_selected_classes = int(len(unique_classes) * self.class_percentage)
+                self.selected_classes = np.random.choice(unique_classes, num_selected_classes, replace=False)
         else:
             if not self.use_train_classes and self.split != 'train':
                 remaining_classes = np.setdiff1d(unique_classes, self.selected_classes)
-                num_required = int(len(unique_classes) * self.class_percentage) - len(self.selected_classes)
-                additional_classes = np.random.choice(remaining_classes, num_required, replace=False)
-                self.selected_classes = np.concatenate([self.selected_classes, additional_classes])
+                self.selected_classes = remaining_classes
 
         # Sort the selected_classes array
         self.selected_classes = np.sort(self.selected_classes)
@@ -68,7 +74,7 @@ class WildsDataLoader:
     def load_data(self):
         dataset_args = {
             'iwildcam': {'download': True, 'transform': self.transform},
-            'domainnet': {'source_domain':'real', 'target_domain':'real'},
+            'domainnet': {'download': True, 'source_domain':'real', 'target_domain':'real'},
             # Add other datasets with their specific args here
             # 'other_dataset': {'arg1': value1, 'arg2': value2, ...}
         }
@@ -95,14 +101,14 @@ class WildsDataLoader:
         else:
             if self.class_percentage < 1.0:
                 # Using PyTorch's DataLoader with the collate function from the original dataset
-                self.dataloader = DataLoader(self.data, batch_size=self.batch_size, shuffle=False)
+                self.dataloader = DataLoader(self.data, batch_size=self.batch_size, shuffle=True)
             else:
                 self.dataloader = get_eval_loader('standard', self.data, batch_size=self.batch_size)
         return self.dataloader
 
     def display_details(self, show_images=False):
-        print(f"Dataset Name: {self.dataset_name}")
-        print(f"Split: {self.split}")
+        print(f"\nDataset Name: {self.dataset_name}")
+        print(f"Split: {self.split}")       
         print(f"Number of samples: {len(self.data)}")
         print(f"Image size: {self.image_size}")
 
