@@ -22,7 +22,7 @@ class DomainNetDataset(Dataset):
 
         self.num_classes = len(self.targets)
         print(f"Number of classes in {domain} {split} set: {self.num_classes}")
-        print(f"Number of images in {domain} {split} set: {len(self.file_paths)}")
+        print(f"Number of images in {domain} {split} set: {len(self.file_paths)}\n")
     def __len__(self):
         return len(self.file_paths)
             

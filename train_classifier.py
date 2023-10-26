@@ -9,7 +9,6 @@ import os
 import matplotlib.pyplot as plt
 from tqdm import tqdm
 
-from dataloader import WildsDataLoader
 from models.resnet import CustomResNet
 from domainnet_data import DomainNetDataset, get_domainnet_loaders
 
@@ -33,7 +32,6 @@ def train_one_epoch(train_loader, model, criterion, optimizer, device, epoch):
         _, predicted = outputs.max(1)
         batch_correct = (predicted == labels).sum().item()
         total_correct += batch_correct
-        total_samples += inputs.size(0)
 
         # Set metrics for tqdm
         pbar.set_postfix({"Epoch Loss": total_loss/total_samples, "Epoch Acc": total_correct/total_samples})
@@ -58,7 +56,6 @@ def validate(val_loader, model, criterion, device, epoch):
             _, predicted = outputs.max(1)
             batch_correct = (predicted == labels).sum().item()
             total_correct += batch_correct
-            total_samples += inputs.size(0)
             # Set metrics for tqdm
             pbar.set_postfix({"Epoch Loss": total_loss/total_samples, "Epoch Acc": total_correct/total_samples})
 
@@ -74,15 +71,21 @@ def main(args):
 
     model = CustomResNet(model_name=args.resnet_model, num_classes=len(class_names), use_pretrained=args.use_pretrained)
     model.to(device)
+
+    # Dataparallel for multi-GPU training
+    if torch.cuda.device_count() > 1:
+        print(f"Using {torch.cuda.device_count()} GPUs")
+        model = nn.DataParallel(model)    
     
     # Loss function and optimizer
     criterion = nn.CrossEntropyLoss()
     optimizer = optim.Adam(model.parameters(), lr=args.learning_rate)
+    scheduler = optim.lr_scheduler.MultiStepLR(optimizer, milestones=[30, 60, 90], gamma=0.1)
     
     # Make directory for saving results
     save_dir = f"logs/classifier/{args.resnet_model}_{args.dataset}_{args.domain}"
     if not os.path.exists(save_dir):
-        os.makedirs(save_dir)
+        os.makedirs(save_dir, exist_ok=True)
 
     # Save arguments if not resuming
     if not args.resume:
@@ -106,19 +109,22 @@ def main(args):
         best_val_accuracy = checkpoint['best_val_accuracy']
         # Load optimizer state
         optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+        scheduler.load_state_dict(checkpoint['scheduler_state_dict'])
         # Load training and validation metrics
         train_losses = checkpoint['train_losses']
         train_accuracies = checkpoint['train_accuracies']
         val_losses = checkpoint['val_losses']
         val_accuracies = checkpoint['val_accuracies']
-        
+
         print(f"Resuming training from epoch {start_epoch}")
 
     
     for epoch in range(start_epoch, args.num_epochs):
-        train_loss, train_acc = train_one_epoch(train_loader, model, criterion, optimizer, device, epoch)
+        train_loss, train_acc = train_one_epoch(train_loader, model, criterion, optimizer, scheduler, device, epoch)
         val_loss, val_acc = validate(val_loader, model, criterion, device, epoch)
         
+        scheduler.step()
+
         train_losses.append(train_loss)
         train_accuracies.append(train_acc)
         val_losses.append(val_loss)
@@ -149,6 +155,7 @@ def main(args):
                 'model_state_dict': model.state_dict(),
                 'best_val_accuracy': best_val_accuracy,
                 'optimizer_state_dict': optimizer.state_dict(),
+                'scheduler_state_dict': scheduler.state_dict(),
             }, os.path.join(save_dir, f"best_checkpoint.pth"))
 
         if epoch % 10 == 0:
@@ -157,6 +164,7 @@ def main(args):
                 'model_state_dict': model.state_dict(),
                 'best_val_accuracy': best_val_accuracy,
                 'optimizer_state_dict': optimizer.state_dict(),
+                'scheduler_state_dict': scheduler.state_dict(),
                 'train_losses': train_losses,
                 'train_accuracies': train_accuracies,
                 'val_losses': val_losses,
