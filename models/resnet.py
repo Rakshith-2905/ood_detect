@@ -2,7 +2,7 @@ import torch.nn as nn
 from torchvision.models import resnet18, resnet34, resnet50, resnet101, resnet152
 
 class CustomResNet(nn.Module):
-    def __init__(self, model_name, num_classes, use_pretrained=True):
+    def __init__(self, model_name, num_classes, use_pretrained=False):
         super(CustomResNet, self).__init__()
 
         # Define available ResNet architectures
@@ -30,7 +30,7 @@ class CustomResNet(nn.Module):
 
     def forward(self, x, return_features=False):
         if return_features:
-            return self.features(x).squeeze(-1).squeeze(-1)
+            return self.model(x), self.features(x).squeeze(-1).squeeze(-1)
         else:
             return self.model(x)
 
