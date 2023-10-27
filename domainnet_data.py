@@ -38,6 +38,29 @@ class DomainNetDataset(Dataset):
         
         return image, label
 
+class TensorDatasetFromSavedFiles(Dataset):
+    """
+    A dataset that loads tensors from saved files.
+    """
+
+    def __init__(self, save_dir, prefix="train"):
+        """
+        Args:
+        - save_dir (str): Directory where the data was saved.
+        - prefix (str): Prefix for filenames, e.g., 'train' or 'test'.
+        """
+        self.outputs = torch.load(os.path.join(save_dir, f"{prefix}_outputs.pth"))
+        self.features = torch.load(os.path.join(save_dir, f"{prefix}_features.pth"))
+        self.labels = torch.load(os.path.join(save_dir, f"{prefix}_labels.pth"))
+
+        assert len(self.outputs) == len(self.features) == len(self.labels), "Mismatch in number of samples"
+
+    def __len__(self):
+        return len(self.outputs)
+
+    def __getitem__(self, idx):
+        return self.outputs[idx], self.features[idx], self.labels[idx]
+
 def get_domainnet_loaders(domain_name,batch_size=512,train_shuffle=True):
     imagenet_train_transform = transforms.Compose([
             transforms.RandomResizedCrop(224),

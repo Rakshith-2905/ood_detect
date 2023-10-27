@@ -1,5 +1,6 @@
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 
 import argparse
 import os
@@ -8,6 +9,7 @@ from tqdm import tqdm
 
 from models.resnet import CustomResNet
 from domainnet_data import DomainNetDataset, get_domainnet_loaders
+from utils import compute_accuracy
 
 
 def get_all_domainnet_loaders(batch_size=32):
@@ -20,23 +22,62 @@ def get_all_domainnet_loaders(batch_size=32):
 def evaluate(loader, model, criterion, device):
     model.eval()
     total_loss = 0.0
-    correct = 0
+    total_acc = 0.0
     total = 0
     with torch.no_grad():
         for inputs, labels in loader:
             inputs, labels = inputs.to(device), labels.to(device)
             
-            outputs = model(inputs)
+            outputs, features = model(inputs, return_features=True)
             loss = criterion(outputs, labels)
-            
-            total_loss += loss.item()
-            _, predicted = outputs.max(1)
-            total += labels.size(0)
-            correct += predicted.eq(labels).sum().item()
 
-    accuracy = 100. * correct / total
+            predictions = F.softmax(outputs, dim=-1)         
+            total_loss += loss.item()
+
+            batch_acc = compute_accuracy(predictions, labels)   
+
+            total_acc += batch_acc
+            total += labels.size(0)
+
+    accuracy = 100. * total_acc / len(loader)
     avg_loss = total_loss / len(loader)
     return avg_loss, accuracy
+
+def save_features_and_labels(loader, model, device, save_dir, prefix="train"):
+    """
+    Saves outputs, features, and labels from the model for a given dataset.
+
+    Args:
+    - loader (torch.utils.data.DataLoader): DataLoader for your dataset.
+    - model (torch.nn.Module): Your model.
+    - device (torch.device): Device to which data should be loaded.
+    - save_dir (str): Directory to save the data.
+    - prefix (str): Prefix for filenames, e.g., 'train' or 'test'.
+    """
+    
+    all_outputs = []
+    all_features = []
+    all_labels = []
+
+    with torch.no_grad():
+        for inputs, labels in loader:
+            inputs = inputs.to(device)
+
+            outputs, features = model(inputs, return_features=True)
+
+            all_outputs.append(outputs.cpu())
+            all_features.append(features.cpu())
+            all_labels.append(labels.cpu())
+
+    # Concatenate the results
+    all_outputs = torch.cat(all_outputs, dim=0)
+    all_features = torch.cat(all_features, dim=0)
+    all_labels = torch.cat(all_labels, dim=0)
+
+    # Save the results
+    torch.save(all_outputs, os.path.join(save_dir, f"{prefix}_outputs.pth"))
+    torch.save(all_features, os.path.join(save_dir, f"{prefix}_features.pth"))
+    torch.save(all_labels, os.path.join(save_dir, f"{prefix}_labels.pth"))
 
 def main(args):
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -53,6 +94,15 @@ def main(args):
     print(f"Loaded model from epoch {epoch}")
     model.to(device)
     
+
+    # Save results
+    save_dir = f"logs/classifier/{args.resnet_model}_{args.dataset}_{args.domain}"
+    if not os.path.exists(save_dir):
+        assert False, f"Directory {save_dir} does not exist"
+        
+    save_features_and_labels(loaders_dict['real']['train'], model, device, save_dir, prefix="train")
+    save_features_and_labels(loaders_dict['real']['test'], model, device, save_dir, prefix="test")
+    assert False
     # Loss function
     criterion = nn.CrossEntropyLoss()
     
@@ -62,10 +112,6 @@ def main(args):
         results[domain] = {"Loss": loss, "Accuracy": acc}
         print(f"Domain: {domain}\tLoss: {loss:.4f}\tAccuracy: {acc:.2f}%")
 
-    # Save results
-    save_dir = f"logs/classifier/{args.resnet_model}_{args.dataset}_{args.domain}"
-    if not os.path.exists(save_dir):
-        assert False, f"Directory {save_dir} does not exist"
     
     avg_ood_acc = 0
     for domain, acc in results.items():

@@ -38,7 +38,6 @@ def train_one_epoch(train_loader, model, criterion, optimizer, device, epoch):
 
     return total_loss/total_samples, total_correct/total_samples
 
-
 def validate(val_loader, model, criterion, device, epoch):
     model.eval()
     total_loss, total_correct, total_samples = 0, 0, len(val_loader.dataset)

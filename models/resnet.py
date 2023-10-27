@@ -30,7 +30,14 @@ class CustomResNet(nn.Module):
 
     def forward(self, x, return_features=False):
         if return_features:
-            return self.model(x), self.features(x).squeeze(-1).squeeze(-1)
+            features = self.features(x)
+            # Flatten features for the FC layer
+            flat_features = features.squeeze(-1).squeeze(-1)
+
+            # Compute logits using the model's FC layer
+            logits = self.model.fc(flat_features)
+
+            return logits, flat_features
         else:
             return self.model(x)
 
