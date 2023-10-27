@@ -74,6 +74,7 @@ def save_features_and_labels(loader, model, device, save_dir, prefix="train"):
     all_features = torch.cat(all_features, dim=0)
     all_labels = torch.cat(all_labels, dim=0)
 
+    save_dir = os.path.join(save_dir, 'features')
     # Save the results
     torch.save(all_outputs, os.path.join(save_dir, f"{prefix}_outputs.pth"))
     torch.save(all_features, os.path.join(save_dir, f"{prefix}_features.pth"))
@@ -93,13 +94,14 @@ def main(args):
     epoch = checkpoint['epoch']
     print(f"Loaded model from epoch {epoch}")
     model.to(device)
+    model.eval()
     
 
     # Save results
     save_dir = f"logs/classifier/{args.resnet_model}_{args.dataset}_{args.domain}"
     if not os.path.exists(save_dir):
         assert False, f"Directory {save_dir} does not exist"
-        
+
     save_features_and_labels(loaders_dict['real']['train'], model, device, save_dir, prefix="train")
     save_features_and_labels(loaders_dict['real']['test'], model, device, save_dir, prefix="test")
     assert False

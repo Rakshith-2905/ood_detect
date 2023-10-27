@@ -1,7 +1,5 @@
 import torch
 import torch.nn.functional as F
-import torch.nn as nn
-from torch.utils.data import DataLoader, TensorDataset
 import clip
 
 import argparse
@@ -12,7 +10,7 @@ from tqdm import tqdm
 
 from models.resnet import CustomResNet
 from models.visual_transformer import ProjectionHead, VisualTransformer
-from domainnet_data import DomainNetDataset, get_domainnet_loaders
+from domainnet_data import DomainNetDataset, get_domainnet_loaders, get_data_from_saved_files
 from utils import SimpleDINOLoss, compute_accuracy, compute_similarities, plot_grad_flow
 # from prompts.FLM import generate_label_mapping_by_frequency, label_mapping_base, FLM_prompt_encoding
 
@@ -40,13 +38,11 @@ def train_one_epoch(train_loader, resnet_model, projector, text_encodings, crite
 
     # Wrap the train_loader with tqdm for progress bar
     pbar = tqdm(train_loader, desc=f'Training epoch: {epoch+1}')
-    for inputs, labels in pbar:
-        inputs, labels = inputs.to(device), labels.to(device)
+    for resnet_logits, resnet_embeddings, labels in pbar:
+
+        resnet_logits, resnet_embeddings, labels = resnet_logits.to(device), resnet_embeddings.to(device), labels.to(device)
         
         optimizer.zero_grad()
-        
-        # Get predictions and features from ResNet
-        resnet_logits, resnet_embeddings = resnet_model(inputs, return_features=True)
         
         probs_from_resnet = F.softmax(resnet_logits, dim=-1)
         
@@ -64,9 +60,6 @@ def train_one_epoch(train_loader, resnet_model, projector, text_encodings, crite
         loss = criterion(resnet_logits, similarities)
         loss.backward()
 
-        # Plot the gradient flow of the projector
-        # plot_grad_flow(projector.named_parameters())
-
         optimizer.step()
 
         batch_loss = loss.item() 
@@ -79,6 +72,7 @@ def train_one_epoch(train_loader, resnet_model, projector, text_encodings, crite
         
         pbar.set_postfix({"Batch Loss": batch_loss, "Base model Acc": batch_base_model_acc, "CLIP Acc": batch_clip_acc})
     return total_loss/len(train_loader), total_base_model_acc/len(train_loader), total_clip_acc/len(train_loader)
+
 
 def validate(val_loader, resnet_model, projector, text_encodings, criterion, device, epoch, label_mapping=None):
     resnet_model.eval()
@@ -93,11 +87,10 @@ def validate(val_loader, resnet_model, projector, text_encodings, criterion, dev
     # Wrap the val_loader with tqdm for progress bar
     pbar = tqdm(val_loader, desc=f'Validating epoch: {epoch+1}')
     with torch.no_grad():
-        for inputs, labels in pbar:
-            inputs, labels = inputs.to(device), labels.to(device)
+        for resnet_logits, resnet_embeddings, labels in pbar:
+
+            resnet_logits, resnet_embeddings, labels = resnet_logits.to(device), resnet_embeddings.to(device), labels.to(device)
             
-            # Get predictions and features from ResNet
-            resnet_logits, resnet_embeddings = resnet_model(inputs, return_features=True)
             probs_from_resnet = F.softmax(resnet_logits, dim=-1)
             
             # Project the resnet embeddings
@@ -120,33 +113,86 @@ def validate(val_loader, resnet_model, projector, text_encodings, criterion, dev
             total_loss += batch_loss
             total_base_model_acc += batch_base_model_acc
             total_clip_acc += batch_clip_acc
-            
-            pbar.set_postfix({"Batch Loss": batch_loss, "Base model Acc": batch_base_model_acc, "CLIP Acc": batch_clip_acc})
-            
+        
     return total_loss/len(val_loader), total_base_model_acc/len(val_loader), total_clip_acc/len(val_loader)
+
+
+# def validate(val_loader, resnet_model, projector, text_encodings, criterion, device, epoch, label_mapping=None):
+#     resnet_model.eval()
+#     projector.eval()
+    
+#     total_loss = 0
+#     total_base_model_acc = 0
+#     total_clip_acc = 0
+
+#     total_samples = len(val_loader.dataset)
+    
+#     # Wrap the val_loader with tqdm for progress bar
+#     pbar = tqdm(val_loader, desc=f'Validating epoch: {epoch+1}')
+#     with torch.no_grad():
+#         for inputs, labels in pbar:
+#             inputs, labels = inputs.to(device), labels.to(device)
+            
+#             # Get predictions and features from ResNet
+#             resnet_logits, resnet_embeddings = resnet_model(inputs, return_features=True)
+#             probs_from_resnet = F.softmax(resnet_logits, dim=-1)
+            
+#             # Project the resnet embeddings
+#             proj_embeddings = projector(resnet_embeddings)
+            
+#             # Compute similarities between image embeddings and text encodings
+#             similarities = compute_similarities(proj_embeddings, text_encodings, mode=args.similarity_mode)
+
+#             if label_mapping is not None:
+#                 similarities = label_mapping(similarities)
+
+#             probs_from_proj = F.softmax(similarities, dim=-1)
+            
+#             loss = criterion(resnet_logits, similarities)
+            
+#             batch_loss = loss.item() 
+#             batch_base_model_acc = compute_accuracy(probs_from_resnet, labels)
+#             batch_clip_acc = compute_accuracy(probs_from_proj, labels)
+
+#             total_loss += batch_loss
+#             total_base_model_acc += batch_base_model_acc
+#             total_clip_acc += batch_clip_acc
+            
+#             pbar.set_postfix({"Batch Loss": batch_loss, "Base model Acc": batch_base_model_acc, "CLIP Acc": batch_clip_acc})
+            
+#     return total_loss/len(val_loader), total_base_model_acc/len(val_loader), total_clip_acc/len(val_loader)
 
 def main(args):
 
-    base_dir = f"logs/classifier/resnet_{args.resnet_model}"
+    base_dir = f"logs/classifier/{args.resnet_model}_{args.dataset}_{args.domain}"
     
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
-    # Get all the test loaders for each domain
-    loaders, class_names = get_domainnet_loaders(args.domain, batch_size=args.batch_size, train_shuffle=True)
+    # Load class names from a text file
+    with open('data/domainnet_v1.0/class_names.txt', 'r') as f:
+        class_names = [line.strip() for line in f.readlines()]
 
-    train_loader = loaders['train']
-    val_loader = loaders['test']
+    # loaders, _ = get_domainnet_loaders(args.domain, args.batch_size)
+    # val_loader = loaders['test']
+
+    train_loader,val_loader = get_data_from_saved_files(os.path.join(base_dir, 'features'), args.batch_size, train_shuffle=True)
 
     # Load your trained model from checkpoint
     checkpoint = torch.load(args.checkpoint_path)
     
-    resnet_model = CustomResNet(model_name=args.resnet_model, num_classes=len(class_names))
+    resnet_model = CustomResNet(model_name=args.resnet_model, num_classes=345)
     resnet_model.load_state_dict(checkpoint['model_state_dict'])
     resnet_model.eval()
     print(f"Loaded model from epoch {checkpoint['epoch']}")
     resnet_model.to(device)
     
+    # # Load CLIP
+    # clip_model, _ = clip.load('ViT-B/32', device=device)
+    # projector = VisualTransformer(clip_model, input_dim=args.resnet_dim, token_dim=768, num_positions=49).to(device)
+    # projector.set_trainable_layers(['feature_to_token'])
+
     projector = ProjectionHead(input_dim=args.resnet_dim, output_dim=args.projection_dim).to(device)
+    
     projector.train()
     projector.requires_grad_(True)
 
@@ -160,10 +206,11 @@ def main(args):
 
     print(f"Loaded text encodings of shape: {text_encodings.shape}")
 
-    # optimizer = torch.optim.Adam(projector.parameters(), lr=args.learning_rate)
-    # SGD with momentum
-    optimizer = torch.optim.SGD(projector.parameters(), lr=args.learning_rate, momentum=0.9)
-    scheduler = torch.optim.lr_scheduler.MultiStepLR(optimizer, milestones=[30, 60, 90], gamma=0.1)
+    if args.optimizer == 'adam':
+        optimizer = torch.optim.Adam(projector.parameters(), lr=args.learning_rate)
+    elif args.optimizer == 'sgd':
+        optimizer = torch.optim.SGD(projector.parameters(), lr=args.learning_rate, momentum=0.9)
+    # scheduler = torch.optim.lr_scheduler.MultiStepLR(optimizer, milestones=[30, 60, 90], gamma=0.1)
     criterion = SimpleDINOLoss(student_temp=args.student_temp, teacher_temp=args.teacher_temp)
 
 
@@ -205,37 +252,21 @@ def main(args):
         val_clip_accuracies.append(val_clip_acc)
         print(f"Epoch {epoch+1}, Train Loss: {train_loss:.4f}, Train Base Model Accuracy: {train_base_acc:.4f}, Train CLIP Accuracy: {train_clip_acc:.4f}, Val Loss: {val_loss:.4f}, Val Base Model Accuracy: {val_base_acc:.4f}, Val CLIP Accuracy: {val_clip_acc:.4f}")
 
-        plt.figure(figsize=(12, 20))  # Adjusting figure size to accommodate two sets of subplots
-
-        # Training accuracy subplot
-        plt.subplot(4, 1, 1)
-        plt.plot(train_base_accuracies, '-o', label='Base Model Training')
-        plt.plot(train_clip_accuracies, '-o', label='CLIP Training')
-        plt.title('Training Accuracy')
+        # Update and save training plots
+        plt.figure(figsize=(12, 5))
+        plt.subplot(1, 2, 1)
+        plt.plot(train_losses, '-o', label='Training')
+        plt.plot(val_losses, '-o', label='Validation')
+        plt.title('Distilation Loss')
         plt.legend()
-
-        # Validation accuracy subplot
-        plt.subplot(4, 1, 2)
-        plt.plot(val_base_accuracies, '-o', label='Base Model Validation')
-        plt.plot(val_clip_accuracies, '-o', label='CLIP Validation')
-        plt.title('Validation Accuracy')
+        plt.subplot(1, 2, 2)
+        plt.plot(train_clip_accuracies, '-o', label='Training')
+        plt.plot(val_clip_accuracies, '-o', label='Validation')
+        plt.title('Accuracy')
         plt.legend()
-
-        # Training loss subplot
-        plt.subplot(4, 1, 3)
-        plt.plot(train_losses, '-o', label='Training Loss')
-        plt.title('Training Loss')
-        plt.legend()
-
-        # Validation loss subplot
-        plt.subplot(4, 1, 4)
-        plt.plot(val_losses, '-o', label='Validation Loss')
-        plt.title('Validation Loss')
-        plt.legend()
-
-        plt.tight_layout()  # This ensures that the subplots do not overlap
-        plt.savefig(os.path.join(save_dir, 'accuracies_and_losses.png'))
+        plt.savefig(os.path.join(save_dir, 'training_validation_plots.png'))
         plt.close()
+
         # Save best model based on validation loss
         if val_loss < best_val_loss:
             best_val_loss = val_loss
@@ -262,6 +293,7 @@ if __name__ == "__main__":
     parser.add_argument('--checkpoint_path', type=str, help='Path to checkpoint to resume training from')
 
     parser.add_argument('--num_epochs', type=int, default=100, help='Number of training epochs')
+    parser.add_argument('--optimizer', type=str, choices=['adam', 'sgd'], default='sgd', help='Type of optimizer to use')
     parser.add_argument('--learning_rate', type=float, default=0.1, help='Learning rate for the optimizer')
     parser.add_argument('--resnet_dim', type=int, default=2048, help='Dimension of the ResNet embeddings')
     parser.add_argument('--projection_dim', type=int, default=512, help='Dimension of the projected embeddings')

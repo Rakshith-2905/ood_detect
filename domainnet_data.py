@@ -1,5 +1,5 @@
 import torch
-from torch.utils.data import Dataset
+from torch.utils.data import Dataset, DataLoader, TensorDataset
 import numpy as np
 import os
 from PIL import Image
@@ -38,28 +38,24 @@ class DomainNetDataset(Dataset):
         
         return image, label
 
-class TensorDatasetFromSavedFiles(Dataset):
-    """
-    A dataset that loads tensors from saved files.
-    """
+def get_data_from_saved_files(save_dir, batch_size, train_shuffle=True):
+    train_outputs = torch.load(os.path.join(save_dir, "train_outputs.pth"))
+    train_features = torch.load(os.path.join(save_dir, "train_features.pth"))
+    train_labels = torch.load(os.path.join(save_dir, "train_labels.pth"))
 
-    def __init__(self, save_dir, prefix="train"):
-        """
-        Args:
-        - save_dir (str): Directory where the data was saved.
-        - prefix (str): Prefix for filenames, e.g., 'train' or 'test'.
-        """
-        self.outputs = torch.load(os.path.join(save_dir, f"{prefix}_outputs.pth"))
-        self.features = torch.load(os.path.join(save_dir, f"{prefix}_features.pth"))
-        self.labels = torch.load(os.path.join(save_dir, f"{prefix}_labels.pth"))
+    test_outputs = torch.load(os.path.join(save_dir, "test_outputs.pth"))
+    test_features = torch.load(os.path.join(save_dir, "test_features.pth"))
+    test_labels = torch.load(os.path.join(save_dir, "test_labels.pth"))
 
-        assert len(self.outputs) == len(self.features) == len(self.labels), "Mismatch in number of samples"
+    # Create TensorDatasets
+    train_dataset = TensorDataset(train_outputs, train_features, train_labels)
+    test_dataset = TensorDataset(test_outputs, test_features, test_labels)
 
-    def __len__(self):
-        return len(self.outputs)
+    # Create DataLoaders
+    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=train_shuffle)
+    test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
 
-    def __getitem__(self, idx):
-        return self.outputs[idx], self.features[idx], self.labels[idx]
+    return train_loader, test_loader
 
 def get_domainnet_loaders(domain_name,batch_size=512,train_shuffle=True):
     imagenet_train_transform = transforms.Compose([

@@ -100,13 +100,10 @@ class ProjectionHead(nn.Module):
 
         self.linear = nn.Linear(input_dim, output_dim)
 
-        # Make it a 4-layer MLP
-        # linear = nn.sequential(
-        #     nn.Linear(input_dim, input_dim),
+        # self.linear = nn.Sequential(
+        #     nn.Linear(input_dim, 1024),
         #     nn.ReLU(),
-        #     nn.Linear(input_dim, input_dim),
-        #     nn.ReLU(),
-        #     nn.Linear(input_dim, output_dim),
+        #     nn.Linear(1024, output_dim),
         # )
 
     def forward(self, x):
