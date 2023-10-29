@@ -57,17 +57,31 @@ def cosine_similarities(image_embeddings, text_embeddings):
     
     return similarities
 
-def CLIP_DN_similarities(image_embeddings, text_embeddings, image_embeddings_mean, text_embeddings_mean):
+# load the image and text embeddings from the saved files
+def load_embeddings(save_dir='prompts/'):
+    mean_image_embeddings = torch.load(os.path.join(save_dir, "mean_image_embeddings.pth"))
+    mean_text_embeddings = torch.load(os.path.join(save_dir, "mean_text_embeddings.pth"))
+
+    return mean_image_embeddings, mean_text_embeddings
+
+def CLIP_DN_similarities(image_embeddings, text_embeddings):
     "Compute cos similarity with distribution normalization"
 
-    DN_image_embeddings = image_embeddings - image_embeddings_mean/2
-    DN_text_embeddings = text_embeddings - text_embeddings_mean/2
+    # Compute the mean of the embeddings
+    mean_image_embeddings, mean_text_embeddings = load_embeddings()
+
+    DN_image_embeddings = image_embeddings - mean_image_embeddings.unsqueeze(0)/2
+    DN_text_embeddings = text_embeddings - mean_text_embeddings.unsqueeze(0)/2
 
     # Normalize the embeddings
-    DN_image_embeddings = F.normalize(DN_image_embeddings, dim=-1)
-    DN_text_embeddings = F.normalize(DN_text_embeddings, dim=-1)
+    # DN_image_embeddings = F.normalize(DN_image_embeddings, dim=-1)
+    # DN_text_embeddings = F.normalize(DN_text_embeddings, dim=-1)
+    
     # Compute the dot product between the two tensors
-    similarities = DN_image_embeddings.T @ DN_text_embeddings
+    # similarities = DN_image_embeddings.T @ DN_text_embeddings
+
+    similarities = F.cosine_similarity(DN_image_embeddings.unsqueeze(1), DN_text_embeddings.unsqueeze(0), dim=2)
+
     return similarities
  
 

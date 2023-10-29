@@ -6,18 +6,19 @@ import argparse
 import os
 import matplotlib.pyplot as plt
 from tqdm import tqdm
+from functools import partial
 
 
 from models.resnet import CustomResNet
 from models.visual_transformer import ProjectionHead, VisualTransformer
 from domainnet_data import DomainNetDataset, get_domainnet_loaders, get_data_from_saved_files
 from utils import SimpleDINOLoss, compute_accuracy, compute_similarities, plot_grad_flow
-# from prompts.FLM import generate_label_mapping_by_frequency, label_mapping_base, FLM_prompt_encoding
+from prompts.FLM import generate_label_mapping_by_frequency, label_mapping_base
 
 def get_save_dir(args):
     base_dir = f"logs/classifier/{args.resnet_model}_{args.dataset}_{args.domain}"
     save_dir = os.path.join(base_dir, "projection")
-    if args.use_default_prompt:
+    if args.use_default_prompt == True:
         save_dir += "_default_prompt"
     else:
         save_dir += "_FLM"
@@ -192,7 +193,7 @@ def main(args):
     # projector.set_trainable_layers(['feature_to_token'])
 
     projector = ProjectionHead(input_dim=args.resnet_dim, output_dim=args.projection_dim).to(device)
-    
+
     projector.train()
     projector.requires_grad_(True)
 
@@ -219,6 +220,8 @@ def main(args):
     if not os.path.exists(save_dir):
         os.makedirs(save_dir, exist_ok=True)
     
+    print(f"Saving results to {save_dir}")
+    
     # Save arguments
     with open(os.path.join(save_dir, 'args.txt'), 'w') as f:
         for arg, value in vars(args).items():
@@ -234,7 +237,9 @@ def main(args):
 
         if epoch % args.mapping_interval == 0 and args.use_default_prompt == False:
             # Compute the text encoding using FLM
-            mapping_sequence = generate_label_mapping_by_frequency(resnet_model, projector, CLIP_predictions, data_loader, mapping_num = 1)
+            mapping_sequence = generate_label_mapping_by_frequency(resnet_model, projector, compute_similarities, 
+                                                                    train_loader, mapping_num = args.mapping_num, 
+                                                                    similarity_mode=args.similarity_mode, text_encodings=text_encodings)
 
             label_mapping = partial(label_mapping_base, mapping_sequence=mapping_sequence)
         else:
@@ -300,10 +305,10 @@ if __name__ == "__main__":
     parser.add_argument('--teacher_temp', type=float, default=0.5, help='Temperature for Dino loss')
     parser.add_argument('--student_temp', type=float, default=0.1, help='Temperature for Dino loss')
     parser.add_argument('--prompt_embeddings_pth', type=str, required=True, help='Path to the prompt embeddings')
-    parser.add_argument('--use_default_prompt', type=bool, default=True, help='Use the default prompt instead of FLM')
+    parser.add_argument('--use_default_prompt', type=bool, default=False, help='Use the default prompt instead of FLM')
     parser.add_argument('--mapping_num', type=int, default=1, help='Number of labels to map to each prompt')
     parser.add_argument('--mapping_interval', type=int, default=1, help='Number of epochs between label mapping')
-    parser.add_argument('--similarity_mode', type=str, choices=['cosine', 'DM', 'DM*'], default='cosine', help='Type of similarity to use for label mapping')
+    parser.add_argument('--similarity_mode', type=str, choices=['cosine', 'DN', 'DN*'], default='cosine', help='Type of similarity to use for label mapping')
 
 
     args = parser.parse_args()
