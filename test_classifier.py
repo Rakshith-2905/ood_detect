@@ -9,6 +9,7 @@ import matplotlib.pyplot as plt
 from tqdm import tqdm
 
 from models.resnet import CustomResNet
+from models.resnet_projection import ResNetFeatures, CLIPResNetFeatures
 from domainnet_data import DomainNetDataset, get_domainnet_loaders
 from utils import compute_accuracy
 
@@ -60,38 +61,59 @@ def save_features_and_labels(loader, model, device, save_dir, prefix="train"):
 
     all_outputs = []
     all_features = []
+    all_features_x1 = []
+    all_features_x2 = []
+    all_features_x3 = []
+    all_features_x4 = []
     CLIP_features = []
     all_labels = []
-
+    
     with torch.no_grad():
-        for inputs, labels in loader:
+        for inputs, labels in tqdm(loader):
             inputs = inputs.to(device)
 
-            outputs, features = model(inputs, return_features=True)
+            (resnet_x1, resnet_x2, resnet_x3, resnet_x4), outputs = model(inputs)
 
-            # Get CLIP image features for the inputs
-            image_features = clip_model.encode_image(inputs)
+            # # Get CLIP image features for the inputs
+            # image_features = clip_model.encode_image(inputs)
 
-            CLIP_features.append(image_features.cpu())
+            # CLIP_features.append(image_features.cpu())
 
             all_outputs.append(outputs.cpu())
-            all_features.append(features.cpu())
+            # all_features.append(features.cpu())
+            
+            # all_features_x1.append(resnet_x1.cpu())
+            # all_features_x2.append(resnet_x2.cpu())
+            all_features_x3.append(resnet_x3.cpu())
+            # all_features_x4.append(resnet_x4.cpu())
+
             all_labels.append(labels.cpu())
 
+            del inputs, labels, outputs, resnet_x1, resnet_x2, resnet_x3, resnet_x4
     # Concatenate the results
-    CLIP_features = torch.cat(CLIP_features, dim=0)
+    # CLIP_features = torch.cat(CLIP_features, dim=0)
     all_outputs = torch.cat(all_outputs, dim=0)
-    all_features = torch.cat(all_features, dim=0)
+    # all_features = torch.cat(all_features, dim=0)
     all_labels = torch.cat(all_labels, dim=0)
 
-    save_dir = os.path.join(save_dir, 'features')
+    # all_features_x1 = torch.cat(all_features_x1, dim=0)
+    # all_features_x2 = torch.cat(all_features_x2, dim=0)
+    all_features_x3 = torch.cat(all_features_x3, dim=0)
+    # all_features_x4 = torch.cat(all_features_x4, dim=0)
+
+
+    save_dir = os.path.join(save_dir, 'features_sep')
     # Save the results
     if not os.path.exists(save_dir):
         os.makedirs(save_dir)
-    torch.save(CLIP_features, os.path.join(save_dir, f"{prefix}_CLIP_features.pth"))
+    # torch.save(CLIP_features, os.path.join(save_dir, f"{prefix}_CLIP_features.pth"))
     torch.save(all_outputs, os.path.join(save_dir, f"{prefix}_outputs.pth"))
-    torch.save(all_features, os.path.join(save_dir, f"{prefix}_features.pth"))
+    # torch.save(all_features, os.path.join(save_dir, f"{prefix}_features.pth"))
     torch.save(all_labels, os.path.join(save_dir, f"{prefix}_labels.pth"))
+    # torch.save(all_features_x1, os.path.join(save_dir, f"{prefix}_features_x1.pth"))
+    # torch.save(all_features_x2, os.path.join(save_dir, f"{prefix}_features_x2.pth"))
+    torch.save(all_features_x3, os.path.join(save_dir, f"{prefix}_features_x3.pth"))
+    # torch.save(all_features_x4, os.path.join(save_dir, f"{prefix}_features_x4.pth"))
 
 def main(args):
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -115,8 +137,10 @@ def main(args):
     if not os.path.exists(save_dir):
         assert False, f"Directory {save_dir} does not exist"
 
-    save_features_and_labels(loaders_dict['real']['train'], model, device, save_dir, prefix="train")
-    save_features_and_labels(loaders_dict['real']['test'], model, device, save_dir, prefix="test")
+
+    feature_model = ResNetFeatures(model)
+    save_features_and_labels(loaders_dict['real']['train'], feature_model, device, save_dir, prefix="train")
+    save_features_and_labels(loaders_dict['real']['test'], feature_model, device, save_dir, prefix="test")
     assert False
     # Loss function
     criterion = nn.CrossEntropyLoss()

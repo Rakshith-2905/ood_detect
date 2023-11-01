@@ -11,13 +11,15 @@ from functools import partial
 
 from models.resnet import CustomResNet
 from models.visual_transformer import ProjectionHead, VisualTransformer
+from models.resnet_projection import CombinedModel
+
 from domainnet_data import DomainNetDataset, get_domainnet_loaders, get_data_from_saved_files
 from utils import SimpleDINOLoss, compute_accuracy, compute_similarities, plot_grad_flow
 from prompts.FLM import generate_label_mapping_by_frequency, label_mapping_base
 
 def get_save_dir(args):
     base_dir = f"logs/classifier/{args.resnet_model}_{args.dataset}_{args.domain}"
-    save_dir = os.path.join(base_dir, "projection")
+    save_dir = os.path.join(base_dir, "layer3_BNL_projection")
     if args.use_default_prompt == True:
         save_dir += "_default_prompt"
     else:
@@ -43,26 +45,24 @@ def train_one_epoch(train_loader, resnet_model, projector, text_encodings, crite
 
     # Wrap the train_loader with tqdm for progress bar
     pbar = tqdm(train_loader, desc=f'Training epoch: {epoch+1}')
-    for resnet_logits, resnet_embeddings, labels, CLIP_embeddings in pbar:
+    for images, labels in pbar:
 
-        resnet_logits, resnet_embeddings, labels, CLIP_embeddings = resnet_logits.to(device), resnet_embeddings.to(device), labels.to(device), CLIP_embeddings.to(device)
+        images, labels = images.to(device), labels.to(device)
         
         optimizer.zero_grad()
         
+        # Get predictions using the resnet features projected to the CLIP embedding space
+        proj_embeddings, resnet_logits = projector(images)
         probs_from_resnet = F.softmax(resnet_logits, dim=-1)
-        
-        # Project the resnet embeddings
-        proj_embeddings = projector(resnet_embeddings)
-        
+
         # Compute similarities between image embeddings and text encodings
         similarities = compute_similarities(proj_embeddings, text_encodings, mode=args.similarity_mode)
-
 
         if label_mapping is not None:
             similarities = label_mapping(similarities)
 
         probs_from_proj = F.softmax(similarities, dim=-1)
-        distill_loss = criterion(resnet_logits, similarities)
+        distill_loss = criterion(similarities, resnet_logits)
 
         if args.feature_similarity:
             # # Make the CLIP embeddings the same data type as the projected embeddings
@@ -107,47 +107,44 @@ def validate(val_loader, resnet_model, projector, text_encodings, criterion, dev
     # Wrap the val_loader with tqdm for progress bar
     pbar = tqdm(val_loader, desc=f'Validating epoch: {epoch+1}')
     with torch.no_grad():
-        for resnet_logits, resnet_embeddings, labels, CLIP_embeddings in pbar:
+        for images, labels in pbar:
 
-            resnet_logits, resnet_embeddings, labels, CLIP_embeddings = resnet_logits.to(device), resnet_embeddings.to(device), labels.to(device), CLIP_embeddings.to(device)
+            images, labels = images.to(device), labels.to(device)
             
+            # Get predictions using the resnet features projected to the CLIP embedding space
+            proj_embeddings, resnet_logits = projector(images)
             probs_from_resnet = F.softmax(resnet_logits, dim=-1)
-            
-            # Project the resnet embeddings
-            proj_embeddings = projector(resnet_embeddings)
-            
             # Compute similarities between image embeddings and text encodings
             similarities = compute_similarities(proj_embeddings, text_encodings, mode=args.similarity_mode)
-
-            # Compute similarities between CLIP image embeddings and text encodings
-            CLIP_similarities = compute_similarities(CLIP_embeddings, text_encodings, mode=args.similarity_mode)
 
             if label_mapping is not None:
                 similarities = label_mapping(similarities)
 
             probs_from_proj = F.softmax(similarities, dim=-1)
             
-            distill_loss = criterion(resnet_logits, similarities)
+            distill_loss = criterion(similarities, resnet_logits)
 
             if args.feature_similarity:
-                # Make the CLIP embeddings the same data type as the projected embeddings
-                CLIP_embeddings = CLIP_embeddings.type_as(proj_embeddings)
-                # Compute MSE loss between CLIP embeddings and projected embeddings
-                CLIP_loss = F.mse_loss(CLIP_embeddings, proj_embeddings)
-                loss = args.distill_loss_weight*distill_loss + args.feature_sim_weight * CLIP_loss
+                # # Make the CLIP embeddings the same data type as the projected embeddings
+                # CLIP_embeddings = CLIP_embeddings.type_as(proj_embeddings)
+                # # Compute MSE loss between CLIP embeddings and projected embeddings
+                # CLIP_loss = F.mse_loss(CLIP_embeddings, proj_embeddings)
+
+                # Compute cross entropy loss between similarities and labels
+                gt_loss = F.cross_entropy(similarities, labels)
+                
+                loss = args.distill_loss_weight*distill_loss + args.feature_sim_weight * gt_loss
             else:
                 loss = distill_loss
             
             batch_loss = loss.item() 
             batch_base_model_acc = compute_accuracy(probs_from_resnet, labels)
             batch_clip_acc = compute_accuracy(probs_from_proj, labels)
-            gt_CLIP_acc = compute_accuracy(CLIP_similarities, labels)
 
             total_loss += batch_loss
             total_base_model_acc += batch_base_model_acc
             total_clip_acc += batch_clip_acc
-            total_gt_clip_acc += gt_CLIP_acc
-    
+
     # print(f"GT CLIP Acc: {total_gt_clip_acc/len(val_loader)}")
     # assert False
     return total_loss/len(val_loader), total_base_model_acc/len(val_loader), total_clip_acc/len(val_loader)
@@ -208,10 +205,11 @@ def main(args):
     with open('data/domainnet_v1.0/class_names.txt', 'r') as f:
         class_names = [line.strip() for line in f.readlines()]
 
-    # loaders, _ = get_domainnet_loaders(args.domain, args.batch_size)
-    # val_loader = loaders['test']
+    loaders, _ = get_domainnet_loaders(args.domain, args.batch_size)
+    train_loader = loaders['train']
+    val_loader = loaders['test']
 
-    train_loader,val_loader = get_data_from_saved_files(os.path.join(base_dir, 'features'), args.batch_size, train_shuffle=True)
+    # train_loader,val_loader = get_data_from_saved_files(os.path.join(base_dir, 'features'), args.batch_size, train_shuffle=True)
 
     # Load your trained model from checkpoint
     checkpoint = torch.load(args.checkpoint_path)
@@ -223,14 +221,16 @@ def main(args):
     resnet_model.to(device)
     
     # # Load CLIP
-    # clip_model, _ = clip.load('ViT-B/32', device=device)
+    clip_model, _ = clip.load('RN50', device=device)
     # projector = VisualTransformer(clip_model, input_dim=args.resnet_dim, token_dim=768, num_positions=49).to(device)
     # projector.set_trainable_layers(['feature_to_token'])
 
-    projector = ProjectionHead(input_dim=args.resnet_dim, output_dim=args.projection_dim).to(device)
+    projector = CombinedModel(clip_model, resnet_model).to(device)
 
-    projector.train()
-    projector.requires_grad_(True)
+    # Set only the projection head to be trainable
+    projector.set_trainable_params()
+
+    trainable_parameters = [p for p in projector.parameters() if p.requires_grad]
 
     prompt_embeddings = torch.load(args.prompt_embeddings_pth)
 
@@ -243,9 +243,9 @@ def main(args):
     print(f"Loaded text encodings of shape: {text_encodings.shape}")
 
     if args.optimizer == 'adam':
-        optimizer = torch.optim.Adam(projector.parameters(), lr=args.learning_rate)
+        optimizer = torch.optim.Adam(trainable_parameters, lr=args.learning_rate)
     elif args.optimizer == 'sgd':
-        optimizer = torch.optim.SGD(projector.parameters(), lr=args.learning_rate, momentum=0.9)
+        optimizer = torch.optim.SGD(trainable_parameters, lr=args.learning_rate, momentum=0.9)
     # scheduler = torch.optim.lr_scheduler.MultiStepLR(optimizer, milestones=[30, 60, 90], gamma=0.1)
     criterion = SimpleDINOLoss(student_temp=args.student_temp, teacher_temp=args.teacher_temp)
 
@@ -345,8 +345,8 @@ if __name__ == "__main__":
     parser.add_argument('--mapping_interval', type=int, default=1, help='Number of epochs between label mapping')
     parser.add_argument('--similarity_mode', type=str, choices=['cosine', 'DN', 'DN*'], default='cosine', help='Type of similarity to use for label mapping')
     parser.add_argument('--feature_similarity', type=bool, default=True, help='Use feature similarity loss')
-    parser.add_argument('--feature_sim_weight', type=float, default=1, help='Weight for feature similarity loss')
-    parser.add_argument('--distill_loss_weight', type=float, default=0, help='Weight for distillation loss')
+    parser.add_argument('--feature_sim_weight', type=float, default=0.7, help='Weight for feature similarity loss')
+    parser.add_argument('--distill_loss_weight', type=float, default=0.3, help='Weight for distillation loss')
 
     args = parser.parse_args()
 
