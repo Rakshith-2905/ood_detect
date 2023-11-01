@@ -38,18 +38,27 @@ class DomainNetDataset(Dataset):
         
         return image, label
 
+    def undo_transformation(self, images):
+        # Undo the transformation on the inputs
+        inv_normalize = transforms.Normalize(
+            mean=[-0.485/0.229, -0.456/0.224, -0.406/0.225],
+            std=[1/0.229, 1/0.224, 1/0.225]
+        )
+
 def get_data_from_saved_files(save_dir, batch_size, train_shuffle=True):
     train_outputs = torch.load(os.path.join(save_dir, "train_outputs.pth"))
+    train_CLIP_features = torch.load(os.path.join(save_dir, "train_CLIP_features.pth"))
     train_features = torch.load(os.path.join(save_dir, "train_features.pth"))
     train_labels = torch.load(os.path.join(save_dir, "train_labels.pth"))
 
     test_outputs = torch.load(os.path.join(save_dir, "test_outputs.pth"))
+    test_CLIP_features = torch.load(os.path.join(save_dir, "test_CLIP_features.pth"))
     test_features = torch.load(os.path.join(save_dir, "test_features.pth"))
     test_labels = torch.load(os.path.join(save_dir, "test_labels.pth"))
 
     # Create TensorDatasets
-    train_dataset = TensorDataset(train_outputs, train_features, train_labels)
-    test_dataset = TensorDataset(test_outputs, test_features, test_labels)
+    train_dataset = TensorDataset(train_outputs, train_features, train_labels, train_CLIP_features)
+    test_dataset = TensorDataset(test_outputs, test_features, test_labels, test_CLIP_features)
 
     # Create DataLoaders
     train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=train_shuffle)
@@ -65,7 +74,7 @@ def get_domainnet_loaders(domain_name,batch_size=512,train_shuffle=True):
             transforms.Normalize(mean=[0.485, 0.456, 0.406],
                                  std=[0.229, 0.224, 0.225]),
         ])
-    
+
     imagenet_test_transform = transforms.Compose([
             transforms.Resize(256),
             transforms.CenterCrop(224),

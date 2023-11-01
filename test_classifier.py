@@ -1,6 +1,7 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import clip
 
 import argparse
 import os
@@ -54,9 +55,12 @@ def save_features_and_labels(loader, model, device, save_dir, prefix="train"):
     - save_dir (str): Directory to save the data.
     - prefix (str): Prefix for filenames, e.g., 'train' or 'test'.
     """
-    
+    # Initialize CLIP
+    clip_model, preprocess = clip.load("ViT-B/32", device=device)
+
     all_outputs = []
     all_features = []
+    CLIP_features = []
     all_labels = []
 
     with torch.no_grad():
@@ -65,17 +69,26 @@ def save_features_and_labels(loader, model, device, save_dir, prefix="train"):
 
             outputs, features = model(inputs, return_features=True)
 
+            # Get CLIP image features for the inputs
+            image_features = clip_model.encode_image(inputs)
+
+            CLIP_features.append(image_features.cpu())
+
             all_outputs.append(outputs.cpu())
             all_features.append(features.cpu())
             all_labels.append(labels.cpu())
 
     # Concatenate the results
+    CLIP_features = torch.cat(CLIP_features, dim=0)
     all_outputs = torch.cat(all_outputs, dim=0)
     all_features = torch.cat(all_features, dim=0)
     all_labels = torch.cat(all_labels, dim=0)
 
     save_dir = os.path.join(save_dir, 'features')
     # Save the results
+    if not os.path.exists(save_dir):
+        os.makedirs(save_dir)
+    torch.save(CLIP_features, os.path.join(save_dir, f"{prefix}_CLIP_features.pth"))
     torch.save(all_outputs, os.path.join(save_dir, f"{prefix}_outputs.pth"))
     torch.save(all_features, os.path.join(save_dir, f"{prefix}_features.pth"))
     torch.save(all_labels, os.path.join(save_dir, f"{prefix}_labels.pth"))

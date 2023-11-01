@@ -22,8 +22,12 @@ def get_save_dir(args):
         save_dir += "_default_prompt"
     else:
         save_dir += "_FLM"
+    if args.feature_similarity:
+        save_dir += f"_gt_sim{args.feature_sim_weight}_distill{args.distill_loss_weight}"
+
     save_dir += f"_{args.similarity_mode}"
     save_dir += f"_mapping{args.mapping_num}"
+    # save_dir += f"_two"
 
     return save_dir
 
@@ -39,9 +43,9 @@ def train_one_epoch(train_loader, resnet_model, projector, text_encodings, crite
 
     # Wrap the train_loader with tqdm for progress bar
     pbar = tqdm(train_loader, desc=f'Training epoch: {epoch+1}')
-    for resnet_logits, resnet_embeddings, labels in pbar:
+    for resnet_logits, resnet_embeddings, labels, CLIP_embeddings in pbar:
 
-        resnet_logits, resnet_embeddings, labels = resnet_logits.to(device), resnet_embeddings.to(device), labels.to(device)
+        resnet_logits, resnet_embeddings, labels, CLIP_embeddings = resnet_logits.to(device), resnet_embeddings.to(device), labels.to(device), CLIP_embeddings.to(device)
         
         optimizer.zero_grad()
         
@@ -53,12 +57,26 @@ def train_one_epoch(train_loader, resnet_model, projector, text_encodings, crite
         # Compute similarities between image embeddings and text encodings
         similarities = compute_similarities(proj_embeddings, text_encodings, mode=args.similarity_mode)
 
+
         if label_mapping is not None:
             similarities = label_mapping(similarities)
 
         probs_from_proj = F.softmax(similarities, dim=-1)
-        
-        loss = criterion(resnet_logits, similarities)
+        distill_loss = criterion(resnet_logits, similarities)
+
+        if args.feature_similarity:
+            # # Make the CLIP embeddings the same data type as the projected embeddings
+            # CLIP_embeddings = CLIP_embeddings.type_as(proj_embeddings)
+            # # Compute MSE loss between CLIP embeddings and projected embeddings
+            # CLIP_loss = F.mse_loss(CLIP_embeddings, proj_embeddings)
+
+            # Compute cross entropy loss between similarities and labels
+            gt_loss = F.cross_entropy(similarities, labels)
+            
+            loss = args.distill_loss_weight*distill_loss + args.feature_sim_weight * gt_loss
+        else:
+            loss = distill_loss
+
         loss.backward()
 
         optimizer.step()
@@ -82,15 +100,16 @@ def validate(val_loader, resnet_model, projector, text_encodings, criterion, dev
     total_loss = 0
     total_base_model_acc = 0
     total_clip_acc = 0
+    total_gt_clip_acc = 0
 
     total_samples = len(val_loader.dataset)
     
     # Wrap the val_loader with tqdm for progress bar
     pbar = tqdm(val_loader, desc=f'Validating epoch: {epoch+1}')
     with torch.no_grad():
-        for resnet_logits, resnet_embeddings, labels in pbar:
+        for resnet_logits, resnet_embeddings, labels, CLIP_embeddings in pbar:
 
-            resnet_logits, resnet_embeddings, labels = resnet_logits.to(device), resnet_embeddings.to(device), labels.to(device)
+            resnet_logits, resnet_embeddings, labels, CLIP_embeddings = resnet_logits.to(device), resnet_embeddings.to(device), labels.to(device), CLIP_embeddings.to(device)
             
             probs_from_resnet = F.softmax(resnet_logits, dim=-1)
             
@@ -100,21 +119,37 @@ def validate(val_loader, resnet_model, projector, text_encodings, criterion, dev
             # Compute similarities between image embeddings and text encodings
             similarities = compute_similarities(proj_embeddings, text_encodings, mode=args.similarity_mode)
 
+            # Compute similarities between CLIP image embeddings and text encodings
+            CLIP_similarities = compute_similarities(CLIP_embeddings, text_encodings, mode=args.similarity_mode)
+
             if label_mapping is not None:
                 similarities = label_mapping(similarities)
 
             probs_from_proj = F.softmax(similarities, dim=-1)
             
-            loss = criterion(resnet_logits, similarities)
+            distill_loss = criterion(resnet_logits, similarities)
+
+            if args.feature_similarity:
+                # Make the CLIP embeddings the same data type as the projected embeddings
+                CLIP_embeddings = CLIP_embeddings.type_as(proj_embeddings)
+                # Compute MSE loss between CLIP embeddings and projected embeddings
+                CLIP_loss = F.mse_loss(CLIP_embeddings, proj_embeddings)
+                loss = args.distill_loss_weight*distill_loss + args.feature_sim_weight * CLIP_loss
+            else:
+                loss = distill_loss
             
             batch_loss = loss.item() 
             batch_base_model_acc = compute_accuracy(probs_from_resnet, labels)
             batch_clip_acc = compute_accuracy(probs_from_proj, labels)
+            gt_CLIP_acc = compute_accuracy(CLIP_similarities, labels)
 
             total_loss += batch_loss
             total_base_model_acc += batch_base_model_acc
             total_clip_acc += batch_clip_acc
-        
+            total_gt_clip_acc += gt_CLIP_acc
+    
+    # print(f"GT CLIP Acc: {total_gt_clip_acc/len(val_loader)}")
+    # assert False
     return total_loss/len(val_loader), total_base_model_acc/len(val_loader), total_clip_acc/len(val_loader)
 
 
@@ -305,11 +340,13 @@ if __name__ == "__main__":
     parser.add_argument('--teacher_temp', type=float, default=0.5, help='Temperature for Dino loss')
     parser.add_argument('--student_temp', type=float, default=0.1, help='Temperature for Dino loss')
     parser.add_argument('--prompt_embeddings_pth', type=str, required=True, help='Path to the prompt embeddings')
-    parser.add_argument('--use_default_prompt', type=bool, default=False, help='Use the default prompt instead of FLM')
+    parser.add_argument('--use_default_prompt', type=bool, default=True, help='Use the default prompt instead of FLM')
     parser.add_argument('--mapping_num', type=int, default=1, help='Number of labels to map to each prompt')
     parser.add_argument('--mapping_interval', type=int, default=1, help='Number of epochs between label mapping')
     parser.add_argument('--similarity_mode', type=str, choices=['cosine', 'DN', 'DN*'], default='cosine', help='Type of similarity to use for label mapping')
-
+    parser.add_argument('--feature_similarity', type=bool, default=True, help='Use feature similarity loss')
+    parser.add_argument('--feature_sim_weight', type=float, default=1, help='Weight for feature similarity loss')
+    parser.add_argument('--distill_loss_weight', type=float, default=0, help='Weight for distillation loss')
 
     args = parser.parse_args()
 
