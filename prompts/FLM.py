@@ -40,9 +40,12 @@ def generate_label_mapping_by_frequency(resnet_model, projector, compute_similar
         projector.eval()
     fx0s = []
     ys = []
+    unique_labels = set()
+    iteration_count = 0
+    
     pbar = tqdm(data_loader, total=len(data_loader), desc=f"Frequency Label Mapping", ncols=100) if len(data_loader) > 20 else data_loader
     with torch.no_grad():
-        for resnet_logits, resnet_embeddings, labels in pbar:
+        for resnet_logits, resnet_embeddings, labels,_ in pbar:
 
             resnet_embeddings = resnet_embeddings.to(device)
             probs_from_resnet = F.softmax(resnet_logits, dim=-1)
@@ -54,12 +57,26 @@ def generate_label_mapping_by_frequency(resnet_model, projector, compute_similar
             fx0s.append(fx0.cpu().float())
             ys.append(labels.cpu().int())
 
+            # Update the set of unique labels
+            unique_labels.update(labels.cpu().numpy().tolist())
+
 
             # Dele the variables to free up memory
             del resnet_embeddings, resnet_logits, probs_from_resnet, proj_embeddings, fx0
+            
+            # Increment iteration count
+            iteration_count += 1
 
-            if len(fx0s) == 1500:
+            # Check if we have collected all classes and have completed 1500 iterations
+            if len(unique_labels) == 345 and iteration_count >= 1500:
+                print("Collected all classes and completed minimum iterations.")
+                del unique_labels
                 break
+
+            # If not all classes have been collected and 1500 iterations have passed, keep going
+            if iteration_count == 1500:
+                print("Reached 1500 iterations but not all classes have been collected. Continuing...")
+                
     # Randomly select only half of fx0s and ys
     # num_to_select = int(len(fx0) * 0.30)
 
