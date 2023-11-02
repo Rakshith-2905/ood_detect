@@ -62,7 +62,7 @@ def train_one_epoch(train_loader, resnet_model, projector, text_encodings, crite
             similarities = label_mapping(similarities)
 
         probs_from_proj = F.softmax(similarities, dim=-1)
-        distill_loss = criterion(resnet_logits, similarities)
+        distill_loss = criterion(similarities, resnet_logits)
 
         if args.feature_similarity:
             # # Make the CLIP embeddings the same data type as the projected embeddings
@@ -119,84 +119,34 @@ def validate(val_loader, resnet_model, projector, text_encodings, criterion, dev
             # Compute similarities between image embeddings and text encodings
             similarities = compute_similarities(proj_embeddings, text_encodings, mode=args.similarity_mode)
 
-            # Compute similarities between CLIP image embeddings and text encodings
-            CLIP_similarities = compute_similarities(CLIP_embeddings, text_encodings, mode=args.similarity_mode)
 
             if label_mapping is not None:
                 similarities = label_mapping(similarities)
 
             probs_from_proj = F.softmax(similarities, dim=-1)
-            
-            distill_loss = criterion(resnet_logits, similarities)
+            distill_loss = criterion(similarities, resnet_logits)
 
             if args.feature_similarity:
-                # Make the CLIP embeddings the same data type as the projected embeddings
-                CLIP_embeddings = CLIP_embeddings.type_as(proj_embeddings)
-                # Compute MSE loss between CLIP embeddings and projected embeddings
-                CLIP_loss = F.mse_loss(CLIP_embeddings, proj_embeddings)
-                loss = args.distill_loss_weight*distill_loss + args.feature_sim_weight * CLIP_loss
+                # Compute cross entropy loss between similarities and labels
+                gt_loss = F.cross_entropy(similarities, labels)
+                
+                loss = args.distill_loss_weight*distill_loss + args.feature_sim_weight * gt_loss
             else:
                 loss = distill_loss
             
             batch_loss = loss.item() 
             batch_base_model_acc = compute_accuracy(probs_from_resnet, labels)
             batch_clip_acc = compute_accuracy(probs_from_proj, labels)
-            gt_CLIP_acc = compute_accuracy(CLIP_similarities, labels)
+            # gt_CLIP_acc = compute_accuracy(CLIP_similarities, labels)
 
             total_loss += batch_loss
             total_base_model_acc += batch_base_model_acc
             total_clip_acc += batch_clip_acc
-            total_gt_clip_acc += gt_CLIP_acc
+            # total_gt_clip_acc += gt_CLIP_acc
     
     # print(f"GT CLIP Acc: {total_gt_clip_acc/len(val_loader)}")
     # assert False
     return total_loss/len(val_loader), total_base_model_acc/len(val_loader), total_clip_acc/len(val_loader)
-
-
-# def validate(val_loader, resnet_model, projector, text_encodings, criterion, device, epoch, label_mapping=None):
-#     resnet_model.eval()
-#     projector.eval()
-    
-#     total_loss = 0
-#     total_base_model_acc = 0
-#     total_clip_acc = 0
-
-#     total_samples = len(val_loader.dataset)
-    
-#     # Wrap the val_loader with tqdm for progress bar
-#     pbar = tqdm(val_loader, desc=f'Validating epoch: {epoch+1}')
-#     with torch.no_grad():
-#         for inputs, labels in pbar:
-#             inputs, labels = inputs.to(device), labels.to(device)
-            
-#             # Get predictions and features from ResNet
-#             resnet_logits, resnet_embeddings = resnet_model(inputs, return_features=True)
-#             probs_from_resnet = F.softmax(resnet_logits, dim=-1)
-            
-#             # Project the resnet embeddings
-#             proj_embeddings = projector(resnet_embeddings)
-            
-#             # Compute similarities between image embeddings and text encodings
-#             similarities = compute_similarities(proj_embeddings, text_encodings, mode=args.similarity_mode)
-
-#             if label_mapping is not None:
-#                 similarities = label_mapping(similarities)
-
-#             probs_from_proj = F.softmax(similarities, dim=-1)
-            
-#             loss = criterion(resnet_logits, similarities)
-            
-#             batch_loss = loss.item() 
-#             batch_base_model_acc = compute_accuracy(probs_from_resnet, labels)
-#             batch_clip_acc = compute_accuracy(probs_from_proj, labels)
-
-#             total_loss += batch_loss
-#             total_base_model_acc += batch_base_model_acc
-#             total_clip_acc += batch_clip_acc
-            
-#             pbar.set_postfix({"Batch Loss": batch_loss, "Base model Acc": batch_base_model_acc, "CLIP Acc": batch_clip_acc})
-            
-#     return total_loss/len(val_loader), total_base_model_acc/len(val_loader), total_clip_acc/len(val_loader)
 
 def main(args):
 
@@ -345,8 +295,8 @@ if __name__ == "__main__":
     parser.add_argument('--mapping_interval', type=int, default=1, help='Number of epochs between label mapping')
     parser.add_argument('--similarity_mode', type=str, choices=['cosine', 'DN', 'DN*'], default='cosine', help='Type of similarity to use for label mapping')
     parser.add_argument('--feature_similarity', type=bool, default=True, help='Use feature similarity loss')
-    parser.add_argument('--feature_sim_weight', type=float, default=1, help='Weight for feature similarity loss')
-    parser.add_argument('--distill_loss_weight', type=float, default=0, help='Weight for distillation loss')
+    parser.add_argument('--feature_sim_weight', type=float, default=0, help='Weight for feature similarity loss')
+    parser.add_argument('--distill_loss_weight', type=float, default=1, help='Weight for distillation loss')
 
     args = parser.parse_args()
 

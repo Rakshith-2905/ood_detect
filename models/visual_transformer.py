@@ -102,7 +102,6 @@ class ProjectionHead(nn.Module):
 
         # self.linear = nn.Sequential(
         #     nn.Linear(input_dim, 1024),
-        #     nn.ReLU(),
         #     nn.Linear(1024, output_dim),
         # )
 
