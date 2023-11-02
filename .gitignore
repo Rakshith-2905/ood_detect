@@ -94,3 +94,5 @@ ipython_config.py
 logs/
 data/
 prompts/text_embeddings.pth
+
+*.pth
