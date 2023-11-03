@@ -20,7 +20,7 @@ def get_all_domainnet_loaders(batch_size=32):
     domains = ["clipart", "infograph", "painting", "quickdraw", "real", "sketch"] 
     loaders_dict = {}
     for domain in domains:
-        loaders_dict[domain], class_names = get_domainnet_loaders(domain, batch_size=batch_size)
+        loaders_dict[domain], class_names = get_domainnet_loaders(domain, batch_size=batch_size, data_dir=args.data_dir)
     return loaders_dict, class_names
 
 def evaluate(val_loader, resnet_model, projector, text_encodings, criterion, device, label_mapping=None):
@@ -87,7 +87,8 @@ def main(args):
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
     # Load class names from a text file
-    with open('data/domainnet_v1.0/class_names.txt', 'r') as f:
+    
+    with open(os.path.join(args.data_dir, 'class_names.txt'), 'r') as f:
         class_names = [line.strip() for line in f.readlines()]
 
     # Get all the test loaders for each domain
@@ -137,8 +138,6 @@ def main(args):
     results = {}
     for domain, loader in loaders_dict.items():
 
-        if domain != 'real':
-            continue
         val_loader = loader['test']
         loss, acc, resnet_pred, proj_pred, gt_labels = evaluate(val_loader, resnet_model, projector, text_encodings, criterion, device, label_mapping=label_mapping)
         results[domain] = {"Loss": loss, "Accuracy": acc}
@@ -148,7 +147,6 @@ def main(args):
         if domain == 'real':
             plot_confusion_matrix(proj_pred, resnet_pred, class_names, save_dir)
 
-    assert False
     avg_ood_acc = 0
     for domain, acc in results.items():
         if domain != 'real':
@@ -164,6 +162,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Train ResNet on WILDS Dataset')
 
     parser.add_argument('--dataset', type=str, required=True, help='Name of the WILDS dataset')
+    parser.add_argument('--data_dir', type=str, default='data/domainnet_v1.0', help='Path to the WILDS dataset')
     parser.add_argument('--domain', type=str, required=True, help='Name of the domain to load')
     parser.add_argument('--image_size', type=int, default=224, help='Size to resize images to (assumes square images)')
     parser.add_argument('--batch_size', type=int, default=32, help='Batch size for the dataloader')

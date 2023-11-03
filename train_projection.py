@@ -150,7 +150,8 @@ def main(args):
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
     # Load class names from a text file
-    with open('data/domainnet_v1.0/class_names.txt', 'r') as f:
+    os.path.join(args.data_dir, 'class_names.txt')
+    with open(os.path.join(args.data_dir, 'class_names.txt'), 'r') as f:
         class_names = [line.strip() for line in f.readlines()]
 
     # loaders, _ = get_domainnet_loaders(args.domain, args.batch_size)
@@ -268,7 +269,8 @@ def main(args):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Train ResNet on WILDS Dataset')
 
-    parser.add_argument('--dataset', type=str, required=True, help='Name of the WILDS dataset')
+    parser.add_argument('--dataset', type=str, required=True, help='Name of the dataset')
+    parser.add_argument('--data_dir', type=str, default='data/domainnet_v1.0', help='Path to the data directory')
     parser.add_argument('--domain', type=str, required=True, help='Name of the domain to load')
     parser.add_argument('--image_size', type=int, default=224, help='Size to resize images to (assumes square images)')
     parser.add_argument('--batch_size', type=int, default=32, help='Batch size for the dataloader')
