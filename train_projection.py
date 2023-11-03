@@ -254,7 +254,7 @@ def main(args):
         plt.close()
 
         # Save best model based on validation loss
-        if val_loss < best_val_loss:
+        if val_loss > best_val_loss:
             best_val_loss = val_loss
             torch.save(projector.state_dict(), os.path.join(save_dir, "best_projector_weights.pth"))
             if not args.use_default_prompt:
