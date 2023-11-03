@@ -37,7 +37,7 @@ def compute_accuracy(probs, labels):
     correct = (predictions == labels).float().sum()
     return (correct / probs.size(0)).item()
 
-def compute_similarities(image_embeddings, text_embeddings, mode='cosine'):
+def compute_similarities(image_embeddings, text_embeddings, mode='cosine', logits_scale=100):
     if mode == 'cosine':
         return cosine_similarities(image_embeddings, text_embeddings)
     # TODO: add mean for DN
@@ -48,14 +48,14 @@ def compute_similarities(image_embeddings, text_embeddings, mode='cosine'):
         dn_sim = CLIP_DN_similarities(image_embeddings, text_embeddings)
         return (cos_sim + dn_sim)/2
 
-def cosine_similarities(image_embeddings, text_embeddings):
+def cosine_similarities(image_embeddings, text_embeddings, logits_scale=100):
     """ Compute cosine similarities between image embeddings and text encodings for all labels """
     image_embeddings = F.normalize(image_embeddings, dim=-1)
     text_embeddings = F.normalize(text_embeddings, dim=-1)
 
     # make the text embeddings to the same data type as image embeddings
     text_embeddings = text_embeddings.type_as(image_embeddings)
-    similarities = F.cosine_similarity(image_embeddings.unsqueeze(1), text_embeddings.unsqueeze(0), dim=2)
+    similarities = logits_scale*F.cosine_similarity(image_embeddings.unsqueeze(1), text_embeddings.unsqueeze(0), dim=2)
     
     return similarities
 
