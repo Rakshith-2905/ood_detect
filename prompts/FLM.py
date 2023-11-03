@@ -5,6 +5,16 @@ from tqdm import tqdm
 import random
 
 
+def get_dist_matrix_chunk(fx, y, num_classes):
+    dist_matrix_chunk = torch.zeros((num_classes, num_classes), device=fx.device)
+    fx = one_hot(torch.argmax(fx, dim=-1), num_classes=num_classes)
+    for i in range(num_classes):
+        dist_matrix_chunk[:, i] += fx[y == i].sum(0)
+    return dist_matrix_chunk
+
+def update_dist_matrix(dist_matrix, dist_matrix_chunk):
+    dist_matrix += dist_matrix_chunk
+
 def get_dist_matrix(fx, y):
     fx = one_hot(torch.argmax(fx, dim = -1), num_classes=fx.size(-1))
     dist_matrix = [fx[y==i].sum(0).unsqueeze(1) for i in range(len(y.unique()))]
@@ -34,19 +44,21 @@ def label_mapping_base(logits, mapping_sequence):
 
 def generate_label_mapping_by_frequency(resnet_model, projector, compute_similarities, data_loader, mapping_num = 1, similarity_mode='cosine', text_encodings=None):
     device = "cuda" if torch.cuda.is_available() else "cpu"
-    if hasattr(resnet_model, "eval"):
-        resnet_model.eval()
-    if hasattr(projector, "eval"):
-        projector.eval()
-    fx0s = []
-    ys = []
-    unique_labels = set()
-    iteration_count = 0
-    
+    resnet_model.eval()
+    projector.eval()
+        
+    num_classes = text_encodings.size(0)
+    dist_matrix = torch.zeros((num_classes, num_classes), device="cpu")
+    fx0s_chunk = []
+    ys_chunk = []
+    batch_counter = 0
+
+    chunk_size = 1000
+
     pbar = tqdm(data_loader, total=len(data_loader), desc=f"Frequency Label Mapping", ncols=100) if len(data_loader) > 20 else data_loader
     with torch.no_grad():
         for resnet_logits, resnet_embeddings, labels,_ in pbar:
-
+            labels = labels.to(device)
             resnet_embeddings = resnet_embeddings.to(device)
             probs_from_resnet = F.softmax(resnet_logits, dim=-1)
             # Project the resnet embeddings
@@ -54,46 +66,41 @@ def generate_label_mapping_by_frequency(resnet_model, projector, compute_similar
             # Compute similarities between image embeddings and text encodings
             fx0 = compute_similarities(proj_embeddings, text_encodings, mode=similarity_mode)
 
-            fx0s.append(fx0.cpu().float())
-            ys.append(labels.cpu().int())
-
-            # Update the set of unique labels
-            unique_labels.update(labels.cpu().numpy().tolist())
-
-
-            # Dele the variables to free up memory
-            del resnet_embeddings, resnet_logits, probs_from_resnet, proj_embeddings, fx0
             
-            # Increment iteration count
-            iteration_count += 1
+            fx0s_chunk.append(fx0.cpu().float())
+            ys_chunk.append(labels.cpu().int())
+            batch_counter += 1
 
-            # Check if we have collected all classes and have completed 1500 iterations
-            if len(unique_labels) == 345 and iteration_count >= 1500:
-                print("Collected all classes and completed minimum iterations.")
-                del unique_labels
-                break
+            if batch_counter >= chunk_size:
+                # Update the dist_matrix with the accumulated chunk
+                fx0s_chunk = torch.cat(fx0s_chunk)
+                ys_chunk = torch.cat(ys_chunk)
+                dist_matrix_chunk = get_dist_matrix_chunk(fx0s_chunk, ys_chunk, num_classes)
+                update_dist_matrix(dist_matrix, dist_matrix_chunk)
 
-            # If not all classes have been collected and 1500 iterations have passed, keep going
-            if iteration_count == 1500:
-                print("Reached 1500 iterations but not all classes have been collected. Continuing...")
-                
-    # Randomly select only half of fx0s and ys
-    # num_to_select = int(len(fx0) * 0.30)
+                # Clear the accumulated chunk from memory
+                del fx0s_chunk, ys_chunk, dist_matrix_chunk
+                torch.cuda.empty_cache()  # Clear cache if using CUDA
+                fx0s_chunk = []
+                ys_chunk = []
+                batch_counter = 0
 
-    # # Zip the lists together, shuffle the combined list, and take the required number of pairs
-    # combined = list(zip(fx0, ys))
-    # random.shuffle(combined)
-    # selected_pairs = combined[:num_to_select]
-    # # Unzip the selected pairs back into two lists
-    # fx0, ys = zip(*selected_pairs)
+    # Handle the last chunk if there is any data left
+    if fx0s_chunk:
+        fx0s_chunk = torch.cat(fx0s_chunk)
+        ys_chunk = torch.cat(ys_chunk)
+        dist_matrix_chunk = get_dist_matrix_chunk(fx0s_chunk, ys_chunk, num_classes)
+        update_dist_matrix(dist_matrix, dist_matrix_chunk)
+        del fx0s_chunk, ys_chunk, dist_matrix_chunk
+    print(dist_matrix.shape)
 
-    fx0s = torch.cat(fx0s).cpu().float()
-    ys = torch.cat(ys).cpu().int()
-    if ys.size(0) != fx0s.size(0):
-        assert fx0s.size(0) % ys.size(0) == 0
-        ys = ys.repeat(int(fx0s.size(0) / ys.size(0)))
-    dist_matrix = get_dist_matrix(fx0s, ys)
     pairs = torch.nonzero(predictive_distribution_based_multi_label_mapping(dist_matrix, mapping_num))
     mapping_sequence = pairs[:, 0][torch.sort(pairs[:, 1]).indices.tolist()]
     print(len(mapping_sequence))
+
+    assert False
+
+    resnet_model.train()
+    projector.train()
+
     return mapping_sequence

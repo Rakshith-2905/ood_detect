@@ -1,0 +1,25 @@
+{
+    "DEFAULT_TEMPLATE": "This is a photo of a {}.",
+    "ENSEMBLE_TEMPLATES": [
+        "a sculpture of a {}.",
+        "a rendering of a {}.",
+        "graffiti of a {}.",
+        "a tattoo of a {}.",
+        "a drawing of a {}.",
+        "a painting of a {}.",
+        "a cropped photo of a {}.",
+        "a rendering of the {}.",
+        "a {} in a video game.",
+        "a doodle of a {}.",
+        "a sketch of a {}.",
+        "a low resolution photo of a {}.",
+        "a rendition of a {}.",
+        "a blurry photo of a {}.",
+        "a cartoon {}.",
+        "art of a {}.",
+        "a embroidered {}.",
+        "a pixelated photo of a {}.",
+        "the cartoon {}.",
+        "a black and white photo of a {}."
+    ]
+}
