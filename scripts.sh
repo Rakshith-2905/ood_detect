@@ -20,4 +20,4 @@ python test_projection.py --dataset domainnet --domain real --image_size 224 --b
                             --resnet_model resnet50 --checkpoint_path 'logs/classifier/resnet50_domainnet_real/best_checkpoint.pth'  \
                             --projector_checkpoint_path 'logs/classifier/resnet50_domainnet_real/projection_default_prompt_gt_sim0_distill1_DN_mapping1/projector_weights.pth' \
                             --resnet_dim 2048 --projection_dim 512  \
-                            --prompt_embeddings_pth "CLIP_RN50_prompts/text_embeddings.pth" --similarity_mode "DN"
+                            --prompt_embeddings_pth "prompts/CLIP_RN50_text_embeddings.pth" --similarity_mode "DN"
