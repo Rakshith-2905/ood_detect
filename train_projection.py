@@ -65,11 +65,6 @@ def train_one_epoch(train_loader, resnet_model, projector, text_encodings, crite
         distill_loss = criterion(similarities, resnet_logits)
 
         if args.feature_similarity:
-            # # Make the CLIP embeddings the same data type as the projected embeddings
-            # CLIP_embeddings = CLIP_embeddings.type_as(proj_embeddings)
-            # # Compute MSE loss between CLIP embeddings and projected embeddings
-            # CLIP_loss = F.mse_loss(CLIP_embeddings, proj_embeddings)
-
             # Compute cross entropy loss between similarities and labels
             gt_loss = F.cross_entropy(similarities, labels)
             
@@ -290,7 +285,7 @@ if __name__ == "__main__":
     parser.add_argument('--teacher_temp', type=float, default=0.5, help='Temperature for Dino loss')
     parser.add_argument('--student_temp', type=float, default=0.1, help='Temperature for Dino loss')
     parser.add_argument('--prompt_embeddings_pth', type=str, required=True, help='Path to the prompt embeddings')
-    parser.add_argument('--use_default_prompt', type=bool, default=True, help='Use the default prompt instead of FLM')
+    parser.add_argument('--use_default_prompt', type=bool, default=False, help='Use the default prompt instead of FLM')
     parser.add_argument('--mapping_num', type=int, default=1, help='Number of labels to map to each prompt')
     parser.add_argument('--mapping_interval', type=int, default=1, help='Number of epochs between label mapping')
     parser.add_argument('--similarity_mode', type=str, choices=['cosine', 'DN', 'DN*'], default='cosine', help='Type of similarity to use for label mapping')

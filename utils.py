@@ -61,8 +61,8 @@ def cosine_similarities(image_embeddings, text_embeddings):
 
 # load the image and text embeddings from the saved files
 def load_embeddings(save_dir='prompts/'):
-    mean_image_embeddings = torch.load(os.path.join(save_dir, "mean_image_embeddings.pth"))
-    mean_text_embeddings = torch.load(os.path.join(save_dir, "mean_text_embeddings.pth"))
+    mean_image_embeddings = torch.load(os.path.join(save_dir, "RN50_mean_image_embeddings.pth"))
+    mean_text_embeddings = torch.load(os.path.join(save_dir, "RN50_mean_text_embeddings.pth"))
 
     return mean_image_embeddings, mean_text_embeddings
 

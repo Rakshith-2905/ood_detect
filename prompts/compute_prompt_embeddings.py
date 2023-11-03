@@ -4,8 +4,8 @@ import json
 
 # User-defined paths
 CLASS_NAMES_PATH = '../data/domainnet_v1.0/class_names.txt'
-TEMPLATES_PATH = 'prompt_templates.json'
-OUTPUT_EMBEDDINGS_PATH = 'text_embeddings.pth'
+TEMPLATES_PATH = 'prompt_templates_21.json'
+OUTPUT_EMBEDDINGS_PATH = 'CLIP_RN_50_text_embeddings_21.pth'
 debug = False
 
 # ################# Computing text embeddings #################
@@ -30,7 +30,7 @@ debug = False
 
 # # Load the CLIP model and compute embeddings
 # device = "cuda" if torch.cuda.is_available() else "cpu"
-# model, transform = clip.load("ViT-B/32", device=device)
+# model, transform = clip.load("RN50", device=device)
 
 # with torch.no_grad():
 #     all_text_features = []
@@ -82,31 +82,39 @@ debug = False
 ################################## Computing image embeddings ##################################
 # Load the CLIP model and compute embeddings
 device = "cuda" if torch.cuda.is_available() else "cpu"
-model, transform = clip.load("ViT-B/32", device=device)
+model, transform = clip.load("RN50", device=device)
 
-# Load the dataloader
+
+# Import the dataloader from one directory up
+import sys
+sys.path.insert(1, '..')
 from domainnet_data import DomainNetDataset
 
-domain_train = DomainNetDataset(root_dir='data/domainnet_v1.0', domain="real", split='train')
-# Compute the image embeddings
+domain_train = DomainNetDataset(root_dir='../data/domainnet_v1.0', domain="real", split='train')
+
+# Compute the image embeddings by randomly sampling 10000 images from the training set and taking the mean
+
 with torch.no_grad():
     all_image_features = []
-    for i, (image, label) in enumerate(domain_train):
+    # Randomly sample 10000 indices
+    indices = torch.randperm(len(domain_train))[:10000]
+    for i in indices:
+        image, label = domain_train[i]
         print(f"Computing embeddings for image: {i}")
         image_inputs = transform(image).unsqueeze(0).to(device)
         image_features = model.encode_image(image_inputs)
         all_image_features.append(image_features)
-        if i == 1500:
+        if i == 10000:
             break
 image_features_mean = torch.mean(torch.cat(all_image_features, dim=0), dim=0)
 
 # Save the embeddings
-torch.save(image_features_mean, "mean_image_embeddings.pth")
+torch.save(image_features_mean, "RN50_mean_image_embeddings.pth")
 
-all_text_features = torch.load('prompts/text_embeddings.pth')
+all_text_features = torch.load('../prompts/CLIP_RN50_text_embeddings.pth')
 text_encodings = all_text_features[0]
 
 # Compute mean of text encodings
 text_encodings_mean = text_encodings.mean(dim=0)
 
-torch.save(text_encodings_mean, "mean_text_embeddings.pth")
+torch.save(text_encodings_mean, "RN50_mean_text_embeddings.pth")
