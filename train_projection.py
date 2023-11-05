@@ -27,8 +27,7 @@ def get_save_dir(args):
 
     save_dir += f"_{args.similarity_mode}"
     save_dir += f"_mapping{args.mapping_num}"
-    save_dir += "scaled_logits"
-    # save_dir += f"_two_MLP"
+    save_dir += "_scaled_logits"
 
     return save_dir
 
@@ -66,10 +65,9 @@ def train_one_epoch(train_loader, resnet_model, projector, text_encodings, crite
         distill_loss = criterion(similarities, resnet_logits)
 
         if args.feature_similarity:
-            # Compute cross entropy loss between similarities and labels
-            gt_loss = F.cross_entropy(similarities, labels)
+            feature_sim = F.l1_loss(proj_embeddings, CLIP_embeddings)
             
-            loss = args.distill_loss_weight*distill_loss + args.feature_sim_weight * gt_loss
+            loss = args.distill_loss_weight*distill_loss + args.feature_sim_weight * feature_sim
         else:
             loss = distill_loss
 
@@ -124,10 +122,8 @@ def validate(val_loader, resnet_model, projector, text_encodings, criterion, dev
             distill_loss = criterion(similarities, resnet_logits)
 
             if args.feature_similarity:
-                # Compute cross entropy loss between similarities and labels
-                gt_loss = F.cross_entropy(similarities, labels)
-                
-                loss = args.distill_loss_weight*distill_loss + args.feature_sim_weight * gt_loss
+                feature_sim = F.l1_loss(proj_embeddings, CLIP_embeddings)
+                loss = args.distill_loss_weight*distill_loss + args.feature_sim_weight * feature_sim
             else:
                 loss = distill_loss
             
