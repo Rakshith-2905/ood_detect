@@ -136,7 +136,7 @@ def plot_confusion_matrix(proj_labels, resnet_labels, class_names, save_dir=None
     if save_dir is not None:
         plt.savefig(os.path.join(save_dir, 'confusion_matrix.png'))
 
-def plot_umap_embeddings(tensor1, tensor2, tensor3=None, include_lines_for_tensor3=False):
+def plot_umap_embeddings(tensor1, tensor2, tensor3=None, include_lines_for_tensor3=False, labels=None):
     # Convert PyTorch tensors to NumPy arrays
     tensor1_np = tensor1.detach().cpu().numpy()
     tensor2_np = tensor2.detach().cpu().numpy()
@@ -161,7 +161,6 @@ def plot_umap_embeddings(tensor1, tensor2, tensor3=None, include_lines_for_tenso
     # Plot the embeddings
     fig, ax = plt.subplots(figsize=(12, 10))
     colors = ['red', 'blue', 'green']
-    labels = ['Tensor 1', 'Tensor 2', 'Tensor 3']
     for i, reduced_tensor in enumerate(reduced_tensors):
         ax.scatter(reduced_tensor[:, 0], reduced_tensor[:, 1], color=colors[i], label=labels[i])
 
@@ -176,9 +175,8 @@ def plot_umap_embeddings(tensor1, tensor2, tensor3=None, include_lines_for_tenso
             points = np.vstack((reduced_tensors[0][i], reduced_tensors[2][i]))
             ax.plot(points[:, 0], points[:, 1], 'purple', alpha=0.5)
 
-    # Customize the plot
+    # Customize the plot with legends
     ax.legend()
     ax.set_title('UMAP projection of the tensor embeddings', fontsize=18)
 
     plt.show()
-
