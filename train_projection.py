@@ -27,7 +27,8 @@ def get_save_dir(args):
 
     save_dir += f"_{args.similarity_mode}"
     save_dir += f"_mapping{args.mapping_num}"
-    # save_dir += f"_two"
+    save_dir += "scaled_logits"
+    # save_dir += f"_two_MLP"
 
     return save_dir
 
@@ -114,6 +115,7 @@ def validate(val_loader, resnet_model, projector, text_encodings, criterion, dev
             # Compute similarities between image embeddings and text encodings
             similarities = compute_similarities(proj_embeddings, text_encodings, mode=args.similarity_mode)
 
+            # CLIP_similarities = compute_similarities(CLIP_embeddings, text_encodings, mode=args.similarity_mode)
 
             if label_mapping is not None:
                 similarities = label_mapping(similarities)
@@ -213,7 +215,7 @@ def main(args):
     train_base_accuracies, train_clip_accuracies = [], []
     val_base_accuracies, val_clip_accuracies = [], []
     
-    best_val_loss = 0.0
+    best_val_loss = 10000000000000
     for epoch in range(args.num_epochs):
 
         if epoch % args.mapping_interval == 0 and args.use_default_prompt == False:
