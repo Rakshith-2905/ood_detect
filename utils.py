@@ -5,6 +5,7 @@ import torch.nn.functional as F
 from matplotlib import pyplot as plt
 from sklearn.metrics import confusion_matrix
 import seaborn as sns
+import umap
 
 import numpy as np
 import os
@@ -134,3 +135,50 @@ def plot_confusion_matrix(proj_labels, resnet_labels, class_names, save_dir=None
 
     if save_dir is not None:
         plt.savefig(os.path.join(save_dir, 'confusion_matrix.png'))
+
+def plot_umap_embeddings(tensor1, tensor2, tensor3=None, include_lines_for_tensor3=False):
+    # Convert PyTorch tensors to NumPy arrays
+    tensor1_np = tensor1.detach().cpu().numpy()
+    tensor2_np = tensor2.detach().cpu().numpy()
+    
+    tensors_np = [tensor1_np, tensor2_np]
+    
+    # Include the third tensor if it's provided
+    if tensor3 is not None:
+        tensor3_np = tensor3.detach().cpu().numpy()
+        tensors_np.append(tensor3_np)
+
+    # Combine the embeddings
+    combined_embeddings = np.vstack(tensors_np)
+
+    # Fit UMAP
+    reducer = umap.UMAP(n_neighbors=5, min_dist=0.3, metric='cosine')
+    embedding_2d = reducer.fit_transform(combined_embeddings)
+
+    # Split the reduced embeddings
+    reduced_tensors = np.split(embedding_2d, np.cumsum([len(t) for t in tensors_np])[:-1])
+
+    # Plot the embeddings
+    fig, ax = plt.subplots(figsize=(12, 10))
+    colors = ['red', 'blue', 'green']
+    labels = ['Tensor 1', 'Tensor 2', 'Tensor 3']
+    for i, reduced_tensor in enumerate(reduced_tensors):
+        ax.scatter(reduced_tensor[:, 0], reduced_tensor[:, 1], color=colors[i], label=labels[i])
+
+    # Draw lines between corresponding points for the first two tensors
+    for i in range(len(tensor1_np)):
+        points = np.vstack((reduced_tensors[0][i], reduced_tensors[1][i]))
+        ax.plot(points[:, 0], points[:, 1], 'grey', alpha=0.5)
+
+    # Optionally draw lines for the third tensor
+    if tensor3 is not None and include_lines_for_tensor3 and len(tensor1_np) == len(tensor3_np):
+        for i in range(len(tensor1_np)):
+            points = np.vstack((reduced_tensors[0][i], reduced_tensors[2][i]))
+            ax.plot(points[:, 0], points[:, 1], 'purple', alpha=0.5)
+
+    # Customize the plot
+    ax.legend()
+    ax.set_title('UMAP projection of the tensor embeddings', fontsize=18)
+
+    plt.show()
+
