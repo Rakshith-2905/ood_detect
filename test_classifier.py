@@ -60,28 +60,21 @@ def save_features_and_labels(loader, model, device, save_dir, prefix="train"):
     clip_model, preprocess = clip.load("RN50", device=device)
 
     if prefix == "train":
-        resnet_transform = transforms.Compose([
-            transforms.Resize(256),
-            transforms.CenterCrop(224),
+        base_geometry_transform = transforms.Compose([
+                                        transforms.RandomResizedCrop(224),
+                                        transforms.RandomHorizontalFlip()])
+    else:
+
+        base_geometry_transform = transforms.Compose([
+                                        transforms.Resize(256),
+                                        transforms.CenterCrop(224)])        
+    
+    resnet_transform = transforms.Compose([
             transforms.ToTensor(),
             transforms.Normalize(mean=[0.485, 0.456, 0.406],
                                  std=[0.229, 0.224, 0.225]),
+
         ])
-    else:
-        resnet_transform = transforms.Compose([
-                transforms.Resize(256),
-                transforms.CenterCrop(224),
-                transforms.ToTensor(),
-                transforms.Normalize(mean=[0.485, 0.456, 0.406],
-                                    std=[0.229, 0.224, 0.225]),
-
-            ])
-
-
-    CLIP_custom_transform = transforms.Compose([
-        transforms.Resize(256),
-        transforms.CenterCrop(224)
-    ])
 
     dataset = DomainNetDataset(root_dir='data/domainnet_v1.0', domain='real', split=prefix, transform=None)
 
@@ -96,9 +89,11 @@ def save_features_and_labels(loader, model, device, save_dir, prefix="train"):
             inputs, labels = dataset[i]
 
             labels = torch.tensor(labels)
+            
+            inputs = base_geometry_transform(inputs)
 
             inputs_resnet = resnet_transform(inputs).unsqueeze(0).to(device)
-            inputs_clip = preprocess(CLIP_custom_transform(inputs)).unsqueeze(0).to(device)
+            inputs_clip = preprocess(inputs).unsqueeze(0).to(device)
 
             # inputs = inputs.to(device)
 
