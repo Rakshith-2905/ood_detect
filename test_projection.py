@@ -141,7 +141,7 @@ def main(args):
         val_loader = loader['test']
         loss, acc, resnet_pred, proj_pred, gt_labels = evaluate(val_loader, resnet_model, projector, text_encodings, criterion, device, label_mapping=label_mapping)
         results[domain] = {"Loss": loss, "Accuracy": acc}
-        print(f"Domain: {domain}\tLoss: {loss:.4f}\tAccuracy: {acc:.4f}%")
+        print(f"Domain: {domain}\tLoss: {loss:.4f}\tAccuracy: {acc:.4f}")
 
         # Compute the confusion matrix
         if domain == 'real':
@@ -155,8 +155,8 @@ def main(args):
     with open(os.path.join(save_dir, 'evaluation_results.txt'), 'w') as f:
         f.write("Domain\tLoss\tAccuracy\n")
         for domain, metrics in results.items():
-            f.write(f"{domain}\t{metrics['Loss']:.4f}\t{metrics['Accuracy']:.4f}%\n")
-        f.write(f"Average OOD\t{avg_ood_acc:.4f}%\n")
+            f.write(f"{domain}\t{metrics['Loss']:.4f}\t{metrics['Accuracy']:.4f}\n")
+        f.write(f"Average OOD\t{avg_ood_acc:.4f}\n")
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Train ResNet on WILDS Dataset')
