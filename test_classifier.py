@@ -1,6 +1,7 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import torchvision.transforms as transforms
 import clip
 
 import argparse
@@ -56,7 +57,33 @@ def save_features_and_labels(loader, model, device, save_dir, prefix="train"):
     - prefix (str): Prefix for filenames, e.g., 'train' or 'test'.
     """
     # Initialize CLIP
-    clip_model, preprocess = clip.load("ViT-B/32", device=device)
+    clip_model, preprocess = clip.load("RN50", device=device)
+
+    if prefix == "train":
+        resnet_transform = transforms.Compose([
+            transforms.Resize(256),
+            transforms.CenterCrop(224),
+            transforms.ToTensor(),
+            transforms.Normalize(mean=[0.485, 0.456, 0.406],
+                                 std=[0.229, 0.224, 0.225]),
+        ])
+    else:
+        resnet_transform = transforms.Compose([
+                transforms.Resize(256),
+                transforms.CenterCrop(224),
+                transforms.ToTensor(),
+                transforms.Normalize(mean=[0.485, 0.456, 0.406],
+                                    std=[0.229, 0.224, 0.225]),
+
+            ])
+
+
+    CLIP_custom_transform = transforms.Compose([
+        transforms.Resize(256),
+        transforms.CenterCrop(224)
+    ])
+
+    dataset = DomainNetDataset(root_dir='data/domainnet_v1.0', domain='real', split=prefix, transform=None)
 
     all_outputs = []
     all_features = []
@@ -64,25 +91,39 @@ def save_features_and_labels(loader, model, device, save_dir, prefix="train"):
     all_labels = []
 
     with torch.no_grad():
-        for inputs, labels in loader:
-            inputs = inputs.to(device)
+        # for inputs, labels in loader:
+        for i in tqdm(range(len(dataset))):
+            inputs, labels = dataset[i]
 
-            outputs, features = model(inputs, return_features=True)
+            labels = torch.tensor(labels)
+
+            inputs_resnet = resnet_transform(inputs).unsqueeze(0).to(device)
+            inputs_clip = preprocess(CLIP_custom_transform(inputs)).unsqueeze(0).to(device)
+
+            # inputs = inputs.to(device)
+
+            outputs, features = model(inputs_resnet, return_features=True)
 
             # Get CLIP image features for the inputs
-            image_features = clip_model.encode_image(inputs)
+            image_features = clip_model.encode_image(inputs_clip)
 
             CLIP_features.append(image_features.cpu())
 
             all_outputs.append(outputs.cpu())
             all_features.append(features.cpu())
-            all_labels.append(labels.cpu())
+            all_labels.append(labels)
 
     # Concatenate the results
     CLIP_features = torch.cat(CLIP_features, dim=0)
     all_outputs = torch.cat(all_outputs, dim=0)
     all_features = torch.cat(all_features, dim=0)
-    all_labels = torch.cat(all_labels, dim=0)
+    all_labels = torch.stack(all_labels, dim=0)
+
+
+    print(f"CLIP features shape: {CLIP_features.shape}")
+    print(f"Outputs shape: {all_outputs.shape}")
+    print(f"Features shape: {all_features.shape}")
+    print(f"Labels shape: {all_labels.shape}")
 
     save_dir = os.path.join(save_dir, 'features')
     # Save the results
