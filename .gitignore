@@ -96,3 +96,8 @@ data/
 prompts/text_embeddings.pth
 
 *.pth
+*.pkl
+*.png
+*.sh
+*.out
+*.txt
