@@ -55,7 +55,7 @@ def cosine_similarities(image_embeddings, text_embeddings):
 
     # make the text embeddings to the same data type as image embeddings
     text_embeddings = text_embeddings.type_as(image_embeddings)
-    similarities = F.cosine_similarity(image_embeddings.unsqueeze(1), text_embeddings.unsqueeze(0), dim=2)
+    similarities = 100.*F.cosine_similarity(image_embeddings.unsqueeze(1), text_embeddings.unsqueeze(0), dim=2)
     
     return similarities
 

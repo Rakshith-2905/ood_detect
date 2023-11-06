@@ -82,7 +82,7 @@ def evaluate(val_loader, resnet_model, projector, text_encodings, criterion, dev
 
 def main(args):
 
-    base_dir = f"logs/classifier/{args.resnet_model}_{args.dataset}_{args.domain}"
+    base_dir = f"logs/classifier/imagenet/{args.resnet_model}_{args.dataset}_{args.domain}"
     
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 

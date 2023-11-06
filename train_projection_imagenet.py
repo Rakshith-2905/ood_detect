@@ -11,12 +11,12 @@ from functools import partial
 
 from models.resnet import CustomResNet
 from models.visual_transformer import ProjectionHead, VisualTransformer
-from domainnet_data import DomainNetDataset, get_domainnet_loaders, get_data_from_saved_files
+#from domainnet_data import DomainNetDataset, get_domainnet_loaders, get_data_from_saved_files
 from utils import SimpleDINOLoss, compute_accuracy, compute_similarities, plot_grad_flow
 from prompts.FLM import generate_label_mapping_by_frequency, label_mapping_base
 from imagenet_feats_loader import get_data_from_saved_files
 def get_save_dir(args): #TODO: change it to imagenet dataset
-    base_dir = f"logs/classifier/imagenet/{args.resnet_model}_{args.dataset}_{args.domain}"
+    base_dir = f"logs/classifier/imagenet/{args.network}_{args.dataset}_{args.domain}"
     save_dir = os.path.join(base_dir, "projection")
     if args.use_default_prompt == True:
         save_dir += "_default_prompt"
@@ -43,10 +43,10 @@ def train_one_epoch(train_loader, resnet_model, projector, text_encodings, crite
 
     # Wrap the train_loader with tqdm for progress bar
     pbar = tqdm(train_loader, desc=f'Training epoch: {epoch+1}')
-    for resnet_logits, resnet_embeddings, labels, CLIP_embeddings in pbar:
+    for resnet_logits, resnet_embeddings, labels in pbar:
 
-        resnet_logits, resnet_embeddings, labels, CLIP_embeddings = resnet_logits.to(device), resnet_embeddings.to(device), labels.to(device), CLIP_embeddings.to(device)
-        
+        resnet_logits, resnet_embeddings, labels = resnet_logits.to(device), resnet_embeddings.to(device), labels.to(device)
+
         optimizer.zero_grad()
         
         probs_from_resnet = F.softmax(resnet_logits, dim=-1)
@@ -102,9 +102,9 @@ def validate(val_loader, resnet_model, projector, text_encodings, criterion, dev
     # Wrap the val_loader with tqdm for progress bar
     pbar = tqdm(val_loader, desc=f'Validating epoch: {epoch+1}')
     with torch.no_grad():
-        for resnet_logits, resnet_embeddings, labels, CLIP_embeddings in pbar:
+        for resnet_logits, resnet_embeddings, labels in pbar:
 
-            resnet_logits, resnet_embeddings, labels, CLIP_embeddings = resnet_logits.to(device), resnet_embeddings.to(device), labels.to(device), CLIP_embeddings.to(device)
+            resnet_logits, resnet_embeddings, labels = resnet_logits.to(device), resnet_embeddings.to(device), labels.to(device)
             
             probs_from_resnet = F.softmax(resnet_logits, dim=-1)
             
@@ -145,26 +145,25 @@ def validate(val_loader, resnet_model, projector, text_encodings, criterion, dev
 
 def main(args):
 
-    base_dir = f"logs/classifier/{args.resnet_model}_{args.dataset}_{args.domain}"
+    base_dir = f"logs/classifier/{args.network}_{args.dataset}"
     
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
     # Load class names from a text file
-    with open('data/domainnet_v1.0/class_names.txt', 'r') as f:
-        class_names = [line.strip() for line in f.readlines()]
+    
 
     # loaders, _ = get_domainnet_loaders(args.domain, args.batch_size)
     # val_loader = loaders['test']
 
-    train_loader,val_loader = get_data_from_saved_files(os.path.join(base_dir, 'features'), args.batch_size, train_shuffle=True)
 
+    train_loader,val_loader = get_data_from_saved_files(f'imagenet_feats/{args.network}_imagenet_features.pkl', args.batch_size, train_shuffle=True)
     # Load your trained model from checkpoint
-    checkpoint = torch.load(args.checkpoint_path)
+    #checkpoint = torch.load(args.checkpoint_path)
     
     resnet_model = CustomResNet(model_name=args.resnet_model, num_classes=345)
-    resnet_model.load_state_dict(checkpoint['model_state_dict'])
+    # resnet_model.load_state_dict(checkpoint['model_state_dict'])
     resnet_model.eval()
-    print(f"Loaded model from epoch {checkpoint['epoch']}")
+    #print(f"Loaded model from epoch {checkpoint['epoch']}")
     resnet_model.to(device)
     
     # # Load CLIP
@@ -197,8 +196,8 @@ def main(args):
 
     # Make directory for saving results
     save_dir = get_save_dir(args)
-    if not os.path.exists(save_dir):
-        os.makedirs(save_dir, exist_ok=True)
+    
+    os.makedirs(save_dir, exist_ok=True)
     
     print(f"Saving results to {save_dir}")
     
@@ -212,7 +211,7 @@ def main(args):
     train_base_accuracies, train_clip_accuracies = [], []
     val_base_accuracies, val_clip_accuracies = [], []
     
-    best_val_loss = 0.0
+    best_val_loss = 1e10
     for epoch in range(args.num_epochs):
 
         if epoch % args.mapping_interval == 0 and args.use_default_prompt == False:
@@ -269,14 +268,14 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Train ResNet on WILDS Dataset')
 
     parser.add_argument('--dataset', type=str, required=True, help='Name of the WILDS dataset')
-    parser.add_argument('--domain', type=str, required=True, help='Name of the domain to load')
+    parser.add_argument('--domain', type=str, required=False, help='Name of the domain to load')
     parser.add_argument('--image_size', type=int, default=224, help='Size to resize images to (assumes square images)')
     parser.add_argument('--batch_size', type=int, default=32, help='Batch size for the dataloader')
     parser.add_argument('--class_percentage', type=float, default=1, help='Percentage of classes to be included (0.0 to 1.0)')
     parser.add_argument('--seed', type=int, default=42, help='Seed for reproducibility')
     parser.add_argument('--resnet_model', type=str, choices=['resnet18', 'resnet34', 'resnet50', 'resnet101', 'resnet152'], default='resnet18', help='Type of ResNet model to use')
     parser.add_argument('--checkpoint_path', type=str, help='Path to checkpoint to resume training from')
-
+    parser.add_argument('--network', type=str, default='resnet_50', help='Type of ResNet model to use')
     parser.add_argument('--num_epochs', type=int, default=100, help='Number of training epochs')
     parser.add_argument('--optimizer', type=str, choices=['adam', 'sgd'], default='sgd', help='Type of optimizer to use')
     parser.add_argument('--learning_rate', type=float, default=0.1, help='Learning rate for the optimizer')
