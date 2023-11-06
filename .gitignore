@@ -100,3 +100,4 @@ prompts/text_embeddings.pth
 *.pkl
 *.png
 *.txt
+*.pt
