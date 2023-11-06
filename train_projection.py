@@ -36,60 +36,56 @@ def train_one_epoch(train_loader, resnet_model, projector, text_encodings, crite
     projector.train()
     
     total_loss = 0
-    total_distill_loss = 0
-    total_feature_loss = 0
-    total_base_model_acc = 0
-    total_clip_acc = 0
+    total_image_loss = 0
+    total_text_loss = 0
 
     total_samples = len(train_loader.dataset)
 
     # Wrap the train_loader with tqdm for progress bar
     pbar = tqdm(train_loader, desc=f'Training epoch: {epoch+1}')
-    for resnet_logits, resnet_embeddings, labels, CLIP_embeddings in pbar:
+    for resnet_logits, resnet_embeddings, gt_labels, CLIP_embeddings in pbar:
 
-        resnet_logits, resnet_embeddings, labels, CLIP_embeddings = resnet_logits.to(device), resnet_embeddings.to(device), labels.to(device), CLIP_embeddings.to(device)
+        resnet_logits, resnet_embeddings, CLIP_embeddings, gt_labels = resnet_logits.to(device), resnet_embeddings.to(device), CLIP_embeddings.to(device), gt_labels.to(device)
         
         optimizer.zero_grad()
         
-        probs_from_resnet = F.softmax(resnet_logits, dim=-1)
-        
         # Project the resnet embeddings
         proj_embeddings = projector(resnet_embeddings)
-        
-        # Compute similarities between image embeddings and text encodings
-        similarities = compute_similarities(proj_embeddings, text_encodings, mode=args.similarity_mode)
 
+        # Create the text_encodings based on the gt labels
+        gt_labels = gt_labels.cpu().numpy().tolist()
+        gt_text_encodings = text_encodings[gt_labels] # (batch_size, CLIP_embedding_dim)
 
-        if label_mapping is not None:
-            similarities = label_mapping(similarities)
+        proj_embeddings = F.normalize(proj_embeddings, dim=-1)
+        gt_text_encodings = F.normalize(gt_text_encodings, dim=-1)
 
-        probs_from_proj = F.softmax(similarities, dim=-1)
-        distill_loss = criterion(similarities, resnet_logits)
+        # make the text embeddings to the same data type as image embeddings
+        gt_text_encodings = gt_text_encodings.type_as(proj_embeddings)
+        # The logits dimension (batch_size, batch_size)
+        logits_per_projection = 100*proj_embeddings @ gt_text_encodings.T # 100 is the logits scale from CLIP
+        logits_per_text = logits_per_projection.t()
 
-        if args.feature_similarity:
-            feature_loss = F.l1_loss(proj_embeddings, CLIP_embeddings)
-            
-            loss = args.distill_loss_weight*distill_loss + args.feature_sim_weight * feature_loss
-        else:
-            loss = distill_loss
+        # We want to maximize the diagonal entries of the logits matrix while minimizing the off-diagonal entries
 
+        # labels are indexes to the diagonal entries of the logits matrix
+        pseudo_labels = torch.arange(len(resnet_logits)).long().to(device) # (batch_size)
+
+        loss_image = F.cross_entropy(logits_per_projection, pseudo_labels)
+        loss_text = F.cross_entropy(logits_per_text, pseudo_labels)
+        loss = (loss_image + loss_text)/2
         loss.backward()
 
         optimizer.step()
 
         batch_loss = loss.item() 
-        batch_base_model_acc = compute_accuracy(probs_from_resnet, labels)
-        batch_clip_acc = compute_accuracy(probs_from_proj, labels)
-
         total_loss += batch_loss
-        total_base_model_acc += batch_base_model_acc
-        total_clip_acc += batch_clip_acc
-        total_distill_loss += distill_loss.item()
-        total_feature_loss += feature_loss.item()
+        
+        total_image_loss += loss_image.item()
+        total_text_loss += loss_text.item()
         
         # pbar.set_postfix({"Batch Loss": batch_loss, "Base model Acc": batch_base_model_acc, "CLIP Acc": batch_clip_acc})
-        pbar.set_postfix({"Batch Loss": batch_loss, "Base model Acc": batch_base_model_acc, "CLIP Acc": batch_clip_acc, "Feature Loss": feature_loss.item()})
-    return total_loss/len(train_loader), total_base_model_acc/len(train_loader), total_clip_acc/len(train_loader), total_feature_loss/len(train_loader), total_distill_loss/len(train_loader)
+        pbar.set_postfix({"Batch Loss": batch_loss, "Image Loss": loss_image.item(), "Text Loss": loss_text.item()})
+    return total_loss/len(train_loader), total_image_loss/len(train_loader), total_text_loss/len(train_loader)
 
 
 def validate(val_loader, resnet_model, projector, text_encodings, criterion, device, epoch, label_mapping=None):
@@ -97,11 +93,8 @@ def validate(val_loader, resnet_model, projector, text_encodings, criterion, dev
     projector.eval()
     
     total_loss = 0
-    total_distill_loss = 0
-    total_feature_loss = 0
-    total_base_model_acc = 0
-    total_clip_acc = 0
-    total_gt_clip_acc = 0
+    total_image_loss = 0
+    total_text_loss = 0
 
     total_samples = len(val_loader.dataset)
     
@@ -111,44 +104,44 @@ def validate(val_loader, resnet_model, projector, text_encodings, criterion, dev
         for resnet_logits, resnet_embeddings, labels, CLIP_embeddings in pbar:
 
             resnet_logits, resnet_embeddings, labels, CLIP_embeddings = resnet_logits.to(device), resnet_embeddings.to(device), labels.to(device), CLIP_embeddings.to(device)
-            
-            probs_from_resnet = F.softmax(resnet_logits, dim=-1)
-            
+                
             # Project the resnet embeddings
             proj_embeddings = projector(resnet_embeddings)
+
+            # Create the text_encodings based on the gt labels
+            gt_labels = gt_labels.cpu().numpy().tolist()
+            gt_text_encodings = text_encodings[gt_labels] # (batch_size, CLIP_embedding_dim)
+
+            proj_embeddings = F.normalize(proj_embeddings, dim=-1)
+            gt_text_encodings = F.normalize(gt_text_encodings, dim=-1)
+
+            # make the text embeddings to the same data type as image embeddings
+            gt_text_encodings = gt_text_encodings.type_as(proj_embeddings)
+            # The logits dimension (batch_size, batch_size)
+            logits_per_projection = 100*proj_embeddings @ gt_text_encodings.T # 100 is the logits scale from CLIP
+            logits_per_text = logits_per_projection.t()
+
+            # We want to maximize the diagonal entries of the logits matrix while minimizing the off-diagonal entries
+
+            # labels are indexes to the diagonal entries of the logits matrix
+            pseudo_labels = torch.arange(len(resnet_logits)).long().to(device) # (batch_size)
             
-            # Compute similarities between image embeddings and text encodings
-            similarities = compute_similarities(proj_embeddings, text_encodings, mode=args.similarity_mode)
+            loss_image = F.cross_entropy(logits_per_projection, pseudo_labels)
+            loss_text = F.cross_entropy(logits_per_text, pseudo_labels)
+            loss = (loss_image + loss_text)/2
 
-            # CLIP_similarities = compute_similarities(CLIP_embeddings, text_encodings, mode=args.similarity_mode)
-
-            if label_mapping is not None:
-                similarities = label_mapping(similarities)
-
-            probs_from_proj = F.softmax(similarities, dim=-1)
-            distill_loss = criterion(similarities, resnet_logits)
-
-            if args.feature_similarity:
-                feature_loss = F.l1_loss(proj_embeddings, CLIP_embeddings)
-                loss = args.distill_loss_weight*distill_loss + args.feature_sim_weight * feature_loss
-            else:
-                loss = distill_loss
-            
             batch_loss = loss.item() 
-            batch_base_model_acc = compute_accuracy(probs_from_resnet, labels)
-            batch_clip_acc = compute_accuracy(probs_from_proj, labels)
-            # gt_CLIP_acc = compute_accuracy(CLIP_similarities, labels)
-
             total_loss += batch_loss
-            total_base_model_acc += batch_base_model_acc
-            total_clip_acc += batch_clip_acc
-            total_feature_loss += feature_loss.item()
-            total_distill_loss += distill_loss.item()
-            # total_gt_clip_acc += gt_CLIP_acc
-    
-    # print(f"GT CLIP Acc: {total_gt_clip_acc/len(val_loader)}")
-    # assert False
-    return total_loss/len(val_loader), total_base_model_acc/len(val_loader), total_clip_acc/len(val_loader), total_feature_loss/len(val_loader), total_distill_loss/len(val_loader)
+            batch_loss = loss.item() 
+            total_loss += batch_loss
+            
+            total_image_loss += loss_image.item()
+            total_text_loss += loss_text.item()
+            
+            # pbar.set_postfix({"Batch Loss": batch_loss, "Base model Acc": batch_base_model_acc, "CLIP Acc": batch_clip_acc})
+            pbar.set_postfix({"Batch Loss": batch_loss, "Image Loss": loss_image.item(), "Text Loss": loss_text.item()})
+
+    return total_loss/len(val_loader), total_image_loss/len(val_loader), total_text_loss/len(val_loader)
 
 def main(args):
 
@@ -217,11 +210,9 @@ def main(args):
 
     # Training and validation loop
     train_losses, val_losses = [], []
-    train_distill_losses, val_distill_losses = [], []
-    train_feature_losses, val_feature_losses = [], []
-    train_base_accuracies, train_clip_accuracies = [], []
-    val_base_accuracies, val_clip_accuracies = [], []
-    
+    train_image_losses, val_image_losses = [], []
+    train_text_losses, val_text_losses = [], []
+
     best_val_loss = 10000000000000
     for epoch in range(args.num_epochs):
 
@@ -235,54 +226,44 @@ def main(args):
         else:
             label_mapping = None
 
-        train_loss,  train_base_acc, train_clip_acc, train_feature_loss, train_distill_loss = train_one_epoch(train_loader, resnet_model, projector, text_encodings, criterion, optimizer, device, epoch, label_mapping=label_mapping)
-        val_loss, val_base_acc, val_clip_acc, val_feature_loss, val_distill_loss = validate(val_loader, resnet_model, projector, text_encodings, criterion, device, epoch, label_mapping=label_mapping)
+        train_loss,  train_image_loss, train_text_loss = train_one_epoch(train_loader, resnet_model, projector, text_encodings, criterion, optimizer, device, epoch, label_mapping=label_mapping)
+        val_loss, val_image_loss, val_text_loss = validate(val_loader, resnet_model, projector, text_encodings, criterion, device, epoch, label_mapping=label_mapping)
 
         train_losses.append(train_loss)
         val_losses.append(val_loss)
+        
+        train_image_losses.append(train_image_loss)
+        val_image_losses.append(val_image_loss)
+        train_text_losses.append(train_text_loss)
+        val_text_losses.append(val_text_loss)
 
-        train_feature_losses.append(train_feature_loss)
-        val_feature_losses.append(val_feature_loss)
-        train_distill_losses.append(train_distill_loss)
-        val_distill_losses.append(val_distill_loss)
+        print(f"Epoch {epoch+1}, Total Train Loss: {train_loss:.4f}, Train Image Loss: {train_image_loss:.4f}, Train Text Loss: {train_text_loss:.4f}, Total Val Loss: {val_loss:.4f}, Val Image Loss: {val_image_loss:.4f}, Val Text Loss: {val_text_loss:.4f}")
 
-        train_base_accuracies.append(train_base_acc)
-        train_clip_accuracies.append(train_clip_acc)
-        val_base_accuracies.append(val_base_acc)
-        val_clip_accuracies.append(val_clip_acc)
-        print(f"Epoch {epoch+1}, Train Loss: {train_loss:.4f}, Train feature loss: {train_feature_loss:.4f}, Train Base Model Accuracy: {train_base_acc:.4f}, Train CLIP Accuracy: {train_clip_acc:.4f}, Val Loss: {val_loss:.4f}, Val feature loss: {val_feature_loss:.4f}, Val Base Model Accuracy: {val_base_acc:.4f}, Val CLIP Accuracy: {val_clip_acc:.4f}")
-
+        # print(f"Epoch {epoch+1}, Train Loss: {train_loss:.4f}, Train feature loss: {train_feature_loss:.4f}, Train Base Model Accuracy: {train_base_acc:.4f}, Train CLIP Accuracy: {train_clip_acc:.4f}, Val Loss: {val_loss:.4f}, Val feature loss: {val_feature_loss:.4f}, Val Base Model Accuracy: {val_base_acc:.4f}, Val CLIP Accuracy: {val_clip_acc:.4f}")
 
 
         # Update and save training plots
         plt.figure(figsize=(12, 10))  # Adjust the size if needed
 
-        plt.subplot(2, 2, 1)  # 2 rows, 2 columns, position 1
+        plt.subplot(1, 3, 1)  # 2 rows, 2 columns, position 1
         plt.grid(True)
         plt.plot(train_losses, '-o', label='Training')
         plt.plot(val_losses, '-o', label='Validation')
         plt.title('Total Loss')
         plt.legend()
 
-        plt.subplot(2, 2, 2)  # 2 rows, 2 columns, position 2
+        plt.subplot(1, 3, 2)  # 2 rows, 2 columns, position 2
         plt.grid(True)
-        plt.plot(train_clip_accuracies, '-o', label='Train CLIP Accuracy')
-        plt.plot(val_clip_accuracies, '-o', label='Val CLIP Accuracy')
-        plt.title('Total Accuracy')
+        plt.plot(train_image_loss, '-o', label='Train CLIP Image Loss')
+        plt.plot(val_image_losses, '-o', label='Val CLIP Image Loss')
+        plt.title('CLIP Image Loss')
         plt.legend()
 
-        plt.subplot(2, 2, 3)  # 2 rows, 2 columns, position 3
+        plt.subplot(1, 3, 3)  # 2 rows, 2 columns, position 3
         plt.grid(True)
-        plt.plot(train_distill_losses, '-o', label='Training')
-        plt.plot(val_distill_losses, '-o', label='Validation')
-        plt.title('Distill Loss')
-        plt.legend()
-
-        plt.subplot(2, 2, 4)  # 2 rows, 2 columns, position 4
-        plt.grid(True)
-        plt.plot(train_feature_losses, '-o', label='Training')
-        plt.plot(val_feature_losses, '-o', label='Validation')
-        plt.title('Feature Loss')
+        plt.plot(train_text_losses, '-o', label='Train CLIP Text Loss')
+        plt.plot(val_text_losses, '-o', label='Val CLIP Text Loss')
+        plt.title('CLIP Text Loss')
         plt.legend()
 
         plt.tight_layout()
