@@ -5,6 +5,7 @@ import torch.nn.functional as F
 from matplotlib import pyplot as plt
 from sklearn.metrics import confusion_matrix
 import seaborn as sns
+import umap
 
 import numpy as np
 import os
@@ -37,7 +38,7 @@ def compute_accuracy(probs, labels):
     correct = (predictions == labels).float().sum()
     return (correct / probs.size(0)).item()
 
-def compute_similarities(image_embeddings, text_embeddings, mode='cosine'):
+def compute_similarities(image_embeddings, text_embeddings, mode='cosine', logits_scale=100):
     if mode == 'cosine':
         return cosine_similarities(image_embeddings, text_embeddings)
     # TODO: add mean for DN
@@ -48,14 +49,14 @@ def compute_similarities(image_embeddings, text_embeddings, mode='cosine'):
         dn_sim = CLIP_DN_similarities(image_embeddings, text_embeddings)
         return (cos_sim + dn_sim)/2
 
-def cosine_similarities(image_embeddings, text_embeddings):
+def cosine_similarities(image_embeddings, text_embeddings, logits_scale=100):
     """ Compute cosine similarities between image embeddings and text encodings for all labels """
     image_embeddings = F.normalize(image_embeddings, dim=-1)
     text_embeddings = F.normalize(text_embeddings, dim=-1)
 
     # make the text embeddings to the same data type as image embeddings
     text_embeddings = text_embeddings.type_as(image_embeddings)
-    similarities = F.cosine_similarity(image_embeddings.unsqueeze(1), text_embeddings.unsqueeze(0), dim=2)
+    similarities = logits_scale*F.cosine_similarity(image_embeddings.unsqueeze(1), text_embeddings.unsqueeze(0), dim=2)
     
     return similarities
 
@@ -134,3 +135,48 @@ def plot_confusion_matrix(proj_labels, resnet_labels, class_names, save_dir=None
 
     if save_dir is not None:
         plt.savefig(os.path.join(save_dir, 'confusion_matrix.png'))
+
+def plot_umap_embeddings(tensor1, tensor2, tensor3=None, include_lines_for_tensor3=False, labels=None):
+    # Convert PyTorch tensors to NumPy arrays
+    tensor1_np = tensor1.detach().cpu().numpy()
+    tensor2_np = tensor2.detach().cpu().numpy()
+    
+    tensors_np = [tensor1_np, tensor2_np]
+    
+    # Include the third tensor if it's provided
+    if tensor3 is not None:
+        tensor3_np = tensor3.detach().cpu().numpy()
+        tensors_np.append(tensor3_np)
+
+    # Combine the embeddings
+    combined_embeddings = np.vstack(tensors_np)
+
+    # Fit UMAP
+    reducer = umap.UMAP(n_neighbors=5, min_dist=0.3, metric='cosine')
+    embedding_2d = reducer.fit_transform(combined_embeddings)
+
+    # Split the reduced embeddings
+    reduced_tensors = np.split(embedding_2d, np.cumsum([len(t) for t in tensors_np])[:-1])
+
+    # Plot the embeddings
+    fig, ax = plt.subplots(figsize=(12, 10))
+    colors = ['red', 'blue', 'green']
+    for i, reduced_tensor in enumerate(reduced_tensors):
+        ax.scatter(reduced_tensor[:, 0], reduced_tensor[:, 1], color=colors[i], label=labels[i])
+
+    # Draw lines between corresponding points for the first two tensors
+    for i in range(len(tensor1_np)):
+        points = np.vstack((reduced_tensors[0][i], reduced_tensors[1][i]))
+        ax.plot(points[:, 0], points[:, 1], 'grey', alpha=0.5)
+
+    # Optionally draw lines for the third tensor
+    if tensor3 is not None and include_lines_for_tensor3 and len(tensor1_np) == len(tensor3_np):
+        for i in range(len(tensor1_np)):
+            points = np.vstack((reduced_tensors[0][i], reduced_tensors[2][i]))
+            ax.plot(points[:, 0], points[:, 1], 'purple', alpha=0.5)
+
+    # Customize the plot with legends
+    ax.legend()
+    ax.set_title('UMAP projection of the tensor embeddings', fontsize=18)
+
+    plt.show()

@@ -23,11 +23,11 @@ def get_save_dir(args):
     else:
         save_dir += "_FLM"
     if args.feature_similarity:
-        save_dir += f"_gt_sim{args.feature_sim_weight}_distill{args.distill_loss_weight}"
+        save_dir += f"_feat_sim{args.feature_sim_weight}_distill{args.distill_loss_weight}"
 
     save_dir += f"_{args.similarity_mode}"
     save_dir += f"_mapping{args.mapping_num}"
-    # save_dir += f"_two"
+    save_dir += "_scaled_logits"
 
     return save_dir
 
@@ -36,6 +36,8 @@ def train_one_epoch(train_loader, resnet_model, projector, text_encodings, crite
     projector.train()
     
     total_loss = 0
+    total_distill_loss = 0
+    total_feature_loss = 0
     total_base_model_acc = 0
     total_clip_acc = 0
 
@@ -65,10 +67,9 @@ def train_one_epoch(train_loader, resnet_model, projector, text_encodings, crite
         distill_loss = criterion(similarities, resnet_logits)
 
         if args.feature_similarity:
-            # Compute cross entropy loss between similarities and labels
-            gt_loss = F.cross_entropy(similarities, labels)
+            feature_loss = F.l1_loss(proj_embeddings, CLIP_embeddings)
             
-            loss = args.distill_loss_weight*distill_loss + args.feature_sim_weight * gt_loss
+            loss = args.distill_loss_weight*distill_loss + args.feature_sim_weight * feature_loss
         else:
             loss = distill_loss
 
@@ -83,9 +84,12 @@ def train_one_epoch(train_loader, resnet_model, projector, text_encodings, crite
         total_loss += batch_loss
         total_base_model_acc += batch_base_model_acc
         total_clip_acc += batch_clip_acc
+        total_distill_loss += distill_loss.item()
+        total_feature_loss += feature_loss.item()
         
-        pbar.set_postfix({"Batch Loss": batch_loss, "Base model Acc": batch_base_model_acc, "CLIP Acc": batch_clip_acc})
-    return total_loss/len(train_loader), total_base_model_acc/len(train_loader), total_clip_acc/len(train_loader)
+        # pbar.set_postfix({"Batch Loss": batch_loss, "Base model Acc": batch_base_model_acc, "CLIP Acc": batch_clip_acc})
+        pbar.set_postfix({"Batch Loss": batch_loss, "Base model Acc": batch_base_model_acc, "CLIP Acc": batch_clip_acc, "Feature Loss": feature_loss.item()})
+    return total_loss/len(train_loader), total_base_model_acc/len(train_loader), total_clip_acc/len(train_loader), total_feature_loss/len(train_loader), total_distill_loss/len(train_loader)
 
 
 def validate(val_loader, resnet_model, projector, text_encodings, criterion, device, epoch, label_mapping=None):
@@ -93,6 +97,8 @@ def validate(val_loader, resnet_model, projector, text_encodings, criterion, dev
     projector.eval()
     
     total_loss = 0
+    total_distill_loss = 0
+    total_feature_loss = 0
     total_base_model_acc = 0
     total_clip_acc = 0
     total_gt_clip_acc = 0
@@ -114,6 +120,7 @@ def validate(val_loader, resnet_model, projector, text_encodings, criterion, dev
             # Compute similarities between image embeddings and text encodings
             similarities = compute_similarities(proj_embeddings, text_encodings, mode=args.similarity_mode)
 
+            # CLIP_similarities = compute_similarities(CLIP_embeddings, text_encodings, mode=args.similarity_mode)
 
             if label_mapping is not None:
                 similarities = label_mapping(similarities)
@@ -122,10 +129,8 @@ def validate(val_loader, resnet_model, projector, text_encodings, criterion, dev
             distill_loss = criterion(similarities, resnet_logits)
 
             if args.feature_similarity:
-                # Compute cross entropy loss between similarities and labels
-                gt_loss = F.cross_entropy(similarities, labels)
-                
-                loss = args.distill_loss_weight*distill_loss + args.feature_sim_weight * gt_loss
+                feature_loss = F.l1_loss(proj_embeddings, CLIP_embeddings)
+                loss = args.distill_loss_weight*distill_loss + args.feature_sim_weight * feature_loss
             else:
                 loss = distill_loss
             
@@ -137,11 +142,13 @@ def validate(val_loader, resnet_model, projector, text_encodings, criterion, dev
             total_loss += batch_loss
             total_base_model_acc += batch_base_model_acc
             total_clip_acc += batch_clip_acc
+            total_feature_loss += feature_loss.item()
+            total_distill_loss += distill_loss.item()
             # total_gt_clip_acc += gt_CLIP_acc
     
     # print(f"GT CLIP Acc: {total_gt_clip_acc/len(val_loader)}")
     # assert False
-    return total_loss/len(val_loader), total_base_model_acc/len(val_loader), total_clip_acc/len(val_loader)
+    return total_loss/len(val_loader), total_base_model_acc/len(val_loader), total_clip_acc/len(val_loader), total_feature_loss/len(val_loader), total_distill_loss/len(val_loader)
 
 def main(args):
 
@@ -150,7 +157,8 @@ def main(args):
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
     # Load class names from a text file
-    with open('data/domainnet_v1.0/class_names.txt', 'r') as f:
+    os.path.join(args.data_dir, 'class_names.txt')
+    with open(os.path.join(args.data_dir, 'class_names.txt'), 'r') as f:
         class_names = [line.strip() for line in f.readlines()]
 
     # loaders, _ = get_domainnet_loaders(args.domain, args.batch_size)
@@ -209,10 +217,12 @@ def main(args):
 
     # Training and validation loop
     train_losses, val_losses = [], []
+    train_distill_losses, val_distill_losses = [], []
+    train_feature_losses, val_feature_losses = [], []
     train_base_accuracies, train_clip_accuracies = [], []
     val_base_accuracies, val_clip_accuracies = [], []
     
-    best_val_loss = 0.0
+    best_val_loss = 10000000000000
     for epoch in range(args.num_epochs):
 
         if epoch % args.mapping_interval == 0 and args.use_default_prompt == False:
@@ -225,36 +235,65 @@ def main(args):
         else:
             label_mapping = None
 
-        train_loss,  train_base_acc, train_clip_acc = train_one_epoch(train_loader, resnet_model, projector, text_encodings, criterion, optimizer, device, epoch, label_mapping=label_mapping)
-        val_loss, val_base_acc, val_clip_acc = validate(val_loader, resnet_model, projector, text_encodings, criterion, device, epoch, label_mapping=label_mapping)
+        train_loss,  train_base_acc, train_clip_acc, train_feature_loss, train_distill_loss = train_one_epoch(train_loader, resnet_model, projector, text_encodings, criterion, optimizer, device, epoch, label_mapping=label_mapping)
+        val_loss, val_base_acc, val_clip_acc, val_feature_loss, val_distill_loss = validate(val_loader, resnet_model, projector, text_encodings, criterion, device, epoch, label_mapping=label_mapping)
 
         train_losses.append(train_loss)
         val_losses.append(val_loss)
+
+        train_feature_losses.append(train_feature_loss)
+        val_feature_losses.append(val_feature_loss)
+        train_distill_losses.append(train_distill_loss)
+        val_distill_losses.append(val_distill_loss)
 
         train_base_accuracies.append(train_base_acc)
         train_clip_accuracies.append(train_clip_acc)
         val_base_accuracies.append(val_base_acc)
         val_clip_accuracies.append(val_clip_acc)
-        print(f"Epoch {epoch+1}, Train Loss: {train_loss:.4f}, Train Base Model Accuracy: {train_base_acc:.4f}, Train CLIP Accuracy: {train_clip_acc:.4f}, Val Loss: {val_loss:.4f}, Val Base Model Accuracy: {val_base_acc:.4f}, Val CLIP Accuracy: {val_clip_acc:.4f}")
+        print(f"Epoch {epoch+1}, Train Loss: {train_loss:.4f}, Train feature loss: {train_feature_loss:.4f}, Train Base Model Accuracy: {train_base_acc:.4f}, Train CLIP Accuracy: {train_clip_acc:.4f}, Val Loss: {val_loss:.4f}, Val feature loss: {val_feature_loss:.4f}, Val Base Model Accuracy: {val_base_acc:.4f}, Val CLIP Accuracy: {val_clip_acc:.4f}")
+
+
 
         # Update and save training plots
-        plt.figure(figsize=(12, 5))
-        plt.subplot(1, 2, 1)
+        plt.figure(figsize=(12, 10))  # Adjust the size if needed
+
+        plt.subplot(2, 2, 1)  # 2 rows, 2 columns, position 1
+        plt.grid(True)
         plt.plot(train_losses, '-o', label='Training')
         plt.plot(val_losses, '-o', label='Validation')
-        plt.title('Distilation Loss')
+        plt.title('Total Loss')
         plt.legend()
-        plt.subplot(1, 2, 2)
-        plt.plot(train_clip_accuracies, '-o', label='Training')
-        plt.plot(val_clip_accuracies, '-o', label='Validation')
-        plt.title('Accuracy')
+
+        plt.subplot(2, 2, 2)  # 2 rows, 2 columns, position 2
+        plt.grid(True)
+        plt.plot(train_clip_accuracies, '-o', label='Train CLIP Accuracy')
+        plt.plot(val_clip_accuracies, '-o', label='Val CLIP Accuracy')
+        plt.title('Total Accuracy')
         plt.legend()
+
+        plt.subplot(2, 2, 3)  # 2 rows, 2 columns, position 3
+        plt.grid(True)
+        plt.plot(train_distill_losses, '-o', label='Training')
+        plt.plot(val_distill_losses, '-o', label='Validation')
+        plt.title('Distill Loss')
+        plt.legend()
+
+        plt.subplot(2, 2, 4)  # 2 rows, 2 columns, position 4
+        plt.grid(True)
+        plt.plot(train_feature_losses, '-o', label='Training')
+        plt.plot(val_feature_losses, '-o', label='Validation')
+        plt.title('Feature Loss')
+        plt.legend()
+
+        plt.tight_layout()
+
         plt.savefig(os.path.join(save_dir, 'training_validation_plots.png'))
         plt.close()
 
         # Save best model based on validation loss
         if val_loss < best_val_loss:
             best_val_loss = val_loss
+
             torch.save(projector.state_dict(), os.path.join(save_dir, "best_projector_weights.pth"))
             if not args.use_default_prompt:
                 torch.save(mapping_sequence, os.path.join(save_dir, "best_mapping_sequence.pth"))
@@ -268,7 +307,8 @@ def main(args):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Train ResNet on WILDS Dataset')
 
-    parser.add_argument('--dataset', type=str, required=True, help='Name of the WILDS dataset')
+    parser.add_argument('--dataset', type=str, required=True, help='Name of the dataset')
+    parser.add_argument('--data_dir', type=str, default='data/domainnet_v1.0', help='Path to the data directory')
     parser.add_argument('--domain', type=str, required=True, help='Name of the domain to load')
     parser.add_argument('--image_size', type=int, default=224, help='Size to resize images to (assumes square images)')
     parser.add_argument('--batch_size', type=int, default=32, help='Batch size for the dataloader')
@@ -283,7 +323,7 @@ if __name__ == "__main__":
     parser.add_argument('--resnet_dim', type=int, default=2048, help='Dimension of the ResNet embeddings')
     parser.add_argument('--projection_dim', type=int, default=512, help='Dimension of the projected embeddings')
     parser.add_argument('--teacher_temp', type=float, default=0.5, help='Temperature for Dino loss')
-    parser.add_argument('--student_temp', type=float, default=0.1, help='Temperature for Dino loss')
+    parser.add_argument('--student_temp', type=float, default=1, help='Temperature for Dino loss')
     parser.add_argument('--prompt_embeddings_pth', type=str, required=True, help='Path to the prompt embeddings')
     parser.add_argument('--use_default_prompt', type=bool, default=False, help='Use the default prompt instead of FLM')
     parser.add_argument('--mapping_num', type=int, default=1, help='Number of labels to map to each prompt')

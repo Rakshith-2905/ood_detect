@@ -66,7 +66,7 @@ def get_data_from_saved_files(save_dir, batch_size, train_shuffle=True):
 
     return train_loader, test_loader
 
-def get_domainnet_loaders(domain_name,batch_size=512,train_shuffle=True):
+def get_domainnet_loaders(domain_name,batch_size=512,train_shuffle=True, data_dir='data/domainnet_v1.0'):
     imagenet_train_transform = transforms.Compose([
             transforms.RandomResizedCrop(224),
             transforms.RandomHorizontalFlip(),
@@ -83,9 +83,9 @@ def get_domainnet_loaders(domain_name,batch_size=512,train_shuffle=True):
                                  std=[0.229, 0.224, 0.225]),
 
         ])
-    domain_train = DomainNetDataset(root_dir='data/domainnet_v1.0', domain=domain_name, \
+    domain_train = DomainNetDataset(root_dir=data_dir, domain=domain_name, \
                                     split='train', transform=imagenet_train_transform)
-    domain_test= DomainNetDataset(root_dir='data/domainnet_v1.0', domain=domain_name, \
+    domain_test= DomainNetDataset(root_dir=data_dir, domain=domain_name, \
                                     split='test', transform=imagenet_test_transform)
     train_loader = torch.utils.data.DataLoader(domain_train, batch_size=batch_size, shuffle=train_shuffle, num_workers=8)
     test_loader = torch.utils.data.DataLoader(domain_test, batch_size=batch_size, shuffle=False, num_workers=8)
