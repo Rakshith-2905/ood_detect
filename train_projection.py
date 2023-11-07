@@ -54,8 +54,8 @@ def train_one_epoch(train_loader, resnet_model, projector, text_encodings, crite
         proj_embeddings = projector(resnet_embeddings)
 
         # Create the text_encodings based on the gt labels
-        gt_labels = gt_labels.cpu().numpy().tolist()
-        gt_text_encodings = text_encodings[gt_labels] # (batch_size, CLIP_embedding_dim)
+        gt_labels_list = gt_labels.cpu().numpy().tolist()
+        gt_text_encodings = text_encodings[gt_labels_list] # (batch_size, CLIP_embedding_dim)
 
         proj_embeddings = F.normalize(proj_embeddings, dim=-1)
         gt_text_encodings = F.normalize(gt_text_encodings, dim=-1)
@@ -119,8 +119,8 @@ def validate(val_loader, resnet_model, projector, text_encodings, criterion, dev
             proj_embeddings = projector(resnet_embeddings)
 
             # Create the text_encodings based on the gt labels
-            gt_labels = gt_labels.cpu().numpy().tolist()
-            gt_text_encodings = text_encodings[gt_labels] # (batch_size, CLIP_embedding_dim)
+            gt_labels_list = gt_labels.cpu().numpy().tolist()
+            gt_text_encodings = text_encodings[gt_labels_list] # (batch_size, CLIP_embedding_dim)
 
             proj_embeddings = F.normalize(proj_embeddings, dim=-1)
             gt_text_encodings = F.normalize(gt_text_encodings, dim=-1)
