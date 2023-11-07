@@ -36,6 +36,7 @@ def train_one_epoch(train_loader, resnet_model, projector, text_encodings, crite
     projector.train()
     
     total_loss = 0
+    total_acc = 0
     total_image_loss = 0
     total_text_loss = 0
 
@@ -77,6 +78,14 @@ def train_one_epoch(train_loader, resnet_model, projector, text_encodings, crite
 
         optimizer.step()
 
+        # Probs from logits
+        projection_probs = F.softmax(logits_per_projection, dim=-1)
+
+        # Compute the accuracy
+        batch_acc = compute_accuracy(projection_probs, pseudo_labels)
+
+        total_acc += batch_acc
+
         batch_loss = loss.item() 
         total_loss += batch_loss
         
@@ -84,8 +93,8 @@ def train_one_epoch(train_loader, resnet_model, projector, text_encodings, crite
         total_text_loss += loss_text.item()
         
         # pbar.set_postfix({"Batch Loss": batch_loss, "Base model Acc": batch_base_model_acc, "CLIP Acc": batch_clip_acc})
-        pbar.set_postfix({"Batch Loss": batch_loss, "Image Loss": loss_image.item(), "Text Loss": loss_text.item()})
-    return total_loss/len(train_loader), total_image_loss/len(train_loader), total_text_loss/len(train_loader)
+        pbar.set_postfix({"Batch Acc":batch_acc,  "Batch Loss": batch_loss, "Image Loss": loss_image.item(), "Text Loss": loss_text.item()})
+    return  total_acc/len(train_loader), total_loss/len(train_loader), total_image_loss/len(train_loader), total_text_loss/len(train_loader)
 
 
 def validate(val_loader, resnet_model, projector, text_encodings, criterion, device, epoch, label_mapping=None):
@@ -93,6 +102,7 @@ def validate(val_loader, resnet_model, projector, text_encodings, criterion, dev
     projector.eval()
     
     total_loss = 0
+    total_acc = 0
     total_image_loss = 0
     total_text_loss = 0
 
@@ -130,10 +140,17 @@ def validate(val_loader, resnet_model, projector, text_encodings, criterion, dev
             loss_text = F.cross_entropy(logits_per_text, pseudo_labels)
             loss = (loss_image + loss_text)/2
 
+            # Probs from logits
+            projection_probs = F.softmax(logits_per_projection, dim=-1)
+
+            # Compute the accuracy
+            batch_acc = compute_accuracy(projection_probs, pseudo_labels)
+
             batch_loss = loss.item() 
             total_loss += batch_loss
             batch_loss = loss.item() 
             total_loss += batch_loss
+            total_acc += batch_acc
             
             total_image_loss += loss_image.item()
             total_text_loss += loss_text.item()
@@ -141,7 +158,7 @@ def validate(val_loader, resnet_model, projector, text_encodings, criterion, dev
             # pbar.set_postfix({"Batch Loss": batch_loss, "Base model Acc": batch_base_model_acc, "CLIP Acc": batch_clip_acc})
             pbar.set_postfix({"Batch Loss": batch_loss, "Image Loss": loss_image.item(), "Text Loss": loss_text.item()})
 
-    return total_loss/len(val_loader), total_image_loss/len(val_loader), total_text_loss/len(val_loader)
+    return   total_acc/len(train_loader), total_loss/len(val_loader), total_image_loss/len(val_loader), total_text_loss/len(val_loader)
 
 def main(args):
 
@@ -213,6 +230,8 @@ def main(args):
     train_image_losses, val_image_losses = [], []
     train_text_losses, val_text_losses = [], []
 
+    train_accs, val_accs = [], []
+
     best_val_loss = 10000000000000
     for epoch in range(args.num_epochs):
 
@@ -226,18 +245,21 @@ def main(args):
         else:
             label_mapping = None
 
-        train_loss,  train_image_loss, train_text_loss = train_one_epoch(train_loader, resnet_model, projector, text_encodings, criterion, optimizer, device, epoch, label_mapping=label_mapping)
-        val_loss, val_image_loss, val_text_loss = validate(val_loader, resnet_model, projector, text_encodings, criterion, device, epoch, label_mapping=label_mapping)
+        train_acc, train_loss,  train_image_loss, train_text_loss = train_one_epoch(train_loader, resnet_model, projector, text_encodings, criterion, optimizer, device, epoch, label_mapping=label_mapping)
+        val_acc, val_loss, val_image_loss, val_text_loss = validate(val_loader, resnet_model, projector, text_encodings, criterion, device, epoch, label_mapping=label_mapping)
 
         train_losses.append(train_loss)
         val_losses.append(val_loss)
+
+        train_accs.append(train_acc)
+        val_accs.append(val_acc)
         
         train_image_losses.append(train_image_loss)
         val_image_losses.append(val_image_loss)
         train_text_losses.append(train_text_loss)
         val_text_losses.append(val_text_loss)
 
-        print(f"Epoch {epoch+1}, Total Train Loss: {train_loss:.4f}, Train Image Loss: {train_image_loss:.4f}, Train Text Loss: {train_text_loss:.4f}, Total Val Loss: {val_loss:.4f}, Val Image Loss: {val_image_loss:.4f}, Val Text Loss: {val_text_loss:.4f}")
+        print(f"Epoch {epoch+1}, Train Acc: {train_acc}, Total Train Loss: {train_loss:.4f}, Train Image Loss: {train_image_loss:.4f}, Train Text Loss: {train_text_loss:.4f}, Val Acc: {val_acc}, Total Val Loss: {val_loss:.4f}, Val Image Loss: {val_image_loss:.4f}, Val Text Loss: {val_text_loss:.4f}")
 
         # print(f"Epoch {epoch+1}, Train Loss: {train_loss:.4f}, Train feature loss: {train_feature_loss:.4f}, Train Base Model Accuracy: {train_base_acc:.4f}, Train CLIP Accuracy: {train_clip_acc:.4f}, Val Loss: {val_loss:.4f}, Val feature loss: {val_feature_loss:.4f}, Val Base Model Accuracy: {val_base_acc:.4f}, Val CLIP Accuracy: {val_clip_acc:.4f}")
 
@@ -245,21 +267,28 @@ def main(args):
         # Update and save training plots
         plt.figure(figsize=(12, 10))  # Adjust the size if needed
 
-        plt.subplot(1, 3, 1)  # 2 rows, 2 columns, position 1
+        plt.subplot(2, 2, 1)  # 2 rows, 2 columns, position 1
         plt.grid(True)
         plt.plot(train_losses, '-o', label='Training')
         plt.plot(val_losses, '-o', label='Validation')
         plt.title('Total Loss')
         plt.legend()
 
-        plt.subplot(1, 3, 2)  # 2 rows, 2 columns, position 2
+        plt.subplot(2, 2, 2)  # 2 rows, 2 columns, position 2
+        plt.grid(True)
+        plt.plot(train_accs, '-o', label='Training')
+        plt.plot(val_accs, '-o', label='Validation')
+        plt.title('Accuracy')
+        plt.legend()
+
+        plt.subplot(2, 2, 3)  # 2 rows, 2 columns, position 2
         plt.grid(True)
         plt.plot(train_image_loss, '-o', label='Train CLIP Image Loss')
         plt.plot(val_image_losses, '-o', label='Val CLIP Image Loss')
         plt.title('CLIP Image Loss')
         plt.legend()
 
-        plt.subplot(1, 3, 3)  # 2 rows, 2 columns, position 3
+        plt.subplot(2, 2, 4)  # 2 rows, 2 columns, position 3
         plt.grid(True)
         plt.plot(train_text_losses, '-o', label='Train CLIP Text Loss')
         plt.plot(val_text_losses, '-o', label='Val CLIP Text Loss')
