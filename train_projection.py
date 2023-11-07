@@ -111,10 +111,10 @@ def validate(val_loader, resnet_model, projector, text_encodings, criterion, dev
     # Wrap the val_loader with tqdm for progress bar
     pbar = tqdm(val_loader, desc=f'Validating epoch: {epoch+1}')
     with torch.no_grad():
-        for resnet_logits, resnet_embeddings, labels, CLIP_embeddings in pbar:
+        for resnet_logits, resnet_embeddings, gt_labels, CLIP_embeddings in pbar:
 
-            resnet_logits, resnet_embeddings, labels, CLIP_embeddings = resnet_logits.to(device), resnet_embeddings.to(device), labels.to(device), CLIP_embeddings.to(device)
-                
+            resnet_logits, resnet_embeddings, CLIP_embeddings, gt_labels = resnet_logits.to(device), resnet_embeddings.to(device), CLIP_embeddings.to(device), gt_labels.to(device)
+            
             # Project the resnet embeddings
             proj_embeddings = projector(resnet_embeddings)
 
@@ -146,8 +146,6 @@ def validate(val_loader, resnet_model, projector, text_encodings, criterion, dev
             # Compute the accuracy
             batch_acc = compute_accuracy(projection_probs, pseudo_labels)
 
-            batch_loss = loss.item() 
-            total_loss += batch_loss
             batch_loss = loss.item() 
             total_loss += batch_loss
             total_acc += batch_acc
