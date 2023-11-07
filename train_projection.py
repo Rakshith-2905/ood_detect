@@ -282,7 +282,7 @@ def main(args):
 
         plt.subplot(2, 2, 3)  # 2 rows, 2 columns, position 2
         plt.grid(True)
-        plt.plot(train_image_loss, '-o', label='Train CLIP Image Loss')
+        plt.plot(train_image_losses, '-o', label='Train CLIP Image Loss')
         plt.plot(val_image_losses, '-o', label='Val CLIP Image Loss')
         plt.title('CLIP Image Loss')
         plt.legend()
