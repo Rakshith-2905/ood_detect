@@ -156,8 +156,7 @@ def validate(val_loader, resnet_model, projector, text_encodings, criterion, dev
             total_text_loss += loss_text.item()
             
             # pbar.set_postfix({"Batch Loss": batch_loss, "Base model Acc": batch_base_model_acc, "CLIP Acc": batch_clip_acc})
-            pbar.set_postfix({"Batch Loss": batch_loss, "Image Loss": loss_image.item(), "Text Loss": loss_text.item()})
-
+            pbar.set_postfix({"Batch Acc":batch_acc,  "Batch Loss": batch_loss, "Image Loss": loss_image.item(), "Text Loss": loss_text.item()})
     return   total_acc/len(train_loader), total_loss/len(val_loader), total_image_loss/len(val_loader), total_text_loss/len(val_loader)
 
 def main(args):
