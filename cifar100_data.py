@@ -1,0 +1,130 @@
+import torch
+from torch.utils.data import Dataset, DataLoader, TensorDataset
+
+from torchvision.datasets import CIFAR100
+import numpy as np
+import os
+from PIL import Image
+from torchvision import transforms
+
+import argparse
+
+
+class CIFAR100CDataset(Dataset):
+    def __init__(self, cifar100_c_path, corruption_name, transform=None):
+        self.transform = transform
+        
+        # Assuming the file structure is <cifar100_c_path>/<corruption_name>.npy for images
+        images_path = os.path.join(cifar100_c_path, f"{corruption_name}.npy")
+        labels_path = os.path.join(cifar100_c_path, "labels.npy")
+
+        if not os.path.exists(images_path) or not os.path.exists(labels_path):
+            raise ValueError(f"Data files not found for corruption: {corruption_name}")
+
+        self.images = np.load(images_path)
+        self.labels = np.load(labels_path)
+
+    def __len__(self):
+        return len(self.images)
+    
+    def __getitem__(self, idx):
+        image = self.images[idx]
+        label = self.labels[idx]
+
+        if self.transform:
+            image = Image.fromarray(image)
+            image = self.transform(image)
+
+        return image, label
+
+class CIFAR100Filtered(CIFAR100):
+    def __init__(self, root, train=True, transform=None, target_transform=None, download=False, select_indices=None, retain_orig_ids=False):
+        super(CIFAR100Filtered, self).__init__(root, train=train, transform=transform, target_transform=target_transform, download=download)
+        
+        if select_indices is not None:
+            # Create a mask for all the targets that are in the desired select_indices
+            mask = [t in select_indices for t in self.targets]
+            
+            # Filter data and targets according to the mask
+            self.data = self.data[mask]
+            self.targets = [self.targets[idx] for idx, m in enumerate(mask) if m]
+            
+            # If we are not retaining the original class indices, remap them
+            if not retain_orig_ids:
+                # Create a mapping for the selected indices
+                self.new_targets_map = {old_idx: new_idx for new_idx, old_idx in enumerate(sorted(select_indices))}
+                # Remap the targets
+                self.targets = [self.new_targets_map[target] for target in self.targets]
+
+def get_CIFAR100_loaders(batch_size=512,train_shuffle=True, data_dir='./data', select_indices=None, retain_orig_ids=False,    
+                        train_transform=None, test_transform=None, return_dataset=False):
+    
+    if train_transform is None:
+        train_transform = transforms.Compose([
+                transforms.RandomResizedCrop(224),
+                transforms.RandomHorizontalFlip(),
+                transforms.ToTensor(),
+                transforms.Normalize(mean=[0.485, 0.456, 0.406],
+                                    std=[0.229, 0.224, 0.225]),
+            ])
+    if test_transform is None:
+        test_transform = transforms.Compose([
+                transforms.Resize(256),
+                transforms.CenterCrop(224),
+                transforms.ToTensor(),
+                transforms.Normalize(mean=[0.485, 0.456, 0.406],
+                                    std=[0.229, 0.224, 0.225]),
+            ])
+
+    train_dataset = CIFAR100Filtered(root=data_dir, train=True, transform=train_transform, download=True, 
+                                    select_indices=select_indices, retain_orig_ids=retain_orig_ids)
+    test_dataset = CIFAR100Filtered(root=data_dir, train=False, transform=test_transform, download=True, 
+                                    select_indices=select_indices, retain_orig_ids=retain_orig_ids)
+
+    if return_dataset:
+        return train_dataset, test_dataset
+
+    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=train_shuffle, num_workers=8)
+    test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False, num_workers=8)
+
+    loaders = {'train': train_loader, 'test': test_loader}
+    
+    # Get the class names
+    class_names = train_dataset.classes
+    return loaders, class_names
+
+
+if __name__=="__main__":
+
+    parser = argparse.ArgumentParser(description='CIFAR100-loader')
+    parser.add_argument('--dataset', type=str, default='cifar100', help='dataset name')
+    parser.add_argument('--batch_size', type=int, default=32, help='batch size')
+    parser.add_argument('--seed', type=int, default=42, help='random seed')
+    parser.add_argument('--num_classes_train', type=int, default=90, help='number of classes in train set')
+    parser.add_argument('--retain_orig_ids', action='store_true', help='retain the original class indices in the filtered dataset')
+    args = parser.parse_args()
+
+    # Sorting the classes
+    np.random.seed(args.seed)
+    select_indices = sorted(np.random.choice(list(range(100)), args.num_classes_train, replace=False))
+    remaining_classes = list(set(list(range(100))) ^ set(select_indices))
+
+    # Get the loaders and class names
+    loaders, class_names = get_CIFAR100_loaders(batch_size=args.batch_size, train_shuffle=True, data_dir='./data', \
+                            select_indices=select_indices, retain_orig_ids=args.retain_orig_ids)
+
+    print(f"Train classes: {select_indices}")
+    print(f"Remaining classes: {remaining_classes}")
+
+    # Print the number of images in train and test sets
+    print(f"Number of train images: {len(loaders['train'].dataset)}")
+    print(f"Number of test images: {len(loaders['test'].dataset)}")
+
+    # Iterate over the train loader and accumate the labels in a set
+    unique_train_labels = set()
+    for images, labels in loaders['test']:
+        unique_train_labels.update(labels.tolist())
+    print(f"Unique Class IDs: {unique_train_labels}")
+
+    print(f"\nClass names: {class_names}")
+
