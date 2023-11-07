@@ -82,7 +82,7 @@ def train_one_epoch(train_loader, resnet_model, projector, text_encodings, crite
         projection_probs = F.softmax(logits_per_projection, dim=-1)
 
         # Compute the accuracy
-        batch_acc = compute_accuracy(projection_probs, pseudo_labels)
+        batch_acc = compute_accuracy(projection_probs, gt_labels)
 
         total_acc += batch_acc
 
@@ -144,7 +144,7 @@ def validate(val_loader, resnet_model, projector, text_encodings, criterion, dev
             projection_probs = F.softmax(logits_per_projection, dim=-1)
 
             # Compute the accuracy
-            batch_acc = compute_accuracy(projection_probs, pseudo_labels)
+            batch_acc = compute_accuracy(projection_probs, gt_labels)
 
             batch_loss = loss.item() 
             total_loss += batch_loss
