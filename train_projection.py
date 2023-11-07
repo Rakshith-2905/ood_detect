@@ -27,7 +27,7 @@ def get_save_dir(args):
 
     save_dir += f"_{args.similarity_mode}"
     save_dir += f"_mapping{args.mapping_num}"
-    save_dir += "_scaled_logits"
+    save_dir += "_scaled_logits_contra"
 
     return save_dir
 
@@ -46,7 +46,7 @@ def train_one_epoch(train_loader, resnet_model, projector, text_encodings, crite
     pbar = tqdm(train_loader, desc=f'Training epoch: {epoch+1}')
     for resnet_logits, resnet_embeddings, gt_labels, CLIP_embeddings in pbar:
 
-        resnet_logits, resnet_embeddings, CLIP_embeddings, gt_labels = resnet_logits.to(device), resnet_embeddings.to(device), CLIP_embeddings.to(device), gt_labels.to(device)
+        resnet_logits, resnet_embeddings, gt_labels, CLIP_embeddings = resnet_logits.to(device), resnet_embeddings.to(device), gt_labels.to(device), CLIP_embeddings.to(device)
         
         optimizer.zero_grad()
         
@@ -57,19 +57,19 @@ def train_one_epoch(train_loader, resnet_model, projector, text_encodings, crite
         gt_labels_list = gt_labels.cpu().numpy().tolist()
         gt_text_encodings = text_encodings[gt_labels_list] # (batch_size, CLIP_embedding_dim)
 
-        proj_embeddings = F.normalize(proj_embeddings, dim=-1)
-        gt_text_encodings = F.normalize(gt_text_encodings, dim=-1)
+        normalized_proj_embeddings = F.normalize(proj_embeddings, dim=-1)
+        normalized_gt_text_encodings = F.normalize(gt_text_encodings, dim=-1)
 
         # make the text embeddings to the same data type as image embeddings
-        gt_text_encodings = gt_text_encodings.type_as(proj_embeddings)
+        normalized_gt_text_encodings = normalized_gt_text_encodings.type_as(normalized_proj_embeddings)
         # The logits dimension (batch_size, batch_size)
-        logits_per_projection = 100*proj_embeddings @ gt_text_encodings.T # 100 is the logits scale from CLIP
+        logits_per_projection = 100*normalized_proj_embeddings @ normalized_gt_text_encodings.t() # 100 is the logits scale from CLIP
         logits_per_text = logits_per_projection.t()
 
         # We want to maximize the diagonal entries of the logits matrix while minimizing the off-diagonal entries
 
         # labels are indexes to the diagonal entries of the logits matrix
-        pseudo_labels = torch.arange(len(resnet_logits)).long().to(device) # (batch_size)
+        pseudo_labels = torch.arange(len(proj_embeddings)).long().to(device) # (batch_size)
 
         loss_image = F.cross_entropy(logits_per_projection, pseudo_labels)
         loss_text = F.cross_entropy(logits_per_text, pseudo_labels)
@@ -79,7 +79,8 @@ def train_one_epoch(train_loader, resnet_model, projector, text_encodings, crite
         optimizer.step()
 
         # Probs from logits
-        projection_probs = F.softmax(logits_per_projection, dim=-1)
+        zero_shot_logits = compute_similarities(proj_embeddings, text_encodings, mode='cosine') # (batch_size, num_classes)
+        projection_probs = F.softmax(zero_shot_logits, dim=-1)
 
         # Compute the accuracy
         batch_acc = compute_accuracy(projection_probs, gt_labels)
@@ -113,7 +114,7 @@ def validate(val_loader, resnet_model, projector, text_encodings, criterion, dev
     with torch.no_grad():
         for resnet_logits, resnet_embeddings, gt_labels, CLIP_embeddings in pbar:
 
-            resnet_logits, resnet_embeddings, CLIP_embeddings, gt_labels = resnet_logits.to(device), resnet_embeddings.to(device), CLIP_embeddings.to(device), gt_labels.to(device)
+            resnet_logits, resnet_embeddings, gt_labels, CLIP_embeddings = resnet_logits.to(device), resnet_embeddings.to(device), gt_labels.to(device), CLIP_embeddings.to(device)                
             
             # Project the resnet embeddings
             proj_embeddings = projector(resnet_embeddings)
@@ -122,27 +123,27 @@ def validate(val_loader, resnet_model, projector, text_encodings, criterion, dev
             gt_labels_list = gt_labels.cpu().numpy().tolist()
             gt_text_encodings = text_encodings[gt_labels_list] # (batch_size, CLIP_embedding_dim)
 
-            proj_embeddings = F.normalize(proj_embeddings, dim=-1)
-            gt_text_encodings = F.normalize(gt_text_encodings, dim=-1)
+            normalized_proj_embeddings = F.normalize(proj_embeddings, dim=-1)
+            normalized_gt_text_encodings = F.normalize(gt_text_encodings, dim=-1)
 
             # make the text embeddings to the same data type as image embeddings
-            gt_text_encodings = gt_text_encodings.type_as(proj_embeddings)
+            normalized_gt_text_encodings = normalized_gt_text_encodings.type_as(normalized_proj_embeddings)
             # The logits dimension (batch_size, batch_size)
-            logits_per_projection = 100*proj_embeddings @ gt_text_encodings.T # 100 is the logits scale from CLIP
+            logits_per_projection = 100*normalized_proj_embeddings @ normalized_gt_text_encodings.t() # 100 is the logits scale from CLIP
             logits_per_text = logits_per_projection.t()
 
             # We want to maximize the diagonal entries of the logits matrix while minimizing the off-diagonal entries
 
             # labels are indexes to the diagonal entries of the logits matrix
-            pseudo_labels = torch.arange(len(resnet_logits)).long().to(device) # (batch_size)
-            
+            pseudo_labels = torch.arange(len(proj_embeddings)).long().to(device) # (batch_size)
+
             loss_image = F.cross_entropy(logits_per_projection, pseudo_labels)
             loss_text = F.cross_entropy(logits_per_text, pseudo_labels)
             loss = (loss_image + loss_text)/2
 
             # Probs from logits
-            projection_probs = F.softmax(logits_per_projection, dim=-1)
-
+            zero_shot_logits = compute_similarities(proj_embeddings, text_encodings, mode='cosine') # (batch_size, num_classes)
+            projection_probs = F.softmax(zero_shot_logits, dim=-1)
             # Compute the accuracy
             batch_acc = compute_accuracy(projection_probs, gt_labels)
 
@@ -310,7 +311,6 @@ def main(args):
     if not args.use_default_prompt:
         torch.save(mapping_sequence, os.path.join(save_dir, "projector_mapping_sequence.pth"))
 
-
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Train ResNet on WILDS Dataset')
 
@@ -325,7 +325,7 @@ if __name__ == "__main__":
     parser.add_argument('--checkpoint_path', type=str, help='Path to checkpoint to resume training from')
 
     parser.add_argument('--num_epochs', type=int, default=100, help='Number of training epochs')
-    parser.add_argument('--optimizer', type=str, choices=['adam', 'sgd'], default='sgd', help='Type of optimizer to use')
+    parser.add_argument('--optimizer', type=str, choices=['adam', 'sgd'], default='adam', help='Type of optimizer to use')
     parser.add_argument('--learning_rate', type=float, default=0.1, help='Learning rate for the optimizer')
     parser.add_argument('--resnet_dim', type=int, default=2048, help='Dimension of the ResNet embeddings')
     parser.add_argument('--projection_dim', type=int, default=512, help='Dimension of the projected embeddings')
