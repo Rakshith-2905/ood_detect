@@ -47,7 +47,7 @@ def train_one_epoch(train_loader, resnet_model, projector, text_encodings, crite
     for resnet_logits, resnet_embeddings, gt_labels, CLIP_embeddings in pbar:
 
         resnet_logits, resnet_embeddings, gt_labels, CLIP_embeddings = resnet_logits.to(device), resnet_embeddings.to(device), gt_labels.to(device), CLIP_embeddings.to(device)
-        
+
         optimizer.zero_grad()
         
         # Project the resnet embeddings
@@ -73,7 +73,8 @@ def train_one_epoch(train_loader, resnet_model, projector, text_encodings, crite
 
         loss_image = F.cross_entropy(logits_per_projection, pseudo_labels)
         loss_text = F.cross_entropy(logits_per_text, pseudo_labels)
-        loss = (loss_image + loss_text)/2
+        # loss = (loss_image + loss_text)/2
+        loss = loss_image
         loss.backward()
 
         optimizer.step()
@@ -139,7 +140,8 @@ def validate(val_loader, resnet_model, projector, text_encodings, criterion, dev
 
             loss_image = F.cross_entropy(logits_per_projection, pseudo_labels)
             loss_text = F.cross_entropy(logits_per_text, pseudo_labels)
-            loss = (loss_image + loss_text)/2
+            # loss = (loss_image + loss_text)/2
+            loss = loss_image
 
             # Probs from logits
             zero_shot_logits = compute_similarities(proj_embeddings, text_encodings, mode='cosine') # (batch_size, num_classes)
