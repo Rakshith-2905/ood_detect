@@ -214,6 +214,7 @@ if __name__ == "__main__":
     parser.add_argument('--feature_extractor_name', required=True, choices=['sam_vit_h'],  help='Name of the feature extractor to use.')
     parser.add_argument('--clip_model_name', default='RN50', help='Name of the CLIP model to use.')
     parser.add_argument('--save_path', required=True, help='Path where to save the features.')
+    parser.add_argument('--data_path', required=True, help='Path to the data.')
     parser.add_argument('--batch_size', type=int, default=64, help='Batch size for the feature extractor.')
     parser.add_argument('--chunk_size', type=int, default=100000, help='How many entries to process before saving a chunk.')
     parser.add_argument('--start_chunk', type=int, default=0, help='The starting chunk index.')
