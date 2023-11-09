@@ -16,12 +16,14 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 
 
 def load_image(data):
-    image_path = os.path.join(args.data_path, data['filename'])
+    image_path = os.path.join(args.data_path, data['filename'].split('/')[-1].split('.')[0]+'.jpg')
+    if not os.path.exists(image_path):
+        return None
     image = Image.open(image_path)
     return image
 
 def get_clip_text_encodings(caption):
-    text = clip.tokenize([caption]).to(device)
+    text = clip.tokenize(caption).to(device)
     with torch.no_grad():
         text_features = model.encode_text(text)
     return text_features
@@ -48,7 +50,7 @@ def save_chunk_features(image_features, text_features, save_path, chunk_start_in
     
     # Define the filenames for the chunk
     image_features_filename = f"{feature_extractor_name}_image_features_{chunk_start_index}_{chunk_end_index}.pt"
-    text_features_filename = f"{clip_model_name}_text_features_{chunk_start_index}_{chunk_end_index}.pt"
+    text_features_filename = f"CLIP_{clip_model_name}_text_features_{chunk_start_index}_{chunk_end_index}.pt"
     
     # Save the image features
     image_features_path = os.path.join(save_path, image_features_filename)
@@ -83,7 +85,7 @@ def save_chunk_features(image_features, text_features, save_path, chunk_start_in
     else:
         logging.error(f"Chunk saving failed for indices {chunk_start_index} to {chunk_end_index}")
 
-def process_images(args):
+def process_images(args, feature_extractor):
 
     # Create the save path if it doesn't exist
     if not os.path.exists(args.save_path):
@@ -95,7 +97,7 @@ def process_images(args):
         with open(checkpoint_file, 'r') as f:
             start_index = int(f.read().strip())
         logging.info(f"Resuming from line: {start_index}")
-
+    
     # Calculate the starting and ending line indices based on chunks
     start_line = args.start_chunk
     end_line = args.end_chunk
@@ -117,56 +119,60 @@ def process_images(args):
             if i > end_line:
                 break  # Stop processing if the end line is reached
 
-            try:
-                data = json.loads(line)
-                image = load_image(data)
-                images_batch.append(image)
-                captions_batch.append(data['caption'])
+            #try:
+            data = json.loads(line)
+            image = load_image(data)
+            if not image:
+                logging.error(f"Image not found line {i}")
+                continue
+            images_batch.append(image)
+            captions_batch.append(data['caption'])
 
-                chunk_data[i] = {data}
+            chunk_data[i] = data
 
-                # Update the progress bar description with the current line number
-                progress_bar.set_description(f"Processing image line {i}")
+            # Update the progress bar description with the current line number
+            progress_bar.set_description(f"Processing image line {i}")
 
-                if len(images_batch) == args.batch_size:
-                    # Process batch
-                    with torch.no_grad():
-                        image_features = feature_extractor(images_batch)
-                    text_features = get_clip_text_encodings(captions_batch)
+            if len(images_batch) == args.batch_size:
+                # Process batch
+                with torch.no_grad():
+                    image_features = feature_extractor(images_batch).detach().cpu()
+                    print(captions_batch)
+                text_features = get_clip_text_encodings(captions_batch).detach().cpu()
 
-                    # Accumulate processed features
-                    if processed_images == 0:
-                        chunk_image_features = image_features
-                        chunk_text_features = text_features
-                    else:
-                        chunk_image_features = torch.cat((chunk_image_features, image_features), dim=0)
-                        chunk_text_features = torch.cat((chunk_text_features, text_features), dim=0)
+                # Accumulate processed features
+                if processed_images == 0:
+                    chunk_image_features = image_features
+                    chunk_text_features = text_features
+                else:
+                    chunk_image_features = torch.cat((chunk_image_features, image_features), dim=0)
+                    chunk_text_features = torch.cat((chunk_text_features, text_features), dim=0)
 
-                    processed_images += args.batch_size
+                processed_images += args.batch_size
 
-                    # Reset batch
-                    images_batch = []
-                    captions_batch = []
+                # Reset batch
+                images_batch = []
+                captions_batch = []
 
-                    # Save chunk if it reaches the specified chunk size
-                    if processed_images % args.chunk_size == 0:
-                        chunk_end_index = chunk_start_index + args.chunk_size - 1
+                # Save chunk if it reaches the specified chunk size
+                if processed_images % args.chunk_size == 0:
+                    chunk_end_index = chunk_start_index + args.chunk_size - 1
 
-                        save_chunk_features(chunk_image_features, chunk_text_features, args.save_path, 
-                                            chunk_start_index, chunk_end_index, 
-                                            args.feature_extractor_name, args.clip_model_name, chunk_data)
-                        
-                        # Reset chunk features after saving
-                        chunk_image_features = torch.empty(0)
-                        chunk_text_features = torch.empty(0)
-                        
-                        # Reset chunk data after saving
-                        chunk_data = {}
-                        # Update the chunk start index
-                        chunk_start_index = chunk_end_index + 1
+                    save_chunk_features(chunk_image_features, chunk_text_features, args.save_path, 
+                                        chunk_start_index, chunk_end_index, 
+                                        args.feature_extractor_name, args.clip_model_name, chunk_data)
+                    
+                    # Reset chunk features after saving
+                    chunk_image_features = torch.empty(0)
+                    chunk_text_features = torch.empty(0)
+                    
+                    # Reset chunk data after saving
+                    chunk_data = {}
+                    # Update the chunk start index
+                    chunk_start_index = chunk_end_index + 1
 
-            except Exception as e:
-                logging.error(f"Error processing line {i}: {e}")
+            # except Exception as e:
+            #     logging.error(f"Error processing line {i}: {e}")
 
             if i % 100 == 0:
                 logging.info(f"Processed {i} lines.")
@@ -178,13 +184,16 @@ def process_images(args):
     # Final save for any remaining data that didn't complete a full chunk
     if images_batch or (processed_images % args.chunk_size != 0):
         # Process the final batch
-        images_tensor = torch.stack(images_batch)
-        image_features = feature_extractor(images_tensor)
-        text_features = get_clip_text_encodings(captions_batch)
-        
-        # Append the final batch to the chunk
-        chunk_image_features = torch.cat((chunk_image_features, image_features), dim=0) if chunk_image_features.size(0) else image_features
-        chunk_text_features = torch.cat((chunk_text_features, text_features), dim=0) if chunk_text_features.size(0) else text_features
+        #images_tensor = torch.stack(images_batch)
+        if images_batch:
+            image_features = feature_extractor(images_batch).detach().cpu()
+            text_features = get_clip_text_encodings(captions_batch).detach().cpu()
+            
+            if chunk_image_features.shape[0]:
+                len_batches = len(chunk_image_features)
+            # Append the final batch to the chunk
+            chunk_image_features = torch.cat((chunk_image_features, image_features), dim=0) if chunk_image_features.size(0) else image_features
+            chunk_text_features = torch.cat((chunk_text_features, text_features), dim=0) if chunk_text_features.size(0) else text_features
 
         # Save the final chunk
         chunk_end_index = chunk_start_index + len(images_batch) - 1
@@ -205,6 +214,7 @@ def build_feature_extractor(feature_extractor_name):
         feature_extractor = SAMBackbone("vit_h", "checkpoints/sam_vit_h_4b8939.pth").to(device)
     else:
         raise NotImplementedError(f"{feature_extractor_name} is not implemented.")
+    return feature_extractor
 
 if __name__ == "__main__":
 
@@ -228,4 +238,4 @@ if __name__ == "__main__":
 
     feature_extractor = build_feature_extractor(args.feature_extractor_name)
 
-    process_images(args)
+    process_images(args, feature_extractor)
