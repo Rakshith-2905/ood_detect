@@ -22,10 +22,19 @@ def load_image(data):
     image = Image.open(image_path)
     return image
 
+def save_checkpoint(checkpoint_path, state):
+    with open(checkpoint_path, 'w') as f:
+        json.dump(state, f)
+
+def load_checkpoint(checkpoint_path):
+    if os.path.isfile(checkpoint_path):
+        with open(checkpoint_path, 'r') as f:
+            return json.load(f)
+    return None
+
 def get_clip_text_encodings(caption):
     text = clip.tokenize(caption).to(device)
-    with torch.no_grad():
-        text_features = model.encode_text(text)
+    text_features = model.encode_text(text)
     return text_features
 
 def get_clip_image_features(images_batch):
@@ -91,12 +100,12 @@ def process_images(args, feature_extractor):
     if not os.path.exists(args.save_path):
         os.makedirs(args.save_path)
         logging.info(f"Created save path: {args.save_path}")
-    checkpoint_file = os.path.join(args.save_path, 'checkpoint.txt')
-    start_index = 0
-    if args.resume and os.path.isfile(checkpoint_file):
-        with open(checkpoint_file, 'r') as f:
-            start_index = int(f.read().strip())
-        logging.info(f"Resuming from line: {start_index}")
+    # checkpoint_file = os.path.join(args.save_path, 'checkpoint.txt')
+    # start_index = 0
+    # if args.resume and os.path.isfile(checkpoint_file):
+    #     with open(checkpoint_file, 'r') as f:
+    #         start_index = int(f.read().strip())
+    #     logging.info(f"Resuming from line: {start_index}")
     
     # Calculate the starting and ending line indices based on chunks
     start_line = args.start_chunk
@@ -137,8 +146,7 @@ def process_images(args, feature_extractor):
                 # Process batch
                 with torch.no_grad():
                     image_features = feature_extractor(images_batch).detach().cpu()
-                    print(captions_batch)
-                text_features = get_clip_text_encodings(captions_batch).detach().cpu()
+                    text_features = get_clip_text_encodings(captions_batch).detach().cpu()
 
                 # Accumulate processed features
                 if processed_images == 0:
@@ -177,27 +185,25 @@ def process_images(args, feature_extractor):
             if i % 100 == 0:
                 logging.info(f"Processed {i} lines.")
 
-            # Save the last processed index after each line
-            with open(checkpoint_file, 'a') as f:
-                f.write(f'{i}\n')
+            # # Save the last processed index after each line
+            # with open(checkpoint_file, 'a') as f:
+            #     f.write(f'{i}\n')
 
     # Final save for any remaining data that didn't complete a full chunk
     if images_batch or (processed_images % args.chunk_size != 0):
-        # Process the final batch
-        #images_tensor = torch.stack(images_batch)
-        if images_batch:
-            image_features = feature_extractor(images_batch).detach().cpu()
-            text_features = get_clip_text_encodings(captions_batch).detach().cpu()
-            
-            if chunk_image_features.shape[0]:
-                len_batches = len(chunk_image_features)
-            # Append the final batch to the chunk
-            chunk_image_features = torch.cat((chunk_image_features, image_features), dim=0) if chunk_image_features.size(0) else image_features
-            chunk_text_features = torch.cat((chunk_text_features, text_features), dim=0) if chunk_text_features.size(0) else text_features
 
-        # Save the final chunk
-        chunk_end_index = chunk_start_index + len(images_batch) - 1
-        
+        if images_batch:
+            # Process the final batch if there are any images left
+            with torch.no_grad():
+                image_features = feature_extractor(images_batch).detach().cpu()
+                text_features = get_clip_text_encodings(captions_batch).detach().cpu()
+            
+            # Concatenate the features of the final batch with those of the chunk
+            chunk_image_features = torch.cat((chunk_image_features, image_features), dim=0) if chunk_image_features.numel() else image_features
+            chunk_text_features = torch.cat((chunk_text_features, text_features), dim=0) if chunk_text_features.numel() else text_features
+
+        chunk_end_index = chunk_start_index + chunk_image_features.shape[0] - 1
+
         save_chunk_features(chunk_image_features, chunk_text_features, args.save_path,
                             chunk_start_index, chunk_end_index,
                             args.feature_extractor_name, args.clip_model_name, chunk_data)
