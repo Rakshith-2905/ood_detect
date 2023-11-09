@@ -82,7 +82,7 @@ class SAMBackbone(nn.Module):
         return features
 
 class MAEBackbone(nn.Module):
-    def __init__(self, model_name, checkpoint_path=None, device='cuda'):
+    def __init__(self, model_name, checkpoint_path=None):
         super().__init__()
         """
         Args:
@@ -90,7 +90,6 @@ class MAEBackbone(nn.Module):
             checkpoint_path (str): Path to the checkpoint file
             device (str): Device to load the model on
         """
-        self.device = device
         if checkpoint_path is None:
             assert False, "Checkpoint path must be provided for {model_name}"
         elif not os.path.exists(checkpoint_path):
@@ -102,10 +101,10 @@ class MAEBackbone(nn.Module):
             checkpoint = torch.load(checkpoint_path, map_location='cpu')
             msg = model.load_state_dict(checkpoint['model'], strict=False)
             print('Pretrained weights found at {} and loaded with msg: {}'.format(checkpoint_path, msg))
-            model = model.to(device)
             # Transform to resize the image to the longest side, add the preprocess that the model expects
             self.transform = transforms.Compose([
-                            transforms.Resize((224,224)),
+                            transforms.Resize(224),
+                            transforms.CenterCrop(224),
                             transforms.ToTensor(),
                             transforms.Normalize(mean=[0.485, 0.456, 0.406],
                                                 std=[0.229, 0.224, 0.225])                
@@ -122,12 +121,12 @@ class MAEBackbone(nn.Module):
         if isinstance(images, list):
             images_torch = []
             for image in images:
-                image_tensor = self.transform(image).to(self.device)
+                image_tensor = self.transform(image)
                 images_torch.append(image_tensor)
 
             images_torch = torch.stack(images_torch) 
         else:
-            images_torch = self.transform(images).to(self.device).unsqueeze(0)
+            images_torch = self.transform(images).unsqueeze(0)
         
         return images_torch
 
@@ -140,7 +139,6 @@ class MAEBackbone(nn.Module):
         if not isinstance(images, torch.Tensor):
             images = self.preprocess_pil(images)
         else:
-            images = self.transform(images.to(self.device))
             if len(images.shape) == 3:
                 images = images.unsqueeze(0)
 
@@ -153,7 +151,7 @@ class MAEBackbone(nn.Module):
         return features
 
 class DINOBackbone(nn.Module):
-    def __init__(self, model_name, checkpoint_path=None, patch_size = 8, device='cuda'):
+    def __init__(self, model_name, checkpoint_path=None ):
         super().__init__()
         """
         Args:
@@ -165,7 +163,6 @@ class DINOBackbone(nn.Module):
 
         try:
             model = torch.hub.load('facebookresearch/dino:main', model_name, pretrained=True)
-            self.model = model.to(device)
             self.transform = transforms.Compose([
                             transforms.Resize(224),
                             transforms.CenterCrop(224),
@@ -182,13 +179,13 @@ class DINOBackbone(nn.Module):
         if isinstance(images, list):
             images_torch = []
             for image in images:
-                image_tensor = self.transform(image).to(self.device)
+                image_tensor = self.transform(image)
                 images_torch.append(image_tensor)
 
             images_torch = torch.stack(images_torch) 
 
         else:
-            images_torch = self.transform(images).to(self.device).unsqueeze(0)
+            images_torch = self.transform(images).unsqueeze(0)
         
         return images_torch
 
@@ -200,9 +197,6 @@ class DINOBackbone(nn.Module):
         """
         if not isinstance(images, torch.Tensor):
             images = self.preprocess_pil(images)
-        else:
-            # images = self.transform
-            pass
 
         features = self.model(images)
         return features
@@ -211,9 +205,9 @@ if __name__ == "__main__":
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
 
-    # sam = SAMBackbone(model_name="vit_h", checkpoint_path="checkpoints/sam_vit_h_4b8939.pth", device=device)
-    # mae = MAEBackbone(model_name="mae_vit_large_patch16", checkpoint_path='./checkpoints/mae_visualize_vit_large_ganloss.pth', device=device)
-    dino = DINOBackbone(model_name="dino_vits16", checkpoint_path=None, device=device)
+    # sam = SAMBackbone(model_name="vit_h", checkpoint_path="checkpoints/sam_vit_h_4b8939.pth").to(device)
+    # mae = MAEBackbone(model_name="mae_vit_large_patch16", checkpoint_path='./checkpoints/mae_visualize_vit_large_ganloss.pth').to(device)
+    dino = DINOBackbone(model_name="dino_vits16", checkpoint_path=None).to(device)
 
     pil_image = Image.open("../data/domainnet_v1.0/real/toothpaste/real_318_000284.jpg")
     pil_images = [pil_image, pil_image, pil_image, pil_image, pil_image, pil_image, pil_image, pil_image]

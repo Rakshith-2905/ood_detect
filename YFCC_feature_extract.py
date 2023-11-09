@@ -10,203 +10,107 @@ import torch
 import clip
 
 from models.ViT_models import SAMBackbone, MAEBackbone, DINOBackbone
+import lightning as L
+
 
 # Initialize logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 
-def load_image(data):
-    image_path = os.path.join(args.data_path, data['filename'].split('/')[-1].split('.')[0]+'.jpg')
-    if not os.path.exists(image_path):
-        return None
-    image = Image.open(image_path)
-    return image
+class ImageTextDataset(Dataset):
+    def __init__(self, json_file, data_path, start_index=0, end_index=None, transform=None):
+        self.data_path = data_path
+        self.transform = transform
+        self.samples = self._load_json(json_file, start_index, end_index)
 
-def save_checkpoint(checkpoint_path, state):
-    with open(checkpoint_path, 'w') as f:
-        json.dump(state, f)
+    def _load_json(self, json_file, start_index, end_index):
+        samples = []
+        with open(json_file, 'r') as f:
+            for i, line in enumerate(f):
+                if i < start_index:
+                    continue
+                if end_index is not None and i > end_index:
+                    break
+                data = json.loads(line)
+                image_path = os.path.join(self.data_path, data['filename'].split('/')[-1].split('.')[0]+'.jpg')
+                if os.path.exists(image_path):
+                    samples.append({'image_path': image_path, 'caption': data['caption']})
+        return samples
 
-def load_checkpoint(checkpoint_path):
-    if os.path.isfile(checkpoint_path):
-        with open(checkpoint_path, 'r') as f:
-            return json.load(f)
-    return None
+    def __len__(self):
+        return len(self.samples)
 
-def get_clip_text_encodings(caption):
-    text = clip.tokenize(caption).to(device)
-    text_features = model.encode_text(text)
-    return text_features
+    def __getitem__(self, idx):
+        sample = self.samples[idx]
+        image = Image.open(sample['image_path'])
+        if self.transform:
+            image = self.transform(image)
+        return image, sample['caption'], sample['image_path']
 
-def get_clip_image_features(images_batch):
-    # Replace with your own feature extraction process.
-    with torch.no_grad():
-        image_features = model.encode_image(images_batch)
-    return image_features
+def save_chunk_features(image_features, text_features, save_path, chunk_start_index, chunk_end_index, feature_extractor_name, clip_model_name, chunk_filenames):
+    # Combine the features from all batches
+    combined_image_features = torch.cat(image_features, dim=0)
+    combined_text_features = torch.cat(text_features, dim=0)
 
-def save_chunk_features(image_features, text_features, save_path, chunk_start_index, chunk_end_index, feature_extractor_name, clip_model_name, chunk_data):
-    """
-    Saves the image and text features to disk.
-    Args:
-        image_features (torch.Tensor): The image features to save.
-        text_features (torch.Tensor): The text features to save.
-        save_path (str): The path to save the features to.
-        chunk_start_index (int): The starting index of the chunk.
-        chunk_end_index (int): The ending index of the chunk.
-        feature_extractor_name (str): The name of the feature extractor used.
-        clip_model_name (str): The name of the CLIP model used.
-        chunk_data (dict): The chunk information to save.
-    """
-    
-    # Define the filenames for the chunk
-    image_features_filename = f"{feature_extractor_name}_image_features_{chunk_start_index}_{chunk_end_index}.pt"
-    text_features_filename = f"CLIP_{clip_model_name}_text_features_{chunk_start_index}_{chunk_end_index}.pt"
-    
-    # Save the image features
-    image_features_path = os.path.join(save_path, image_features_filename)
-    try:
-        torch.save(image_features, image_features_path)
-        logging.info(f"Saved image features to {image_features_path}")
-    except Exception as e:
-        logging.error(f"Failed to save image features to {image_features_path}: {e}")
+    # Save the features
+    image_features_filename = os.path.join(save_path, f"{feature_extractor_name}_image_features_{chunk_start_index}_{chunk_end_index}.pt")
+    text_features_filename = os.path.join(save_path, f"CLIP_{clip_model_name}_text_features_{chunk_start_index}_{chunk_end_index}.pt")
+    torch.save(combined_image_features, image_features_filename)
+    torch.save(combined_text_features, text_features_filename)
 
-    # Save the text features
-    text_features_path = os.path.join(save_path, text_features_filename)
-    try:
-        torch.save(text_features, text_features_path)
-        logging.info(f"Saved text features to {text_features_path}")
-    except Exception as e:
-        logging.error(f"Failed to save text features to {text_features_path}: {e}")
+    # Save the chunk filenames
+    chunk_filenames_path = os.path.join(save_path, f"chunk_{chunk_start_index}_{chunk_end_index}_filenames.txt")
+    with open(chunk_filenames_path, 'w') as f:
+        for filename in chunk_filenames:
+            f.write(f"{filename}\n")
 
-    # Save the chunk data as a JSON file
-    chunk_data_filename = f"chunk_data_{chunk_start_index}_{chunk_end_index}.json"
-    chunk_data_path = os.path.join(save_path, chunk_data_filename)
-    try:
-        with open(chunk_data_path, 'w') as f:
-            json.dump(chunk_data, f, indent=4)
-        logging.info(f"Saved chunk data to {chunk_data_path}")
-    except Exception as e:
-        logging.error(f"Failed to save chunk data to {chunk_data_path}: {e}")
-
-
-    # Check if files exist to confirm they were saved
-    if os.path.exists(image_features_path) and os.path.exists(text_features_path):
-        logging.info(f"Chunk saved successfully: {chunk_start_index} to {chunk_end_index}")
-    else:
-        logging.error(f"Chunk saving failed for indices {chunk_start_index} to {chunk_end_index}")
-
-def process_images(args, feature_extractor):
-
-    # Create the save path if it doesn't exist
-    if not os.path.exists(args.save_path):
-        os.makedirs(args.save_path)
-        logging.info(f"Created save path: {args.save_path}")
-    # checkpoint_file = os.path.join(args.save_path, 'checkpoint.txt')
-    # start_index = 0
-    # if args.resume and os.path.isfile(checkpoint_file):
-    #     with open(checkpoint_file, 'r') as f:
-    #         start_index = int(f.read().strip())
-    #     logging.info(f"Resuming from line: {start_index}")
-    
-    # Calculate the starting and ending line indices based on chunks
-    start_line = args.start_chunk
-    end_line = args.end_chunk
-
-    # Calculate total lines to process for the progress bar
-    total_lines = end_line - start_line + 1 if end_line != float('inf') else None
-
-    images_batch = []
-    captions_batch = []
+def process_data_loader(data_loader, feature_extractor, clip_model, device, save_path, clip_model_name, 
+                        feature_extractor_name, num_batches_per_chunk, start_index):
+    batch_counter = 0
     processed_images = 0
-    chunk_data = {}
+    chunk_start_index = start_index
+    accumulated_image_features = []
+    accumulated_text_features = []
+    chunk_filenames = []
+    
+    for images_batch, captions_batch, image_names_batch in tqdm(data_loader, desc="Processing batches", unit="batch"):
+        images_batch = images_batch.to(device)
+        
+        # Extract features for images and text
+        with torch.no_grad():
+            image_features = feature_extractor(images_batch).detach().cpu()
+            text_tokens = clip.tokenize(captions_batch).to(device)
+            text_features = clip_model.encode_text(text_tokens).detach().cpu()
 
-    chunk_start_index = args.start_chunk
-    with open(args.json_file, 'r') as f:
-        # Initialize the progress bar with the total lines to process
-        progress_bar = tqdm(f, total=total_lines, initial=start_line, desc="Processing images", unit="image", dynamic_ncols=True)
+        # Accumulate features and filenames
+        accumulated_image_features.append(image_features)
+        accumulated_text_features.append(text_features)
+        chunk_filenames.extend(image_names_batch)
+        
+        batch_counter += 1
+        processed_images += len(images_batch)
 
-        for i, line in enumerate(progress_bar, start_line):
-            if i > end_line:
-                break  # Stop processing if the end line is reached
+        # Save and reset after num_batches_per_chunk
+        if batch_counter >= num_batches_per_chunk:
+            chunk_end_index = chunk_start_index + processed_images - 1
+            save_chunk_features(accumulated_image_features, accumulated_text_features, save_path, 
+                                chunk_start_index, chunk_end_index, 
+                                feature_extractor_name, clip_model_name, chunk_filenames)
+            # Reset for the next chunk
+            batch_counter = 0
+            accumulated_image_features = []
+            accumulated_text_features = []
+            chunk_filenames = []
+            chunk_start_index = chunk_end_index + 1
 
-            #try:
-            data = json.loads(line)
-            image = load_image(data)
-            if not image:
-                logging.error(f"Image not found line {i}")
-                continue
-            images_batch.append(image)
-            captions_batch.append(data['caption'])
+    # Save any remaining data that didn't fill a complete chunk
+    if batch_counter > 0:
+        chunk_end_index = chunk_start_index + processed_images - 1
+        save_chunk_features(accumulated_image_features, accumulated_text_features, save_path, 
+                            chunk_start_index, chunk_end_index, 
+                            feature_extractor_name, clip_model_name, chunk_filenames)
 
-            chunk_data[i] = data
-
-            # Update the progress bar description with the current line number
-            progress_bar.set_description(f"Processing image line {i}")
-
-            if len(images_batch) == args.batch_size:
-                # Process batch
-                with torch.no_grad():
-                    image_features = feature_extractor(images_batch).detach().cpu()
-                    text_features = get_clip_text_encodings(captions_batch).detach().cpu()
-
-                # Accumulate processed features
-                if processed_images == 0:
-                    chunk_image_features = image_features
-                    chunk_text_features = text_features
-                else:
-                    chunk_image_features = torch.cat((chunk_image_features, image_features), dim=0)
-                    chunk_text_features = torch.cat((chunk_text_features, text_features), dim=0)
-
-                processed_images += args.batch_size
-
-                # Reset batch
-                images_batch = []
-                captions_batch = []
-
-                # Save chunk if it reaches the specified chunk size
-                if processed_images % args.chunk_size == 0:
-                    chunk_end_index = chunk_start_index + args.chunk_size - 1
-
-                    save_chunk_features(chunk_image_features, chunk_text_features, args.save_path, 
-                                        chunk_start_index, chunk_end_index, 
-                                        args.feature_extractor_name, args.clip_model_name, chunk_data)
-                    
-                    # Reset chunk features after saving
-                    chunk_image_features = torch.empty(0)
-                    chunk_text_features = torch.empty(0)
-                    
-                    # Reset chunk data after saving
-                    chunk_data = {}
-                    # Update the chunk start index
-                    chunk_start_index = chunk_end_index + 1
-
-            # except Exception as e:
-            #     logging.error(f"Error processing line {i}: {e}")
-
-            if i % 100 == 0:
-                logging.info(f"Processed {i} lines.")
-
-            # # Save the last processed index after each line
-            # with open(checkpoint_file, 'a') as f:
-            #     f.write(f'{i}\n')
-
-    # Final save for any remaining data that didn't complete a full chunk
-    if images_batch or (processed_images % args.chunk_size != 0):
-
-        if images_batch:
-            # Process the final batch if there are any images left
-            with torch.no_grad():
-                image_features = feature_extractor(images_batch).detach().cpu()
-                text_features = get_clip_text_encodings(captions_batch).detach().cpu()
-            
-            # Concatenate the features of the final batch with those of the chunk
-            chunk_image_features = torch.cat((chunk_image_features, image_features), dim=0) if chunk_image_features.numel() else image_features
-            chunk_text_features = torch.cat((chunk_text_features, text_features), dim=0) if chunk_text_features.numel() else text_features
-
-        chunk_end_index = chunk_start_index + chunk_image_features.shape[0] - 1
-
-        save_chunk_features(chunk_image_features, chunk_text_features, args.save_path,
-                            chunk_start_index, chunk_end_index,
-                            args.feature_extractor_name, args.clip_model_name, chunk_data)
+    logging.info(f"Completed processing {processed_images} images.")
 
 def build_feature_extractor(feature_extractor_name):
     """
@@ -219,13 +123,14 @@ def build_feature_extractor(feature_extractor_name):
     if args.feature_extractor_name == 'sam_vit_h':
         feature_extractor = SAMBackbone("vit_h", "checkpoints/sam_vit_h_4b8939.pth").to(device)
     elif args.feature_extractor_name == 'mae_vit_large_patch16':
-        feature_extractor = MAEBackbone("mae_vit_large_patch16", "checkpoints/mae_visualize_vit_large_ganloss.pth", device=device)
+        feature_extractor = MAEBackbone("mae_vit_large_patch16", "checkpoints/mae_visualize_vit_large_ganloss.pth")
     elif args.feature_extractor_name == 'dino_vits16':
-        feature_extractor = DINOBackbone("dino_vits16", None, device=device)
+        feature_extractor = DINOBackbone("dino_vits16", None)
     else:
         raise NotImplementedError(f"{feature_extractor_name} is not implemented.")
 
-    return feature_extractor
+    transform = feature_extractor.transform
+    return feature_extractor, transform
 
 if __name__ == "__main__":
 
@@ -236,17 +141,29 @@ if __name__ == "__main__":
     parser.add_argument('--clip_model_name', default='RN50', help='Name of the CLIP model to use.')
     parser.add_argument('--save_path', required=True, help='Path where to save the features.')
     parser.add_argument('--data_path', required=True, help='Path to the data.')
-    parser.add_argument('--batch_size', type=int, default=64, help='Batch size for the feature extractor.')
-    parser.add_argument('--chunk_size', type=int, default=100000, help='How many entries to process before saving a chunk.')
-    parser.add_argument('--start_chunk', type=int, default=0, help='The starting chunk index.')
-    parser.add_argument('--end_chunk', type=int, required=True, help='The ending chunk index.')
-    parser.add_argument('--resume', action='store_true', help='Resume from the last checkpoint.')
+    parser.add_argument('--batch_size', type=int, default=1024, help='Batch size for the feature extractor.')
+    parser.add_argument('--num_batches_per_chunk', type=int, default=100, help='How many batches make a chunk.')
+    parser.add_argument('--start_index', type=int, default=0, help='The starting line index in the JSON file.')
+    parser.add_argument('--end_index', type=int, required=True, help='The ending line index in the JSON file.')
+
     args = parser.parse_args()
 
     # Initialize CLIP
     device = "cuda" if torch.cuda.is_available() else "cpu"
     model, preprocess = clip.load(args.clip_model_name, device=device)
 
-    feature_extractor = build_feature_extractor(args.feature_extractor_name)
+    fabric = L.Fabric(accelerator="cuda", devices=8, strategy="ddp")
+    fabric.launch()
 
-    process_images(args, feature_extractor)
+
+    feature_extractor, transform = build_feature_extractor(args.feature_extractor_name)
+    # Create the dataset and data loader
+    dataset = ImageTextDataset(args.json_file, args.data_path, start_index=args.start_index, end_index=args.end_index, transform=transform)
+    data_loader = DataLoader(dataset, batch_size=args.batch_size, shuffle=False)
+
+    feature_extractor, optimizer = fabric.setup(feature_extractor, optimizer)
+    data_loader = fabric.setup_dataloaders(data_loader)
+
+    # Process the dataset
+    process_data_loader(data_loader, feature_extractor, model, device, args.save_path, args.clip_model_name, 
+                        args.feature_extractor_name, args.num_batches_per_chunk, args.start_index)
