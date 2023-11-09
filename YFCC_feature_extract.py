@@ -97,8 +97,8 @@ def process_images(args):
         logging.info(f"Resuming from line: {start_index}")
 
     # Calculate the starting and ending line indices based on chunks
-    start_line = args.start_chunk * args.chunk_size + 1
-    end_line = (args.end_chunk * args.chunk_size if args.end_chunk is not None else float('inf'))
+    start_line = args.start_chunk
+    end_line = args.end_chunk
 
     # Calculate total lines to process for the progress bar
     total_lines = end_line - start_line + 1 if end_line != float('inf') else None
@@ -108,13 +108,13 @@ def process_images(args):
     processed_images = 0
     chunk_data = {}
 
-    chunk_start_index = args.start_chunk * args.chunk_size + 1
+    chunk_start_index = args.start_chunk
     with open(args.json_file, 'r') as f:
         # Initialize the progress bar with the total lines to process
-        progress_bar = tqdm(f, total=total_lines, initial=start_index-start_line+1, desc="Processing images", unit="image", dynamic_ncols=True)
+        progress_bar = tqdm(f, total=total_lines, initial=start_line, desc="Processing images", unit="image", dynamic_ncols=True)
 
         for i, line in enumerate(progress_bar, start_line):
-            if i > end_line:
+            if line > end_line:
                 break  # Stop processing if the end line is reached
 
             try:
@@ -126,11 +126,12 @@ def process_images(args):
                 chunk_data[i] = {data}
 
                 # Update the progress bar description with the current line number
-                progress_bar.set_description(f"Processing image line {i}")
+                progress_bar.set_description(f"Processing image line {line}")
 
                 if len(images_batch) == args.batch_size:
                     # Process batch
-                    image_features = feature_extractor(images_batch)
+                    with torch.no_grad():
+                        image_features = feature_extractor(images_batch)
                     text_features = get_clip_text_encodings(captions_batch)
 
                     # Accumulate processed features
@@ -171,8 +172,8 @@ def process_images(args):
                 logging.info(f"Processed {i} lines.")
 
             # Save the last processed index after each line
-            with open(checkpoint_file, 'w') as f:
-                f.write(str(i))
+            with open(checkpoint_file, 'a') as f:
+                f.write(f'{i}\n')
 
     # Final save for any remaining data that didn't complete a full chunk
     if images_batch or (processed_images % args.chunk_size != 0):
