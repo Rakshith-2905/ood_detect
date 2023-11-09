@@ -114,7 +114,7 @@ def process_images(args):
         progress_bar = tqdm(f, total=total_lines, initial=start_line, desc="Processing images", unit="image", dynamic_ncols=True)
 
         for i, line in enumerate(progress_bar, start_line):
-            if line > end_line:
+            if i > end_line:
                 break  # Stop processing if the end line is reached
 
             try:
@@ -126,7 +126,7 @@ def process_images(args):
                 chunk_data[i] = {data}
 
                 # Update the progress bar description with the current line number
-                progress_bar.set_description(f"Processing image line {line}")
+                progress_bar.set_description(f"Processing image line {i}")
 
                 if len(images_batch) == args.batch_size:
                     # Process batch
