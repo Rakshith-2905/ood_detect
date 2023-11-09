@@ -100,7 +100,8 @@ class MAEBackbone(nn.Module):
             model = getattr(models_mae, model_name)()
             # load model
             checkpoint = torch.load(checkpoint_path, map_location='cpu')
-            model.load_state_dict(checkpoint['model'], strict=False)
+            msg = model.load_state_dict(checkpoint['model'], strict=False)
+            print('Pretrained weights found at {} and loaded with msg: {}'.format(checkpoint_path, msg))
             model = model.to(device)
             # Transform to resize the image to the longest side, add the preprocess that the model expects
             self.transform = transforms.Compose([
@@ -151,18 +152,77 @@ class MAEBackbone(nn.Module):
 
         return features
 
+class DINOBackbone(nn.Module):
+    def __init__(self, model_name, checkpoint_path=None, patch_size = 8, device='cuda'):
+        super().__init__()
+        """
+        Args:
+            model_name (str): Name of the model to load from the registry: [vit_h, vit_l, vit_b]
+            checkpoint_path (str): Path to the checkpoint file
+            device (str): Device to load the model on
+        """
+        self.device = device
+
+        try:
+            model = torch.hub.load('facebookresearch/dino:main', model_name, pretrained=True)
+            self.model = model.to(device)
+            self.transform = transforms.Compose([
+                            transforms.Resize(224),
+                            transforms.CenterCrop(224),
+                            transforms.ToTensor(),
+                            transforms.Normalize(mean=[0.485, 0.456, 0.406],
+                                                std=[0.229, 0.224, 0.225])                
+                        ])
+
+        except Exception as e:
+            assert False, f"Failed to load model: {e}"
+    
+    def preprocess_pil(self, images, image_size=224, image_crop_size=224):
+        # check if images is a list, then preprocess each image
+        if isinstance(images, list):
+            images_torch = []
+            for image in images:
+                image_tensor = self.transform(image).to(self.device)
+                images_torch.append(image_tensor)
+
+            images_torch = torch.stack(images_torch) 
+
+        else:
+            images_torch = self.transform(images).to(self.device).unsqueeze(0)
+        
+        return images_torch
+
+    def forward(self, images):
+        """
+        Args:
+            images (pil image(s) or torch.Tensor): Image(s) to extract features from:
+                if pil image(s) are provided, they will be converted to torch.Tensor
+        """
+        if not isinstance(images, torch.Tensor):
+            images = self.preprocess_pil(images)
+        else:
+            # images = self.transform
+            pass
+
+        features = self.model(images)
+        return features
+
 if __name__ == "__main__":
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
 
     # sam = SAMBackbone(model_name="vit_h", checkpoint_path="checkpoints/sam_vit_h_4b8939.pth", device=device)
-    mae = MAEBackbone(model_name="mae_vit_large_patch16", checkpoint_path='./checkpoints/mae_visualize_vit_large_ganloss.pth', device=device)
+    # mae = MAEBackbone(model_name="mae_vit_large_patch16", checkpoint_path='./checkpoints/mae_visualize_vit_large_ganloss.pth', device=device)
+    dino = DINOBackbone(model_name="dino_vits16", checkpoint_path=None, device=device)
 
-    pil_image = Image.open("./data/domainnet_v1.0/real/toothpaste/real_318_000284.jpg")
-    pil_images = [pil_image, pil_image, pil_image, pil_image]
+    pil_image = Image.open("../data/domainnet_v1.0/real/toothpaste/real_318_000284.jpg")
+    pil_images = [pil_image, pil_image, pil_image, pil_image, pil_image, pil_image, pil_image, pil_image]
 
     torch_images = torch.randn(4, 3, 224, 256).to(device)
 
     with torch.no_grad():
         # features = sam(pil_images)
-        features, y = mae(pil_images, decode=True)
+        # features, y = mae(pil_images, decode=True)
+        features = dino(pil_images)
+
+    print(features.shape)

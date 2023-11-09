@@ -9,7 +9,7 @@ from tqdm import tqdm
 import torch
 import clip
 
-from models.ViT_models import SAMBackbone, MAEBackbone
+from models.ViT_models import SAMBackbone, MAEBackbone, DINOBackbone
 
 # Initialize logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -220,6 +220,8 @@ def build_feature_extractor(feature_extractor_name):
         feature_extractor = SAMBackbone("vit_h", "checkpoints/sam_vit_h_4b8939.pth").to(device)
     elif args.feature_extractor_name == 'mae_vit_large_patch16':
         feature_extractor = MAEBackbone("mae_vit_large_patch16", "checkpoints/mae_visualize_vit_large_ganloss.pth", device=device)
+    elif args.feature_extractor_name == 'dino_vits16':
+        feature_extractor = DINOBackbone("dino_vits16", None, device=device)
     else:
         raise NotImplementedError(f"{feature_extractor_name} is not implemented.")
 
@@ -230,7 +232,7 @@ if __name__ == "__main__":
     # Argument parser
     parser = argparse.ArgumentParser(description='Process a large JSON file and extract image and text features.')
     parser.add_argument('--json_file', required=True, help='Path to the JSON file.')
-    parser.add_argument('--feature_extractor_name', required=True, choices=['sam_vit_h', 'mae_vit_large_patch16'],  help='Name of the feature extractor to use.')
+    parser.add_argument('--feature_extractor_name', required=True, choices=['sam_vit_h', 'mae_vit_large_patch16', 'dino_vits16'],  help='Name of the feature extractor to use.')
     parser.add_argument('--clip_model_name', default='RN50', help='Name of the CLIP model to use.')
     parser.add_argument('--save_path', required=True, help='Path where to save the features.')
     parser.add_argument('--data_path', required=True, help='Path to the data.')
