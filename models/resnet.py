@@ -5,7 +5,7 @@ from torchvision import transforms
 
 import timm
 
-
+print('hi')
 class CustomFeatureModel(nn.Module):
     def __init__(self, model_name, use_pretrained=False):
         super(CustomFeatureModel, self).__init__()
@@ -23,6 +23,9 @@ class CustomFeatureModel(nn.Module):
             raise ValueError(f"Invalid model_name. Expected one of {supported_models}, but got {model_name}")
 
         self.model = timm.create_model(model_name, pretrained=use_pretrained, num_classes=0)
+
+        # self.feature_dim = self.model.num_featuress
+        self.feature_dim = self.model(torch.zeros(1, 3, 224, 224)).shape[-1]
 
     def forward(self, x):
             return self.model(x)
@@ -70,3 +73,12 @@ class CustomResNet(nn.Module):
 # Example usage:
 # model = CustomResNet(model_name='resnet50', num_classes=len(train_set.selected_classes))
 # model.to(device)
+
+
+if __name__ == "__main__":
+
+    model = CustomFeatureModel(model_name='resnet50', use_pretrained=True)
+    features = model(torch.zeros(1, 3, 224, 224))
+    print(features.shape)
+    print(features)
+

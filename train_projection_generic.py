@@ -201,9 +201,9 @@ def main(args):
     projector = ProjectionHead(input_dim=feature_extractor.feature_dim, output_dim=args.projection_dim)
 
     # Create the data loader and wrap them with Fabric
-    train_dataset = ImageTextDataset(args.data_dir, args.json_file, start_index=args.train_start_index, end_index=args.train_end_index, 
+    train_dataset = ImageTextDataset(args.json_file, args.data_dir, start_index=args.train_start_index, end_index=args.train_end_index, 
                                         transform=transform, transform2=clip_preprocess)
-    val_dataset = ImageTextDataset(args.data_dir, args.json_file, start_index=args.val_start_index, end_index=args.val_end_index, 
+    val_dataset = ImageTextDataset(args.json_file, args.data_dir, start_index=args.val_start_index, end_index=args.val_end_index, 
                                         transform=transform, transform2=clip_preprocess)
 
     train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True, num_workers=8, pin_memory=True)
