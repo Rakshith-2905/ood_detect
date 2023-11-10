@@ -8,7 +8,6 @@ from lightning.fabric.loggers import TensorBoardLogger, CSVLogger
 
 import argparse
 import os
-import matplotlib.pyplot as plt
 from tqdm import tqdm
 from functools import partial
 from datetime import datetime
