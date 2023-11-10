@@ -24,7 +24,7 @@ def get_save_dir(args):
     # Add time stamp to the save directory
 
     save_dir = os.path.join(args.save_dir, args.feature_extractor_name)
-    save_dir += f"{args.preffix}"
+    save_dir += f"{args.prefix}"
     save_dir += f"_{datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}"
 
     return save_dir
@@ -41,7 +41,7 @@ def progbar_wrapper(iterable: Iterable, total: int, **kwargs: Any):
         return tqdm(iterable, total=total, **kwargs)
     return iterable
     
-def train_one_epoch(train_loader, clip_model, feature_extractor, projector, text_encodings, criterion, optimizer, device, epoch):
+def train_one_epoch(train_loader, clip_model, feature_extractor, projector, criterion, optimizer, device, epoch):
     clip_model.eval()
     feature_extractor.eval()
     projector.train()
@@ -107,7 +107,7 @@ def train_one_epoch(train_loader, clip_model, feature_extractor, projector, text
     return  total_loss, total_image_loss, total_text_loss
 
 @torch.no_grad()
-def validate(val_loader, resnet_model, projector, text_encodings, criterion, device, epoch, label_mapping=None):
+def validate(val_loader, resnet_model, projector, criterion, device, epoch, label_mapping=None):
     
     clip_model.eval()
     feature_extractor.eval()
@@ -199,7 +199,7 @@ def main(args):
 
     feature_extractor, transform = build_feature_extractor(args.feature_extractor_name)
 
-    projector = ProjectionHead(input_dim=feature_extractor.feature_dim, output_dim=args.projection_dim).to(device)
+    projector = ProjectionHead(input_dim=feature_extractor.feature_dim, output_dim=args.projection_dim)
 
     # Create the data loader and wrap them with Fabric
     train_dataset = ImageTextDataset(args.data_dir, args.json_file, start_index=args.train_start_index, end_index=args.train_end_index, 
@@ -271,11 +271,11 @@ def main(args):
     for epoch in range(start_epoch, args.num_epochs):
 
         train_loss,  train_image_loss, train_text_loss = train_one_epoch(train_loader, clip_model, feature_extractor, projector, 
-                                                                                    text_encodings, criterion, optimizer, device, epoch)
+                                                                                    criterion, optimizer, device, epoch)
 
         if epoch % args.val_freq == 0:
             val_loss, val_image_loss, val_text_loss = validate(val_loader, clip_model, feature_extractor, projector, 
-                                                                        text_encodings, criterion, device, epoch)
+                                                                        criterion, device, epoch)
 
         fabric.print(f"{epoch}/{args.num_epochs}| Total Train Loss: {train_loss:.4f}, Train Image Loss: {train_image_loss:.4f}, Train Text Loss: {train_text_loss:.4f}, Total Val Loss: {val_loss:.4f}, Val Image Loss: {val_image_loss:.4f}, Val Text Loss: {val_text_loss:.4f}")
 
@@ -320,12 +320,14 @@ if __name__ == "__main__":
     parser.add_argument('--learning_rate', type=float, default=0.1, help='Learning rate for the optimizer')
     parser.add_argument('--val_freq', type=int, default=1, help='Validation frequency')
     parser.add_argument('--save_dir', type=str, default='checkpoints', help='Directory to save the results')
-    parser.add_argument('--preffix', type=str, default='', help='preffix to add to the save directory')
+    parser.add_argument('--prefix', type=str, default='', help='prefix to add to the save directory')
 
     parser.add_argument('--projection_dim', type=int, default=512, help='Dimension of the projected embeddings')
     parser.add_argument('--teacher_temp', type=float, default=0.5, help='Temperature for Dino loss')
     parser.add_argument('--student_temp', type=float, default=1, help='Temperature for Dino loss')
     parser.add_argument('--distill_loss_weight', type=float, default=1, help='Weight for distillation loss')
+
+    parser.add_argument('--num_gpus', type=int, default=8, help='Number of gpus for DDP')
 
     args = parser.parse_args()
 
@@ -333,7 +335,7 @@ if __name__ == "__main__":
     print(args)
 
 
-    fabric = L.Fabric(accelerator="cuda", devices=8, strategy="ddp")
+    fabric = L.Fabric(accelerator="cuda", devices=args.num_gpus, strategy="ddp")
     fabric.launch()
     
     seed_everything(args.seed)
