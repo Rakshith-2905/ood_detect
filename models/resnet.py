@@ -1,5 +1,21 @@
+import torch
 import torch.nn as nn
 from torchvision.models import resnet18, resnet34, resnet50, resnet101, resnet152
+import timm
+
+
+class CustomFeatureModel(nn.Module):
+    def __init__(self, model_name, use_pretrained=False):
+        super(CustomResNet, self).__init__()
+
+        supported_models = ['resnet18', 'resnet50', 'resnet101', 'resnet50x1_bitm', 'resnetv2_101x1_bit.goog_in21k']
+        if model_name != supported_models:
+            raise ValueError(f"Invalid model_name. Expected one of {supported_models}, but got {model_name}")
+
+        self.model = timm.create_model(model_name, pretrained=True, num_classes=0)
+
+    def forward(self, x):
+            return self.model(x)
 
 class CustomResNet(nn.Module):
     def __init__(self, model_name, num_classes, use_pretrained=False):

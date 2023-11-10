@@ -20,7 +20,7 @@ from PIL import Image
 import matplotlib.pyplot as plt
 
 class SAMBackbone(nn.Module):
-    def __init__(self, model_name, checkpoint_path=None, device='cuda'):
+    def __init__(self, model_name, checkpoint_path=None):
         super().__init__()
         """
         Args:
@@ -28,20 +28,24 @@ class SAMBackbone(nn.Module):
             checkpoint_path (str): Path to the checkpoint file
             device (str): Device to load the model on
         """
-        self.device = device
         if checkpoint_path is None:
             assert False, "Checkpoint path must be provided for {model_name}"
         elif not os.path.exists(checkpoint_path):
             assert False, f"Checkpoint path does not exist: {checkpoint_path}"
 
         try:
-            self.model = sam_model_registry[model_name](checkpoint=checkpoint_path).to(device)
+            self.model = sam_model_registry[model_name](checkpoint=checkpoint_path)
+
+            # TODO: Fix this
+            self.feature_dim = 1024
             # self.predictor = SamPredictor(sam)    
             self.image_encoder = self.model.image_encoder
             # Transform to resize the image to the longest side, add the preprocess that the model expects
             self.transform = transforms.Compose([
-                transforms.Resize(1024),
+                transforms.Resize((1024, 1024)),
                 transforms.ToTensor(),
+                transforms.Normalize(mean=[123.675, 116.28, 103.53],
+                                    std=[58.395, 57.12, 57.375])
             ])
 
         except Exception as e:
@@ -52,13 +56,11 @@ class SAMBackbone(nn.Module):
         if isinstance(images, list):
             images_torch = []
             for image in images:
-                image_tensor = self.transform(image).to(self.device)
-                images_torch.append(self.model.preprocess(image_tensor))
-
-            # images_torch = [self.model.preprocess(self.transform(image).to(self.device)) for image in images]
-            images_torch = torch.stack(images_torch) 
+                image_tensor = self.transform(image)
+                images_torch.append(image_tensor)
+            images_torch = torch.stack(images_torch).to(device) 
         else:
-            images_torch = self.model.preprocess(self.transform(images).to(self.device)).unsqueeze(0)
+            images_torch = self.transform(images).unsqueeze(0).to(device)
         
         return images_torch
 
@@ -75,8 +77,8 @@ class SAMBackbone(nn.Module):
         if not isinstance(images, torch.Tensor):
             images = self.preprocess_pil(images)
         else:
-            assert images.shape[2] == 1024, "The longer side of the image must be 1024"
-            images = self.model.preprocess(images.to(self.device))
+            if len(images.shape) == 3:
+                images = images.unsqueeze(0)
 
         features = self.image_encoder(images)
         return features
@@ -96,10 +98,10 @@ class MAEBackbone(nn.Module):
             assert False, f"Checkpoint path does not exist: {checkpoint_path}"
 
         try:
-            model = getattr(models_mae, model_name)()
+            self.model = getattr(models_mae, model_name)()
             # load model
             checkpoint = torch.load(checkpoint_path, map_location='cpu')
-            msg = model.load_state_dict(checkpoint['model'], strict=False)
+            msg = self.model.load_state_dict(checkpoint['model'], strict=False)
             print('Pretrained weights found at {} and loaded with msg: {}'.format(checkpoint_path, msg))
             # Transform to resize the image to the longest side, add the preprocess that the model expects
             self.transform = transforms.Compose([
@@ -109,9 +111,8 @@ class MAEBackbone(nn.Module):
                             transforms.Normalize(mean=[0.485, 0.456, 0.406],
                                                 std=[0.229, 0.224, 0.225])                
                         ])
-            self.image_encoder = model.forward_encoder
-            self.image_decoder = model.forward_decoder
-            self.unpatchify = model.unpatchify
+
+            self.feature_dim = 1024
 
         except Exception as e:
             assert False, f"Failed to load model: {e}"
@@ -142,13 +143,13 @@ class MAEBackbone(nn.Module):
             if len(images.shape) == 3:
                 images = images.unsqueeze(0)
 
-        features,_, ids_restore = self.image_encoder(images, mask_ratio=0)
+        features,_, ids_restore = self.model.forward_encoder(images, mask_ratio=0)
 
         if decode:
-            pred = self.image_decoder(features, ids_restore)
-            return features, pred
+            pred = self.model.forward_decoder(features, ids_restore)
+            return features[:,0], pred
 
-        return features
+        return features[:,0]
 
 class DINOBackbone(nn.Module):
     def __init__(self, model_name, checkpoint_path=None ):
@@ -157,12 +158,10 @@ class DINOBackbone(nn.Module):
         Args:
             model_name (str): Name of the model to load from the registry: [vit_h, vit_l, vit_b]
             checkpoint_path (str): Path to the checkpoint file
-            device (str): Device to load the model on
         """
-        self.device = device
 
         try:
-            model = torch.hub.load('facebookresearch/dino:main', model_name, pretrained=True)
+            self.model = torch.hub.load('facebookresearch/dino:main', model_name, pretrained=True)
             self.transform = transforms.Compose([
                             transforms.Resize(224),
                             transforms.CenterCrop(224),
@@ -170,6 +169,7 @@ class DINOBackbone(nn.Module):
                             transforms.Normalize(mean=[0.485, 0.456, 0.406],
                                                 std=[0.229, 0.224, 0.225])                
                         ])
+            self.feature_dim = 384
 
         except Exception as e:
             assert False, f"Failed to load model: {e}"
@@ -182,10 +182,10 @@ class DINOBackbone(nn.Module):
                 image_tensor = self.transform(image)
                 images_torch.append(image_tensor)
 
-            images_torch = torch.stack(images_torch) 
+            images_torch = torch.stack(images_torch).to(device) 
 
         else:
-            images_torch = self.transform(images).unsqueeze(0)
+            images_torch = self.transform(images).unsqueeze(0).to(device)
         
         return images_torch
 
@@ -197,6 +197,9 @@ class DINOBackbone(nn.Module):
         """
         if not isinstance(images, torch.Tensor):
             images = self.preprocess_pil(images)
+        else:
+            if len(images.shape) == 3:
+                images = images.unsqueeze(0)
 
         features = self.model(images)
         return features
@@ -206,17 +209,21 @@ if __name__ == "__main__":
     device = "cuda" if torch.cuda.is_available() else "cpu"
 
     # sam = SAMBackbone(model_name="vit_h", checkpoint_path="checkpoints/sam_vit_h_4b8939.pth").to(device)
-    # mae = MAEBackbone(model_name="mae_vit_large_patch16", checkpoint_path='./checkpoints/mae_visualize_vit_large_ganloss.pth').to(device)
-    dino = DINOBackbone(model_name="dino_vits16", checkpoint_path=None).to(device)
+    mae = MAEBackbone(model_name="mae_vit_large_patch16", checkpoint_path='./checkpoints/mae_visualize_vit_large_ganloss.pth').to(device)
+    # dino = DINOBackbone(model_name="dino_vits16", checkpoint_path=None).to(device)
 
-    pil_image = Image.open("../data/domainnet_v1.0/real/toothpaste/real_318_000284.jpg")
-    pil_images = [pil_image, pil_image, pil_image, pil_image, pil_image, pil_image, pil_image, pil_image]
+    pil_image = Image.open("./data/domainnet_v1.0/real/toothpaste/real_318_000284.jpg")
+    # pil_images = [pil_image, pil_image, pil_image, pil_image, pil_image, pil_image, pil_image, pil_image]
+    pil_images = [pil_image]
 
-    torch_images = torch.randn(4, 3, 224, 256).to(device)
+    torch_images = torch.randn(4, 3, 224, 224).to(device)
 
     with torch.no_grad():
         # features = sam(pil_images)
-        # features, y = mae(pil_images, decode=True)
-        features = dino(pil_images)
+        # Flatten features using average pooling
+        # features = F.adaptive_avg_pool2d(features, (1, 1)).squeeze(-1).squeeze(-1)
+
+        features = mae(torch_images)
+        # features = dino(pil_images)
 
     print(features.shape)

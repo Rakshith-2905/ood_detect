@@ -18,9 +18,10 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 
 
 class ImageTextDataset(Dataset):
-    def __init__(self, json_file, data_path, start_index=0, end_index=None, transform=None):
+    def __init__(self, json_file, data_path, start_index=0, end_index=None, transform=None, transform2=None):
         self.data_path = data_path
         self.transform = transform
+        self.transform2 = transform2
         self.samples = self._load_json(json_file, start_index, end_index)
 
     def _load_json(self, json_file, start_index, end_index):
@@ -44,8 +45,12 @@ class ImageTextDataset(Dataset):
         sample = self.samples[idx]
         image = Image.open(sample['image_path'])
         if self.transform:
-            image = self.transform(image)
-        return image, sample['caption'], sample['image_path']
+            image_trans = self.transform(image)
+        if self.transform2:
+            image_trans2 = self.transform2(image)
+            return image_trans, image_trans2, sample['caption'], sample['image_path']
+            
+        return image_trans, sample['caption'], sample['image_path']
 
 def save_chunk_features(image_features, text_features, save_path, chunk_start_index, chunk_end_index, feature_extractor_name, clip_model_name, chunk_filenames):
     # Combine the features from all batches
