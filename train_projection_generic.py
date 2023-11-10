@@ -107,7 +107,7 @@ def train_one_epoch(train_loader, clip_model, feature_extractor, projector, crit
     return  total_loss, total_image_loss, total_text_loss
 
 @torch.no_grad()
-def validate(val_loader, resnet_model, projector, criterion, device, epoch, label_mapping=None):
+def validate(val_loader, feature_extractor, projector, criterion, device, epoch, label_mapping=None):
     
     clip_model.eval()
     feature_extractor.eval()
