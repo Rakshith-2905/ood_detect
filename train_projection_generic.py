@@ -4,7 +4,7 @@ from torchmetrics.classification import Accuracy
 
 import lightning as L
 from lightning.fabric import Fabric, seed_everything
-from lighting.fabric.loggers import TensorBoardLogger, CSVLogger
+from lightning.fabric.loggers import TensorBoardLogger, CSVLogger
 
 import argparse
 import os
@@ -297,7 +297,6 @@ def main(args):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Train ResNet on WILDS Dataset')
 
-    parser.add_argument('--dataset', type=str, required=True, help='Name of the dataset')
     parser.add_argument('--data_dir', type=str, default='data/domainnet_v1.0', help='Path to the data directory')
     parser.add_argument('--json_file', required=True, help='Path to the JSON file.')
     parser.add_argument('--train_start_index', type=int, default=0, help='The starting line index in the JSON file.')
@@ -322,7 +321,6 @@ if __name__ == "__main__":
     parser.add_argument('--projection_dim', type=int, default=512, help='Dimension of the projected embeddings')
     parser.add_argument('--teacher_temp', type=float, default=0.5, help='Temperature for Dino loss')
     parser.add_argument('--student_temp', type=float, default=1, help='Temperature for Dino loss')
-    parser.add_argument('--distill_loss_weight', type=float, default=1, help='Weight for distillation loss')
 
     parser.add_argument('--num_gpus', type=int, default=8, help='Number of gpus for DDP')
 
