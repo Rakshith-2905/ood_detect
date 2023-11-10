@@ -160,9 +160,9 @@ def validate(val_loader, resnet_model, projector, criterion, device, epoch, labe
 
     # TODO: Check if this is correct
     # all_gather is used to aggregated the value across processes
-    total_loss = fabric.all_gather(total_loss).sum() / len(test_loader)
-    total_image_loss = fabric.all_gather(total_image_loss).sum() / len(test_loader)
-    total_text_loss = fabric.all_gather(total_text_loss).sum() / len(test_loader)
+    total_loss = fabric.all_gather(total_loss).sum() / len(val_loader)
+    total_image_loss = fabric.all_gather(total_image_loss).sum() / len(val_loader)
+    total_text_loss = fabric.all_gather(total_text_loss).sum() / len(val_loader)
 
     return  total_loss, total_image_loss, total_text_loss
 
@@ -177,11 +177,11 @@ def build_feature_extractor(feature_extractor_name, feature_extractor_checkpoint
     if args.feature_extractor_name == 'sam_vit_h':
         if feature_extractor_checkpoint_path is None:
             feature_extractor_checkpoint_path = "checkpoints/sam_vit_h_4b8939.pth"
-        feature_extractor = SAMBackbone("vit_h", "checkpoints/sam_vit_h_4b8939.pth").to(device)
+        feature_extractor = SAMBackbone("vit_h", feature_extractor_checkpoint_path)
     elif args.feature_extractor_name == 'mae_vit_large_patch16':
         if feature_extractor_checkpoint_path is None:
             feature_extractor_checkpoint_path = "checkpoints/mae_visualize_vit_large_ganloss.pth"
-        feature_extractor = MAEBackbone("mae_vit_large_patch16", "checkpoints/mae_visualize_vit_large_ganloss.pth")
+        feature_extractor = MAEBackbone("mae_vit_large_patch16", feature_extractor_checkpoint_path)
     elif args.feature_extractor_name == 'dino_vits16':
         feature_extractor = DINOBackbone("dino_vits16", None)
     elif args.feature_extractor_name == ['resnet18', 'resnet50', 'resnet101', 'resnet50x1_bitm', 'resnetv2_101x1_bit.goog_in21k']:
@@ -195,7 +195,7 @@ def build_feature_extractor(feature_extractor_name, feature_extractor_checkpoint
 def main(args):
     
     # Load the CLIP model
-    clip_model, clip_preprocess = clip.load(args.clip_model_name, device="cpu")
+    clip_model, clip_preprocess = clip.load(args.clip_model_name)
 
     feature_extractor, transform = build_feature_extractor(args.feature_extractor_name)
 
