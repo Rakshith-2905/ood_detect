@@ -228,28 +228,9 @@ def main(args):
 
     # Wrap the feature extractor and optimizer with Fabric
     projector, optimizer = fabric.setup(projector, optimizer)
-
-    # Make directory for saving results
-    save_dir = get_save_dir(args)
-    if not os.path.exists(save_dir):
-        os.makedirs(save_dir, exist_ok=True)
-    
-    fabric.print(f"Results will be saved to {save_dir}")
-    
-
-    if fabric.is_global_zero:
-        # Save arguments
-        with open(os.path.join(save_dir, 'args.txt'), 'w') as f:
-            for arg, value in vars(args).items():
-                f.write(f"{arg}: {value}\n")
-        fabric.barrier()
     
     start_epoch = 0
     state = {"projector": projector, "optimizer": optimizer, "epoch": start_epoch}
-
-    tb_logger = TensorBoardLogger(save_dir)
-    csv_logger = CSVLogger(save_dir)
-    fabric.loggers = [tb_logger, csv_logger]
 
     if args.resume_checkpoint_path:
         fabric.load(args.resume_checkpoint_path, state)
@@ -329,7 +310,22 @@ if __name__ == "__main__":
     print(args)
 
 
-    fabric = L.Fabric(accelerator="cuda", devices=args.num_gpus, strategy="ddp")
+    # Make directory for saving results
+    save_dir = get_save_dir(args)
+    if not os.path.exists(save_dir):
+        os.makedirs(save_dir, exist_ok=True)
+    
+    print(f"Results will be saved to {save_dir}")
+    
+    with open(os.path.join(save_dir, 'args.txt'), 'w') as f:
+        for arg, value in vars(args).items():
+            f.write(f"{arg}: {value}\n")
+
+    tb_logger = TensorBoardLogger(save_dir)
+    csv_logger = CSVLogger(save_dir)
+
+
+    fabric = L.Fabric(accelerator="cuda", devices=args.num_gpus, strategy="ddp", loggers=[tb_logger, csv_logger])
     fabric.launch()
     
     seed_everything(args.seed)

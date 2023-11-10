@@ -76,8 +76,8 @@ class CustomResNet(nn.Module):
 
 if __name__ == "__main__":
 
-    model = CustomFeatureModel(model_name='resnet50', use_pretrained=True)
+    model = CustomFeatureModel(model_name='resnetv2_101x1_bit.goog_in21k', use_pretrained=True)
     features = model(torch.zeros(1, 3, 224, 224))
     print(features.shape)
-    print(features)
+    print(model.feature_dim)
 
