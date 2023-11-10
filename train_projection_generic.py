@@ -123,7 +123,7 @@ def validate(val_loader, clip_model, feature_extractor, projector, criterion, ep
 
         clip_image_embeddings = clip_model.encode_image(images_clip_batch)
 
-        text_tokens = clip.tokenize(captions_batch)
+        text_tokens = fabric.to_device(clip.tokenize(captions_batch, truncate=True))
         clip_txt_embeddings = clip_model.encode_text(text_tokens).detach().cpu()
 
         custom_image_embeddings = feature_extractor(images_batch)
