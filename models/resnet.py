@@ -9,7 +9,7 @@ class CustomFeatureModel(nn.Module):
         super(CustomFeatureModel, self).__init__()
 
         supported_models = ['resnet18', 'resnet50', 'resnet101', 'resnet50x1_bitm', 'resnetv2_101x1_bit.goog_in21k']
-        if model_name != supported_models:
+        if model_name not in supported_models:
             raise ValueError(f"Invalid model_name. Expected one of {supported_models}, but got {model_name}")
 
         self.model = timm.create_model(model_name, pretrained=True, num_classes=0)
