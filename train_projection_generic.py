@@ -212,9 +212,6 @@ def main(args):
 
     train_loader, val_loader = fabric.setup_dataloaders(train_loader, val_loader)
 
-    fabric.print(f"Loaded text encodings of shape: {text_encodings.shape}")
-
-
     # Create the optimizer and scheduler
     if args.optimizer == 'adam':
         optimizer = torch.optim.Adam(projector.parameters(), lr=args.learning_rate)
