@@ -5,7 +5,6 @@ from torchvision import transforms
 
 import timm
 
-print('hi')
 class CustomFeatureModel(nn.Module):
     def __init__(self, model_name, use_pretrained=False):
         super(CustomFeatureModel, self).__init__()
