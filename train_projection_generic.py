@@ -184,7 +184,7 @@ def build_feature_extractor(feature_extractor_name, feature_extractor_checkpoint
         feature_extractor = MAEBackbone("mae_vit_large_patch16", feature_extractor_checkpoint_path)
     elif args.feature_extractor_name == 'dino_vits16':
         feature_extractor = DINOBackbone("dino_vits16", None)
-    elif args.feature_extractor_name == ['resnet18', 'resnet50', 'resnet101', 'resnet50x1_bitm', 'resnetv2_101x1_bit.goog_in21k']:
+    elif args.feature_extractor_name in ['resnet18', 'resnet50', 'resnet101', 'resnet50x1_bitm', 'resnetv2_101x1_bit.goog_in21k']:
         feature_extractor = CustomFeatureModel(args.feature_extractor_name, use_pretrained=True)
     else:
         raise NotImplementedError(f"{feature_extractor_name} is not implemented.")
