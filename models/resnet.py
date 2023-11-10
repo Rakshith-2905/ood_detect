@@ -1,6 +1,8 @@
 import torch
 import torch.nn as nn
 from torchvision.models import resnet18, resnet34, resnet50, resnet101, resnet152
+from torchvision import transforms
+
 import timm
 
 
@@ -20,7 +22,7 @@ class CustomFeatureModel(nn.Module):
         if model_name not in supported_models:
             raise ValueError(f"Invalid model_name. Expected one of {supported_models}, but got {model_name}")
 
-        self.model = timm.create_model(model_name, pretrained=True, num_classes=0)
+        self.model = timm.create_model(model_name, pretrained=use_pretrained, num_classes=0)
 
     def forward(self, x):
             return self.model(x)
