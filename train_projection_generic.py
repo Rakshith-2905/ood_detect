@@ -316,8 +316,8 @@ if __name__ == "__main__":
     parser.add_argument('--batch_size', type=int, default=32, help='Batch size for the dataloader')
     parser.add_argument('--seed', type=int, default=42, help='Seed for reproducibility')
 
-    parser.add_argument('--feature_extractor_name', required=True, choices=['sam_vit_h', 'mae_vit_large_patch16', 'dino_vits16'],  help='Name of the feature extractor to use.')
-    parser.add_argument('--clip_model_name', default='RN50', help='Name of the CLIP model to use.')
+    parser.add_argument('--feature_extractor_name', required=True, choices=['sam_vit_h', 'mae_vit_large_patch16', 'dino_vits16', 'resnet50x1_bitm', 'resnetv2_101x1_bit.goog_in21k'],  help='Name of the feature extractor to use.')
+    parser.add_argument('--clip_model_name', default='ViT-B/32', help='Name of the CLIP model to use.')
     parser.add_argument('--resume_checkpoint_path', type=str, help='Path to checkpoint to resume training from')
 
     parser.add_argument('--num_epochs', type=int, default=100, help='Number of training epochs')
