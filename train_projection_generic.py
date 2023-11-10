@@ -29,7 +29,7 @@ def get_save_dir(args):
 
     return save_dir
 
-def progbar_wrapper(iterable: Iterable, total: int, **kwargs: Any):
+def progbar_wrapper(iterable, total, **kwargs):
     """Wraps the iterable with tqdm for global rank zero.
 
     Args:
@@ -41,7 +41,7 @@ def progbar_wrapper(iterable: Iterable, total: int, **kwargs: Any):
         return tqdm(iterable, total=total, **kwargs)
     return iterable
     
-def train_one_epoch(train_loader, clip_model, feature_extractor, projector, criterion, optimizer, device, epoch):
+def train_one_epoch(train_loader, clip_model, feature_extractor, projector, criterion, optimizer, epoch):
     clip_model.eval()
     feature_extractor.eval()
     projector.train()
@@ -57,7 +57,7 @@ def train_one_epoch(train_loader, clip_model, feature_extractor, projector, crit
 
         optimizer.zero_grad()
         
-        clip_image_embeddings = clip_model.encode_image(images_clip_batch)
+        # clip_image_embeddings = clip_model.encode_image(images_clip_batch)
 
         # Extract features for images and text
         with torch.no_grad():
@@ -107,7 +107,7 @@ def train_one_epoch(train_loader, clip_model, feature_extractor, projector, crit
     return  total_loss, total_image_loss, total_text_loss
 
 @torch.no_grad()
-def validate(val_loader, feature_extractor, projector, criterion, device, epoch, label_mapping=None):
+def validate(val_loader, clip_model, feature_extractor, projector, criterion, epoch, label_mapping=None):
     
     clip_model.eval()
     feature_extractor.eval()
@@ -118,13 +118,13 @@ def validate(val_loader, feature_extractor, projector, criterion, device, epoch,
     total_text_loss = 0
 
     pbar = progbar_wrapper(
-        train_loader, total=len(train_loader), desc=f"Validation Epoch {epoch+1}"
+        val_loader, total=len(val_loader), desc=f"Validation Epoch {epoch+1}"
     )
     for images_batch, images_clip_batch, captions_batch, image_names_batch in pbar:
 
         clip_image_embeddings = clip_model.encode_image(images_clip_batch)
 
-        text_tokens = clip.tokenize(captions_batch).to(device)
+        text_tokens = clip.tokenize(captions_batch)
         clip_txt_embeddings = clip_model.encode_text(text_tokens).detach().cpu()
 
         custom_image_embeddings = feature_extractor(images_batch)
@@ -268,11 +268,11 @@ def main(args):
     for epoch in range(start_epoch, args.num_epochs):
 
         train_loss,  train_image_loss, train_text_loss = train_one_epoch(train_loader, clip_model, feature_extractor, projector, 
-                                                                                    criterion, optimizer, device, epoch)
+                                                                                    criterion, optimizer, epoch)
 
         if epoch % args.val_freq == 0:
             val_loss, val_image_loss, val_text_loss = validate(val_loader, clip_model, feature_extractor, projector, 
-                                                                        criterion, device, epoch)
+                                                                        criterion, epoch)
 
         fabric.print(f"{epoch}/{args.num_epochs}| Total Train Loss: {train_loss:.4f}, Train Image Loss: {train_image_loss:.4f}, Train Text Loss: {train_text_loss:.4f}, Total Val Loss: {val_loss:.4f}, Val Image Loss: {val_image_loss:.4f}, Val Text Loss: {val_text_loss:.4f}")
 
