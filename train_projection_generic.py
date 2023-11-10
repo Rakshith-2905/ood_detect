@@ -25,7 +25,6 @@ def get_save_dir(args):
 
     save_dir = os.path.join(args.save_dir, args.feature_extractor_name)
     save_dir += f"{args.preffix}"
-    # save_dir += f"_{args.similarity_mode}"
     save_dir += f"_{datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}"
 
     return save_dir
@@ -213,10 +212,6 @@ def main(args):
 
     train_loader, val_loader = fabric.setup_dataloaders(train_loader, val_loader)
 
-    # Load the prompt embeddings
-    prompt_embeddings = torch.load(args.prompt_embeddings_pth)
-    text_encodings = prompt_embeddings[0]
-
     fabric.print(f"Loaded text encodings of shape: {text_encodings.shape}")
 
 
@@ -330,9 +325,6 @@ if __name__ == "__main__":
     parser.add_argument('--projection_dim', type=int, default=512, help='Dimension of the projected embeddings')
     parser.add_argument('--teacher_temp', type=float, default=0.5, help='Temperature for Dino loss')
     parser.add_argument('--student_temp', type=float, default=1, help='Temperature for Dino loss')
-
-    parser.add_argument('--prompt_embeddings_pth', type=str, required=True, help='Path to the prompt embeddings')
-    parser.add_argument('--similarity_mode', type=str, choices=['cosine', 'DN', 'DN*'], default='cosine', help='Type of similarity to use for label mapping')
     parser.add_argument('--distill_loss_weight', type=float, default=1, help='Weight for distillation loss')
 
     args = parser.parse_args()
