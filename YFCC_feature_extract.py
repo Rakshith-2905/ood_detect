@@ -44,7 +44,7 @@ class ImageTextDataset(Dataset):
 
     def __getitem__(self, idx):
         sample = self.samples[idx]
-        image = Image.open(sample['image_path'])
+        image = Image.open(sample['image_path']).convert('RGB')
         if self.transform:
             image_trans = self.transform(image)
         if self.transform2:
