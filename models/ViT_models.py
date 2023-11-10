@@ -15,7 +15,6 @@ from models.mae import models_mae
 
 import os
 import numpy as np
-import cv2
 from PIL import Image
 import matplotlib.pyplot as plt
 
