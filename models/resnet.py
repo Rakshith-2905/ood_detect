@@ -6,7 +6,7 @@ import timm
 
 class CustomFeatureModel(nn.Module):
     def __init__(self, model_name, use_pretrained=False):
-        super(CustomResNet, self).__init__()
+        super(CustomFeatureModel, self).__init__()
 
         supported_models = ['resnet18', 'resnet50', 'resnet101', 'resnet50x1_bitm', 'resnetv2_101x1_bit.goog_in21k']
         if model_name != supported_models:
