@@ -60,7 +60,7 @@ def train_one_epoch(train_loader, clip_model, feature_extractor, projector, crit
 
         # Extract features for images and text
         with torch.no_grad():
-            text_tokens = clip.tokenize(captions_batch)
+            text_tokens = clip.tokenize(captions_batch, truncate=True)
             clip_txt_embeddings = clip_model.encode_text(text_tokens).detach().cpu()
 
         custom_image_embeddings = feature_extractor(images_batch)
