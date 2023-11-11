@@ -20,7 +20,11 @@ from models.projector import ProjectionHead
 from utils import SimpleDINOLoss, compute_accuracy, compute_similarities, plot_grad_flow
 
 def get_save_dir(args):
-    # Add time stamp to the save directory
+    
+    # If resume_checkpoint_path is provided, then use the save_dir from that checkpoint
+    if args.resume_checkpoint_path:
+        save_dir = os.path.dirname(args.resume_checkpoint_path)
+        return save_dir
 
     save_dir = os.path.join(args.save_dir, args.feature_extractor_name)
     save_dir += f"{args.prefix}"
