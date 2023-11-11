@@ -11,7 +11,7 @@ from tqdm import tqdm
 
 from models.resnet import CustomResNet
 from domainnet_data import DomainNetDataset, get_domainnet_loaders
-from utils import compute_accuracy
+from utils_proj import compute_accuracy
 
 
 def get_all_domainnet_loaders(batch_size=32):

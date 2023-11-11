@@ -29,7 +29,7 @@ from models.ViT_models import SAMBackbone, MAEBackbone, DINOBackbone
 from models.resnet import CustomFeatureModel
 from models.projector import ProjectionHead
 from YFCC_feature_extract import ImageTextDataset
-from utils import SimpleDINOLoss, compute_accuracy, compute_similarities, plot_grad_flow
+from utils_proj import SimpleDINOLoss, compute_accuracy, compute_similarities, plot_grad_flow
 
 
 def cleanup():
@@ -357,12 +357,12 @@ def main(args):
                 }
                 torch.save(checkpoint, os.path.join(args.save_dir, "best_projector_weights.pth"))
             
-            if epoch % 10 == 0:
+            if epoch % 1 == 0:
                 checkpoint['epoch'] = epoch
-                torch.save(checkpoint, os.path.join(args.save_dir, "projector_weights.pth"))
+                torch.save(checkpoint, os.path.join(args.save_dir, f"projector_weights_epoch_{epoch}.pth"))
 
     if rank == 0:
-        torch.save(checkpoint, os.path.join(args.save_dir, "projector_weights.pth"))
+        torch.save(checkpoint, os.path.join(args.save_dir, "projector_weights_final.pth"))
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Train ResNet on WILDS Dataset')
