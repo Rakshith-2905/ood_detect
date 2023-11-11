@@ -319,6 +319,9 @@ if __name__ == "__main__":
     fabric.launch()
     
 
+    # The total number of processes running across all devices and nodes
+    fabric.print(f"World size: {fabric.world_size}")  # 2 * 3 = 6
+
     if fabric.is_global_zero:
         # Make directory for saving results
         args.save_dir = get_save_dir(args)
