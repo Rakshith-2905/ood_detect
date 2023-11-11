@@ -58,8 +58,8 @@ def get_save_dir(args):
 
     return save_dir
 
-def reduce_tensor(tensor, rank):
-    rt = tensor.clone()
+def reduce_tensor(rt, rank):
+    #rt = tensor.clone()
     dist.all_reduce(rt, op=dist.ReduceOp.SUM)
     rt /= dist.get_world_size()
     return rt
@@ -81,9 +81,9 @@ def train_one_epoch(train_loader, clip_model, feature_extractor, projector, crit
     feature_extractor.eval()
     projector.train()
     
-    total_loss = 0
-    total_image_loss = 0
-    total_text_loss = 0
+    total_loss = torch.tensor(0.0).to(device)
+    total_image_loss = torch.tensor(0.0).to(device)
+    total_text_loss = torch.tensor(0.0).to(device)
 
     pbar = progbar_wrapper(train_loader, total=len(train_loader), rank=rank, desc=f"Training Epoch {epoch + 1}")
     for images_batch, images_clip_batch, captions_batch, image_names_batch in pbar:
@@ -135,7 +135,7 @@ def train_one_epoch(train_loader, clip_model, feature_extractor, projector, crit
         total_text_loss += loss_text.item()
 
         if rank == 0:
-            pbar.set_description({"Batch Loss": batch_loss, "Image Loss": loss_image.item(), "Text Loss": loss_text.item()})
+            pbar.set_postfix({"Batch Loss": batch_loss, "Image Loss": loss_image.item(), "Text Loss": loss_text.item()})
 
     # TODO: CHECK Reduce losses across all processes
     total_loss = reduce_tensor(total_loss, rank).item()/len(train_loader)
@@ -151,9 +151,9 @@ def validate(val_loader, clip_model, feature_extractor, projector, criterion, ep
     feature_extractor.eval()
     projector.train()
     
-    total_loss = 0
-    total_image_loss = 0
-    total_text_loss = 0
+    total_loss = torch.tensor(0.0).to(device)
+    total_image_loss = torch.tensor(0.0).to(device)
+    total_text_loss = torch.tensor(0.0).to(device)
 
     pbar = progbar_wrapper(val_loader, total=len(val_loader), rank=rank, desc=f"Validation Epoch {epoch + 1}")
     for images_batch, images_clip_batch, captions_batch, image_names_batch in pbar:
@@ -199,7 +199,7 @@ def validate(val_loader, clip_model, feature_extractor, projector, criterion, ep
         total_text_loss += loss_text.item()
 
         if rank == 0:
-            pbar.set_description({"Batch Loss": batch_loss, "Image Loss": loss_image.item(), "Text Loss": loss_text.item()})
+            pbar.set_postfix({"Batch Loss": batch_loss, "Image Loss": loss_image.item(), "Text Loss": loss_text.item()})
 
     # TODO: CHECK Reduce losses across all processes
     total_loss = reduce_tensor(total_loss, rank).item()/len(val_loader)
@@ -260,17 +260,17 @@ def main(args):
             for arg, value in vars(args).items():
                 f.write(f"{arg}: {value}\n")
 
-    device = torch.device(f'cuda:{rank}' if torch.cuda.is_available() else 'cpu')
+    device = torch.device(f'cuda' if torch.cuda.is_available() else 'cpu')
     # Load the CLIP model and build feature extractor, projector
     # Ensure models and data are on the correct device
     clip_model, clip_preprocess = clip.load(args.clip_model_name, device='cuda')
     feature_extractor, transform = build_feature_extractor(args.feature_extractor_name)
     feature_extractor.to(device)
-    feature_extractor = DDP(feature_extractor, device_ids=[rank])
+    feature_extractor = DDP(feature_extractor, device_ids=[0])
 
     projector = ProjectionHead(input_dim=feature_extractor.module.feature_dim, output_dim=args.projection_dim)
     projector.to(device)
-    projector = DDP(projector, device_ids=[rank])
+    projector = DDP(projector, device_ids=[0])
 
     # Create Distributed Samplers and DataLoaders
     train_dataset = ImageTextDataset(args.json_file, args.data_dir, start_index=args.train_start_index, end_index=args.train_end_index, 

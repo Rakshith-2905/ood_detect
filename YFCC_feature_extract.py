@@ -9,7 +9,7 @@ from tqdm import tqdm
 import torch
 from torch.utils.data import Dataset, DataLoader
 import clip
-
+import random
 from models.ViT_models import SAMBackbone, MAEBackbone, DINOBackbone
 import lightning as L
 
@@ -42,16 +42,42 @@ class ImageTextDataset(Dataset):
     def __len__(self):
         return len(self.samples)
 
+    # def __getitem__(self, idx):
+    #     sample = self.samples[idx]
+        
+    #     image = Image.open(sample['image_path']).convert('RGB')
+    #     if self.transform:
+    #         image_trans = self.transform(image)
+    #     if self.transform2:
+    #         image_trans2 = self.transform2(image)
+    #         return image_trans, image_trans2, sample['caption'], sample['image_path']
+    
+
+            
+    #     return image_trans, sample['caption'], sample['image_path']
     def __getitem__(self, idx):
         sample = self.samples[idx]
-        image = Image.open(sample['image_path']).convert('RGB')
-        if self.transform:
-            image_trans = self.transform(image)
+        image_path = sample['image_path']
+        caption = sample['caption']
+
+        try:
+            image = Image.open(image_path).convert('RGB')
+            image_trans = self.transform(image) if self.transform else image
+            image_trans2 = self.transform2(image) if self.transform2 else image
+        except Exception as e:
+            # Print error message (optional)
+            print(f"Error with image {image_path}: {e}. Selecting a random replacement.")
+
+            # Choose a random index and recursively call __getitem__
+            random_idx = random.randint(0, len(self.samples) - 1)
+            return self.__getitem__(random_idx) 
+
         if self.transform2:
-            image_trans2 = self.transform2(image)
-            return image_trans, image_trans2, sample['caption'], sample['image_path']
+            return image_trans, image_trans2, caption, image_path
             
-        return image_trans, sample['caption'], sample['image_path']
+        return image_trans, caption, image_path
+
+
 
 def save_chunk_features(image_features, text_features, save_path, chunk_start_index, chunk_end_index, feature_extractor_name, clip_model_name, chunk_filenames):
     # Combine the features from all batches
