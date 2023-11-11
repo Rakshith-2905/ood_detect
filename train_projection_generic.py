@@ -266,13 +266,13 @@ def main(args):
             best_val_loss = val_loss
             
             state.update(epoch=epoch)
-            fabric.save(os.path.join(save_dir, "best_projector_weights.pth"), state)
+            fabric.save(os.path.join(args.save_dir, "best_projector_weights.pth"), state)
         
         if epoch % 10 == 0:
             state.update(epoch=epoch)
-            fabric.save(os.path.join(save_dir, "projector_weights.pth"), state)
+            fabric.save(os.path.join(args.save_dir, "projector_weights.pth"), state)
 
-    fabric.save(os.path.join(save_dir, "projector_weights.pth"), state)
+    fabric.save(os.path.join(args.save_dir, "projector_weights.pth"), state)
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Train ResNet on WILDS Dataset')
@@ -310,25 +310,28 @@ if __name__ == "__main__":
     print(args)
 
 
-    # Make directory for saving results
-    save_dir = get_save_dir(args)
-    temp_dir = os.path.join(save_dir, 'lightning_logs')
-    if not os.path.exists(temp_dir):
-        os.makedirs(temp_dir, exist_ok=True)
-    
-    print(f"Results will be saved to {save_dir}")
-    
-    with open(os.path.join(save_dir, 'args.txt'), 'w') as f:
-        for arg, value in vars(args).items():
-            f.write(f"{arg}: {value}\n")
-
-    tb_logger = TensorBoardLogger(save_dir)
-    csv_logger = CSVLogger(save_dir)
-
 
     fabric = L.Fabric(accelerator="cuda", devices=args.num_gpus, strategy="ddp", loggers=[tb_logger, csv_logger])
     fabric.launch()
     
+
+    if fabric.is_global_zero:
+        # Make directory for saving results
+        args.save_dir = get_save_dir(args)
+        temp_dir = os.path.join(save_dir, 'lightning_logs')
+        if not os.path.exists(temp_dir):
+            os.makedirs(temp_dir, exist_ok=True)
+        
+        print(f"Results will be saved to {save_dir}")
+        
+        with open(os.path.join(args.save_dir, 'args.txt'), 'w') as f:
+            for arg, value in vars(args).items():
+                f.write(f"{arg}: {value}\n")
+                
+
+    tb_logger = TensorBoardLogger(args.save_dir)
+    csv_logger = CSVLogger(args.save_dir)
+
     seed_everything(args.seed)
 
     main(args)
