@@ -1,3 +1,10 @@
+import os
+try:
+    del os.environ['OMP_PLACES']
+    del os.environ['OMP_PROC_BIND']
+except:
+    pass
+
 import torch
 import torch.nn.functional as F
 import torch.distributed as dist
