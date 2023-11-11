@@ -29,18 +29,6 @@ from models.projector import ProjectionHead
 from YFCC_feature_extract import ImageTextDataset
 from utils import SimpleDINOLoss, compute_accuracy, compute_similarities, plot_grad_flow
 
-# def setup(args):
-#     args.world_size =int(os.environ['OMPI_COMM_WORLD_SIZE'])
-#     args.rank = int(os.environ['OMPI_COMM_WORLD_RANK'])
-#     args.gpu = 0#int(os.environ["LOCAL_RANK"])
-#     torch.cuda.set_device(args.gpu)
-#     args.dist_backend = 'nccl'
-#     print('| distributed init (rank {}): {}'.format(args.rank, args.dist_url), flush=True)
-#     dist.init_process_group(backend=args.dist_backend, init_method=args.dist_url,
-#                                          world_size=args.world_size, rank=args.rank)
-#     dist.barrier()
-#     setup_for_distributed(args.rank == 0)
-    
 
 def cleanup():
     dist.destroy_process_group()
