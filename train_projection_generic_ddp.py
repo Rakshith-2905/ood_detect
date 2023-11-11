@@ -5,6 +5,7 @@ from torch.nn.parallel import DistributedDataParallel as DDP
 import torch.multiprocessing as mp
 from torch.utils.data.distributed import DistributedSampler
 from torchmetrics.classification import Accuracy
+import utils_ddp
 
 import argparse
 import os
@@ -17,13 +18,18 @@ from models.projector import ProjectionHead
 from YFCC_feature_extract import ImageTextDataset
 from utils import SimpleDINOLoss, compute_accuracy, compute_similarities, plot_grad_flow
 
-def setup(rank, world_size):
-    os.environ['MASTER_ADDR'] = 'localhost'
-    os.environ['MASTER_PORT'] = '12355'
-    dist.init_process_group("nccl", rank=rank, world_size=world_size)
-
-    print(f"Rank {rank} initialized with world size {world_size}")
-
+# def setup(args):
+#     args.world_size =int(os.environ['OMPI_COMM_WORLD_SIZE'])
+#     args.rank = int(os.environ['OMPI_COMM_WORLD_RANK'])
+#     args.gpu = 0#int(os.environ["LOCAL_RANK"])
+#     torch.cuda.set_device(args.gpu)
+#     args.dist_backend = 'nccl'
+#     print('| distributed init (rank {}): {}'.format(args.rank, args.dist_url), flush=True)
+#     dist.init_process_group(backend=args.dist_backend, init_method=args.dist_url,
+#                                          world_size=args.world_size, rank=args.rank)
+#     dist.barrier()
+#     setup_for_distributed(args.rank == 0)
+    
 
 def cleanup():
     dist.destroy_process_group()
@@ -230,10 +236,16 @@ def build_feature_extractor(feature_extractor_name, feature_extractor_checkpoint
     transform = feature_extractor.transform
     return feature_extractor, transform
 
-def main_worker(rank, world_size, args):
-    setup(rank, world_size)
-    torch.cuda.set_device(rank)
+def main(args):
 
+    try:
+        utils_ddp.init_distributed_mode_lassen(args)
+    except:
+        assert Exception("Failed to initialize distributed mode")
+    
+    world_size = utils_ddp.get_world_size()
+    rank = utils_ddp.get_rank()
+    
     if rank == 0:
         # Make directory for saving results
         args.save_dir = get_save_dir(args)
@@ -287,7 +299,6 @@ def main_worker(rank, world_size, args):
     # Load checkpoint if available
     if args.resume_checkpoint_path and os.path.isfile(args.resume_checkpoint_path):
         checkpoint = torch.load(args.resume_checkpoint_path, map_location='cpu')
-        feature_extractor.module.load_state_dict(checkpoint['feature_extractor_state'])
         projector.module.load_state_dict(checkpoint['projector_state'])
         optimizer.load_state_dict(checkpoint['optimizer_state'])
         start_epoch = checkpoint['epoch']
@@ -337,7 +348,6 @@ def main_worker(rank, world_size, args):
                 best_val_loss = val_loss
                 checkpoint = {
                     'epoch': epoch,
-                    'feature_extractor_state': feature_extractor.module.state_dict(),
                     'projector_state': projector.module.state_dict(),
                     'optimizer_state': optimizer.state_dict(),
                     'best_val_loss': best_val_loss,
@@ -383,6 +393,4 @@ if __name__ == "__main__":
 
     args = parser.parse_args()
 
-    world_size = torch.cuda.device_count()
-
-    mp.spawn(main_worker, args=(world_size, args), nprocs=world_size, join=True)
+    main(args)
