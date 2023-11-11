@@ -96,7 +96,7 @@ def train_one_epoch(train_loader, clip_model, feature_extractor, projector, crit
         total_image_loss += loss_image.item()
         total_text_loss += loss_text.item()
         
-        pbar.set_postfix_str({"Batch Loss": batch_loss, "Image Loss": loss_image.item(), "Text Loss": loss_text.item()})
+        # pbar.set_postfix_str({"Batch Loss": batch_loss, "Image Loss": loss_image.item(), "Text Loss": loss_text.item()})
 
     # TODO: Check if this is correct
     total_loss = fabric.all_gather(total_loss).sum() / len(train_loader)
@@ -124,7 +124,7 @@ def validate(val_loader, clip_model, feature_extractor, projector, criterion, ep
         clip_image_embeddings = clip_model.encode_image(images_clip_batch)
 
         text_tokens = fabric.to_device(clip.tokenize(captions_batch, truncate=True))
-        clip_txt_embeddings = clip_model.encode_text(text_tokens).detach().cpu()
+        clip_txt_embeddings = clip_model.encode_text(text_tokens)
 
         custom_image_embeddings = feature_extractor(images_batch)
 
@@ -143,7 +143,7 @@ def validate(val_loader, clip_model, feature_extractor, projector, criterion, ep
         # We want to maximize the diagonal entries of the logits matrix while minimizing the off-diagonal entries
 
         # labels are indexes to the diagonal entries of the logits matrix
-        pseudo_labels = torch.arange(len(proj_embeddings)).long() # (batch_size)
+        pseudo_labels = fabric.to_device(torch.arange(len(proj_embeddings)).long()) # (batch_size)
 
         loss_image = F.cross_entropy(logits_per_projection, pseudo_labels)
         loss_text = F.cross_entropy(logits_per_text, pseudo_labels)
@@ -155,7 +155,7 @@ def validate(val_loader, clip_model, feature_extractor, projector, criterion, ep
         total_image_loss += loss_image.item()
         total_text_loss += loss_text.item()
         
-        pbar.set_postfix({"Batch Loss": batch_loss, "Image Loss": loss_image.item(), "Text Loss": loss_text.item()})
+        # pbar.set_postfix({"Batch Loss": batch_loss, "Image Loss": loss_image.item(), "Text Loss": loss_text.item()})
 
     # TODO: Check if this is correct
     # all_gather is used to aggregated the value across processes
