@@ -12,6 +12,8 @@ from torch.nn.parallel import DistributedDataParallel as DDP
 import torch.multiprocessing as mp
 from torch.utils.data.distributed import DistributedSampler
 from torchmetrics.classification import Accuracy
+from torch.optim.lr_scheduler import CosineAnnealingLR
+
 import utils_ddp
 
 import argparse
@@ -291,13 +293,14 @@ def main(args):
     elif args.optimizer == 'sgd':
         optimizer = torch.optim.SGD(projector.parameters(), lr=args.learning_rate, momentum=0.9)
 
-    # scheduler = torch.optim.lr_scheduler.MultiStepLR(optimizer, milestones=[30, 60, 90], gamma=0.1)
+    scheduler = CosineAnnealingLR(optimizer, T_max=args.num_epoch, eta_min=0.001)
 
     # Load checkpoint if available
     if args.resume_checkpoint_path and os.path.isfile(args.resume_checkpoint_path):
         checkpoint = torch.load(args.resume_checkpoint_path, map_location='cpu')
         projector.module.load_state_dict(checkpoint['projector_state'])
         optimizer.load_state_dict(checkpoint['optimizer_state'])
+        scheduler.load_state_dict(checkpoint['scheduler_state'])
         start_epoch = checkpoint['epoch']
     else:
         start_epoch = 0
@@ -320,7 +323,7 @@ def main(args):
         train_sampler.set_epoch(epoch)
         train_loss, train_image_loss, train_text_loss = train_one_epoch(train_loader, clip_model, feature_extractor, projector, 
                                                                         criterion, optimizer, epoch, rank, device)
-
+        scheduler.step()
         if epoch % args.val_freq == 0:
             val_loss, val_image_loss, val_text_loss = validate(val_loader, clip_model, feature_extractor, projector, 
                                                             criterion, epoch, rank, device)
@@ -347,6 +350,7 @@ def main(args):
                     'epoch': epoch,
                     'projector_state': projector.module.state_dict(),
                     'optimizer_state': optimizer.state_dict(),
+                    'scheduler_state': scheduler.state_dict(),
                     'best_val_loss': best_val_loss,
                 }
                 torch.save(checkpoint, os.path.join(args.save_dir, "best_projector_weights.pth"))
