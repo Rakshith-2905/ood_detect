@@ -287,7 +287,9 @@ def main_worker(rank, world_size, args):
     # Load checkpoint if available
     if args.resume_checkpoint_path and os.path.isfile(args.resume_checkpoint_path):
         checkpoint = torch.load(args.resume_checkpoint_path, map_location='cpu')
+        feature_extractor.module.load_state_dict(checkpoint['feature_extractor_state'])
         projector.module.load_state_dict(checkpoint['projector_state'])
+        optimizer.load_state_dict(checkpoint['optimizer_state'])
         start_epoch = checkpoint['epoch']
     else:
         start_epoch = 0
