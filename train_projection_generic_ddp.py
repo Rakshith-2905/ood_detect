@@ -160,7 +160,7 @@ def validate(val_loader, clip_model, feature_extractor, projector, criterion, ep
     total_image_loss = 0
     total_text_loss = 0
 
-    pbar = progbar_wrapper(train_loader, total=len(val_loader), rank=rank, desc=f"Validation Epoch {epoch + 1}")
+    pbar = progbar_wrapper(val_loader, total=len(val_loader), rank=rank, desc=f"Validation Epoch {epoch + 1}")
     for images_batch, images_clip_batch, captions_batch, image_names_batch in pbar:
 
         # Ensure data is on the correct device
