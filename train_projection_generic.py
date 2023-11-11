@@ -328,18 +328,16 @@ if __name__ == "__main__":
     if fabric.is_global_zero:
         # Make directory for saving results
         args.save_dir = get_save_dir(args)
-        temp_dir = os.path.join(save_dir, 'lightning_logs')
+        temp_dir = os.path.join(args.save_dir, 'lightning_logs')
         if not os.path.exists(temp_dir):
             os.makedirs(temp_dir, exist_ok=True)
         
-        print(f"Results will be saved to {save_dir}")
+        print(f"Results will be saved to {args.save_dir}")
         
         with open(os.path.join(args.save_dir, 'args.txt'), 'w') as f:
             for arg, value in vars(args).items():
                 f.write(f"{arg}: {value}\n")
-                
-
-
+            
     seed_everything(args.seed)
 
     main(args)
