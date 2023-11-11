@@ -12,72 +12,50 @@ import clip
 import random
 from models.ViT_models import SAMBackbone, MAEBackbone, DINOBackbone
 import lightning as L
-
+import pandas as pd
 
 # Initialize logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
-
 
 class ImageTextDataset(Dataset):
     def __init__(self, json_file, data_path, start_index=0, end_index=None, transform=None, transform2=None):
         self.data_path = data_path
         self.transform = transform
         self.transform2 = transform2
-        self.samples = self._load_json(json_file, start_index, end_index)
+        self.df = self._load_json(json_file, start_index, end_index)
 
     def _load_json(self, json_file, start_index, end_index):
-        samples = []
-        with open(json_file, 'r') as f:
-            for i, line in enumerate(f):
-                if i < start_index:
-                    continue
-                if end_index is not None and i > end_index:
-                    break
-                data = json.loads(line)
-                image_path = os.path.join(self.data_path, data['filename'].split('/')[-1].split('.')[0]+'.jpg')
-                if os.path.exists(image_path):
-                    samples.append({'image_path': image_path, 'caption': data['caption']})
-        return samples
+        df = pd.read_json(json_file, lines=True)
+        if end_index is not None:
+            df = df.iloc[start_index:end_index]
+        else:
+            df = df.iloc[start_index:]
+
+        # Update file paths
+        df['image_path'] = df['filename'].apply(lambda x: os.path.join(self.data_path, x.split('/')[-1].split('.')[0]+'.jpg'))
+        return df
 
     def __len__(self):
-        return len(self.samples)
+        return len(self.df)
 
-    # def __getitem__(self, idx):
-    #     sample = self.samples[idx]
-        
-    #     image = Image.open(sample['image_path']).convert('RGB')
-    #     if self.transform:
-    #         image_trans = self.transform(image)
-    #     if self.transform2:
-    #         image_trans2 = self.transform2(image)
-    #         return image_trans, image_trans2, sample['caption'], sample['image_path']
-    
-
-            
-    #     return image_trans, sample['caption'], sample['image_path']
     def __getitem__(self, idx):
-        sample = self.samples[idx]
-        image_path = sample['image_path']
-        caption = sample['caption']
+        row = self.df.iloc[idx]
+        image_path = row['image_path']
+        caption = row['caption']
 
         try:
             image = Image.open(image_path).convert('RGB')
             image_trans = self.transform(image) if self.transform else image
             image_trans2 = self.transform2(image) if self.transform2 else image
         except Exception as e:
-            # Print error message (optional)
             print(f"Error with image {image_path}: {e}. Selecting a random replacement.")
-
-            # Choose a random index and recursively call __getitem__
-            random_idx = random.randint(0, len(self.samples) - 1)
-            return self.__getitem__(random_idx) 
+            random_idx = random.randint(0, len(self.df) - 1)
+            return self.__getitem__(random_idx)
 
         if self.transform2:
             return image_trans, image_trans2, caption, image_path
-            
+
         return image_trans, caption, image_path
-
-
 
 def save_chunk_features(image_features, text_features, save_path, chunk_start_index, chunk_end_index, feature_extractor_name, clip_model_name, chunk_filenames):
     # Combine the features from all batches
