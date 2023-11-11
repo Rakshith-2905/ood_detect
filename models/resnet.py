@@ -17,7 +17,8 @@ class CustomFeatureModel(nn.Module):
                                                 std=[0.229, 0.224, 0.225])                
                         ])
 
-        supported_models = ['resnet18', 'resnet50', 'resnet101', 'resnet50x1_bitm', 'resnetv2_101x1_bit.goog_in21k']
+        supported_models = ['resnet18', 'resnet50', 'resnet101']
+        #  'resnet50x1_bitm', 'resnetv2_101x1_bit.goog_in21k'
         if model_name not in supported_models:
             raise ValueError(f"Invalid model_name. Expected one of {supported_models}, but got {model_name}")
 
@@ -76,7 +77,7 @@ class CustomResNet(nn.Module):
 
 if __name__ == "__main__":
 
-    model = CustomFeatureModel(model_name='resnetv2_101x1_bit.goog_in21k', use_pretrained=True)
+    model = CustomFeatureModel(model_name='resnet101', use_pretrained=True)
     features = model(torch.zeros(1, 3, 224, 224))
     print(features.shape)
     print(model.feature_dim)

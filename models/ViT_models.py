@@ -207,8 +207,8 @@ if __name__ == "__main__":
     device = "cuda" if torch.cuda.is_available() else "cpu"
 
     # sam = SAMBackbone(model_name="vit_h", checkpoint_path="checkpoints/sam_vit_h_4b8939.pth").to(device)
-    mae = MAEBackbone(model_name="mae_vit_large_patch16", checkpoint_path='./checkpoints/mae_visualize_vit_large_ganloss.pth').to(device)
-    # dino = DINOBackbone(model_name="dino_vits16", checkpoint_path=None).to(device)
+    # mae = MAEBackbone(model_name="mae_vit_large_patch16", checkpoint_path='./checkpoints/mae_visualize_vit_large_ganloss.pth').to(device)
+    dino = DINOBackbone(model_name="dino_vits16", checkpoint_path=None).to(device)
 
     pil_image = Image.open("./data/domainnet_v1.0/real/toothpaste/real_318_000284.jpg")
     # pil_images = [pil_image, pil_image, pil_image, pil_image, pil_image, pil_image, pil_image, pil_image]
@@ -221,7 +221,7 @@ if __name__ == "__main__":
         # Flatten features using average pooling
         # features = F.adaptive_avg_pool2d(features, (1, 1)).squeeze(-1).squeeze(-1)
 
-        features = mae(torch_images)
-        # features = dino(pil_images)
+        # features = mae(torch_images)
+        features = dino(pil_images)
 
     print(features.shape)
