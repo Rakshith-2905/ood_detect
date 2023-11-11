@@ -273,12 +273,12 @@ def main(args):
     projector = DDP(projector, device_ids=[0])
 
     # Create Distributed Samplers and DataLoaders
-    train_dataset = ImageTextDataset(args.json_file, args.data_dir, start_index=args.train_start_index, end_index=args.train_end_index, 
+    train_dataset = ImageTextDataset(args.train_json_file, args.data_dir, start_index=args.train_start_index, end_index=args.train_end_index, 
                                         transform=transform, transform2=clip_preprocess)
     train_sampler = DistributedSampler(train_dataset, num_replicas=world_size, rank=rank)
     train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=args.batch_size, sampler=train_sampler)
 
-    val_dataset = ImageTextDataset(args.json_file, args.data_dir, start_index=args.val_start_index, end_index=args.val_end_index, 
+    val_dataset = ImageTextDataset(args.val_json_file, args.data_dir, start_index=args.val_start_index, end_index=args.val_end_index, 
                                         transform=transform, transform2=clip_preprocess)
 
     val_sampler = DistributedSampler(val_dataset, num_replicas=world_size, rank=rank, shuffle=False)
@@ -362,7 +362,8 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Train ResNet on WILDS Dataset')
 
     parser.add_argument('--data_dir', type=str, default='data/domainnet_v1.0', help='Path to the data directory')
-    parser.add_argument('--json_file', required=True, help='Path to the JSON file.')
+    parser.add_argument('--train_json_file', required=False, default= "/usr/workspace/KDML/yfcc/yfcc15m_clean_open_data_already_downloaded_train_final.json",  help='Path to the JSON file.')
+    parser.add_argument('--val_json_file', required=False,default= "/usr/workspace/KDML/yfcc/yfcc15m_clean_open_data_already_downloaded_test_final.json", help='Path to the JSON file.')
     parser.add_argument('--train_start_index', type=int, default=0, help='The starting line index in the JSON file.')
     parser.add_argument('--train_end_index', type=int, help='The ending line index in the JSON file.')
     parser.add_argument('--val_start_index', type=int, default=0, help='The starting line index in the JSON file.')

@@ -29,10 +29,10 @@ class ImageTextDataset(Dataset):
         if end_index is not None:
             df = df.iloc[start_index:end_index]
         else:
-            df = df.iloc[start_index:]
+            df = df#df.iloc[start_index:]
 
         # Update file paths
-        df['image_path'] = df['filename'].apply(lambda x: os.path.join(self.data_path, x.split('/')[-1].split('.')[0]+'.jpg'))
+       
         return df
 
     def __len__(self):
@@ -40,7 +40,7 @@ class ImageTextDataset(Dataset):
 
     def __getitem__(self, idx):
         row = self.df.iloc[idx]
-        image_path = row['image_path']
+        image_path = row['absolute_path']
         caption = row['caption']
 
         try:
