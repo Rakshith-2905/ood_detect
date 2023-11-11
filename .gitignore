@@ -97,3 +97,6 @@ prompts/text_embeddings.pth
 
 *.pth
 *.pt
+*.out
+./bash_files/*
+*.sh
