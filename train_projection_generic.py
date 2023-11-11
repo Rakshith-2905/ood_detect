@@ -1,7 +1,7 @@
 import os
 try:
-    del os.environ[‘OMP_PLACES’]
-    del os.environ[‘OMP_PROC_BIND’]
+    del os.environ['OMP_PLACES']
+    del os.environ['OMP_PROC_BIND']
 except:
     pass
 
