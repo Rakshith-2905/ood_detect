@@ -24,7 +24,7 @@ def get_save_dir(args):
 
     save_dir = os.path.join(args.save_dir, args.feature_extractor_name)
     save_dir += f"{args.prefix}"
-    save_dir += f"_{datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}"
+    # save_dir += f"_{datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}"
 
     return save_dir
 
@@ -312,8 +312,9 @@ if __name__ == "__main__":
 
     # Make directory for saving results
     save_dir = get_save_dir(args)
-    if not os.path.exists(save_dir):
-        os.makedirs(save_dir, exist_ok=True)
+    temp_dir = os.path.join(save_dir, 'lightning_logs')
+    if not os.path.exists(temp_dir):
+        os.makedirs(temp_dir, exist_ok=True)
     
     print(f"Results will be saved to {save_dir}")
     
