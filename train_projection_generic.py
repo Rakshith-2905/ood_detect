@@ -1,3 +1,10 @@
+import os
+try:
+    del os.environ[‘OMP_PLACES’]
+    del os.environ[‘OMP_PROC_BIND’]
+except:
+    pass
+
 import torch
 import torch.nn.functional as F
 from torchmetrics.classification import Accuracy
@@ -7,7 +14,6 @@ from lightning.fabric import Fabric, seed_everything
 from lightning.fabric.loggers import TensorBoardLogger, CSVLogger
 
 import argparse
-import os
 from tqdm import tqdm
 from functools import partial
 from datetime import datetime
