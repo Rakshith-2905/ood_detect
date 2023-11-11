@@ -20,7 +20,7 @@ import numpy as np
 from PIL import Image
 
 class SAMBackbone(nn.Module):
-    def __init__(self, model_name, checkpoint_path=None, train=False):
+    def __init__(self, model_name, checkpoint_path=None):
         super().__init__()
         """
         Args:
@@ -42,21 +42,19 @@ class SAMBackbone(nn.Module):
             self.image_encoder = self.model.image_encoder
             # Transform to resize the image to the longest side, add the preprocess that the model expects
 
-            if train:
-                self.transform = transforms.Compose([
-                    transforms.RandomResizedCrop((1024, 1024)),
-                    transforms.RandomHorizontalFlip(),
-                    transforms.ToTensor(),
-                    transforms.Normalize(mean=[0.485, 0.456, 0.406],
-                                        std=[0.229, 0.224, 0.225])                
-                ])
-            else:
-                self.transform = transforms.Compose([
-                    transforms.Resize((1024, 1024)),
-                    transforms.ToTensor(),
-                    transforms.Normalize(mean=[0.485, 0.456, 0.406],
-                                        std=[0.229, 0.224, 0.225])
-                ])
+            self.transform = transforms.Compose([
+                transforms.RandomResizedCrop((1024, 1024)),
+                transforms.RandomHorizontalFlip(),
+                transforms.ToTensor(),
+                transforms.Normalize(mean=[0.485, 0.456, 0.406],
+                                    std=[0.229, 0.224, 0.225])                
+            ])
+            self.test_transform = transforms.Compose([
+                transforms.Resize((1024, 1024)),
+                transforms.ToTensor(),
+                transforms.Normalize(mean=[0.485, 0.456, 0.406],
+                                    std=[0.229, 0.224, 0.225])
+            ])
             # Add a max pooling layer with stride 2 to reduce the dimensionality of the features
             self.pool = nn.MaxPool2d(kernel_size=2, stride=2)
         except Exception as e:
@@ -96,7 +94,7 @@ class SAMBackbone(nn.Module):
         return features
 
 class MAEBackbone(nn.Module):
-    def __init__(self, model_name, checkpoint_path=None, train=False):
+    def __init__(self, model_name, checkpoint_path=None):
         super().__init__()
         """
         Args:
@@ -118,22 +116,20 @@ class MAEBackbone(nn.Module):
             # Transform to resize the image to the longest side, add the preprocess that the model expects
             # Link: https://github.com/facebookresearch/mae/blob/main/main_linprobe.py
 
-            if train:
-                self.transform = transforms.Compose([
-                    transforms.RandomResizedCrop(224),
-                    transforms.RandomHorizontalFlip(),
-                    transforms.ToTensor(),
-                    transforms.Normalize(mean=[0.485, 0.456, 0.406],
-                                        std=[0.229, 0.224, 0.225])                
-                ])
-            else:
-                self.transform = transforms.Compose([
-                                transforms.Resize(256, interpolation=3),
-                                transforms.CenterCrop(224),
-                                transforms.ToTensor(),
-                                transforms.Normalize(mean=[0.485, 0.456, 0.406],
-                                                    std=[0.229, 0.224, 0.225])                
-                            ])
+            self.transform = transforms.Compose([
+                transforms.RandomResizedCrop(224),
+                transforms.RandomHorizontalFlip(),
+                transforms.ToTensor(),
+                transforms.Normalize(mean=[0.485, 0.456, 0.406],
+                                    std=[0.229, 0.224, 0.225])                
+            ])
+            self.test_transform = transforms.Compose([
+                            transforms.Resize(256, interpolation=3),
+                            transforms.CenterCrop(224),
+                            transforms.ToTensor(),
+                            transforms.Normalize(mean=[0.485, 0.456, 0.406],
+                                                std=[0.229, 0.224, 0.225])                
+                        ])
 
             self.feature_dim = 1024
 
@@ -175,7 +171,7 @@ class MAEBackbone(nn.Module):
         return features[:,0]
 
 class DINOBackbone(nn.Module):
-    def __init__(self, model_name, checkpoint_path=None, train=False ):
+    def __init__(self, model_name, checkpoint_path=None):
         super().__init__()
         """
         Args:
@@ -187,22 +183,21 @@ class DINOBackbone(nn.Module):
             self.model = torch.hub.load('facebookresearch/dino:main', model_name, pretrained=True)
             # From: https://github.com/facebookresearch/dino/blob/main/eval_linear.py
             
-            if train:
-                self.transform = transforms.Compose([
-                    transforms.RandomResizedCrop(224),
-                    transforms.RandomHorizontalFlip(),
-                    transforms.ToTensor(),
-                    transforms.Normalize(mean=[0.485, 0.456, 0.406],
-                                        std=[0.229, 0.224, 0.225])                
-                ])
-            else:
-                self.transform = transforms.Compose([
-                                transforms.Resize(256, interpolation=3),
-                                transforms.CenterCrop(224),
-                                transforms.ToTensor(),
-                                transforms.Normalize(mean=[0.485, 0.456, 0.406],
-                                                    std=[0.229, 0.224, 0.225])                
-                            ])
+            
+            self.transform = transforms.Compose([
+                transforms.RandomResizedCrop(224),
+                transforms.RandomHorizontalFlip(),
+                transforms.ToTensor(),
+                transforms.Normalize(mean=[0.485, 0.456, 0.406],
+                                    std=[0.229, 0.224, 0.225])                
+            ])
+            self.test_transform = transforms.Compose([
+                            transforms.Resize(256, interpolation=3),
+                            transforms.CenterCrop(224),
+                            transforms.ToTensor(),
+                            transforms.Normalize(mean=[0.485, 0.456, 0.406],
+                                                std=[0.229, 0.224, 0.225])                
+                        ])
             self.feature_dim = 384
 
         except Exception as e:

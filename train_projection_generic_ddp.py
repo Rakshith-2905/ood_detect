@@ -234,8 +234,9 @@ def build_feature_extractor(feature_extractor_name, feature_extractor_checkpoint
     else:
         raise NotImplementedError(f"{feature_extractor_name} is not implemented.")
 
-    transform = feature_extractor.transform
-    return feature_extractor, transform
+    train_transform = feature_extractor.transform
+    test_transform = feature_extractor.test_transform
+    return feature_extractor, train_transform, test_transform
 
 def main(args):
 
@@ -266,7 +267,7 @@ def main(args):
     # Load the CLIP model and build feature extractor, projector
     # Ensure models and data are on the correct device
     clip_model, clip_preprocess = clip.load(args.clip_model_name, device='cuda')
-    feature_extractor, transform = build_feature_extractor(args.feature_extractor_name)
+    feature_extractor, train_transform, test_transform = build_feature_extractor(args.feature_extractor_name)
     feature_extractor.to(device)
     feature_extractor = DDP(feature_extractor, device_ids=[0])
 
@@ -276,12 +277,12 @@ def main(args):
 
     # Create Distributed Samplers and DataLoaders
     train_dataset = ImageTextDataset(args.train_json_file, args.data_dir, start_index=args.train_start_index, end_index=args.train_end_index, 
-                                        transform=transform, transform2=clip_preprocess)
+                                        transform=train_transform, transform2=clip_preprocess)
     train_sampler = DistributedSampler(train_dataset, num_replicas=world_size, rank=rank)
     train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=args.batch_size, sampler=train_sampler)
 
     val_dataset = ImageTextDataset(args.val_json_file, args.data_dir, start_index=args.val_start_index, end_index=args.val_end_index, 
-                                        transform=transform, transform2=clip_preprocess)
+                                        transform=test_transform, transform2=clip_preprocess)
 
     val_sampler = DistributedSampler(val_dataset, num_replicas=world_size, rank=rank, shuffle=False)
     val_loader = torch.utils.data.DataLoader(val_dataset, batch_size=args.batch_size, sampler=val_sampler)
