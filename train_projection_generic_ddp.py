@@ -295,7 +295,7 @@ def main(args):
     elif args.optimizer == 'adamw':
         optimizer = torch.optim.AdamW(projector.parameters(), lr=args.learning_rate)
 
-    scheduler = CosineAnnealingLR(optimizer, T_max=args.num_epoch, eta_min=0.0)
+    scheduler = CosineAnnealingLR(optimizer, T_max=args.num_epochs, eta_min=0.0)
 
     # Load checkpoint if available
     if args.resume_checkpoint_path and os.path.isfile(args.resume_checkpoint_path):
