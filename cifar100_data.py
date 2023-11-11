@@ -11,31 +11,26 @@ import argparse
 
 
 class CIFAR100CDataset(Dataset):
-    def __init__(self, cifar100_c_path, corruption_name, transform=None):
+    """ Custom Dataset for CIFAR100-C with specific corruption type """
+    def __init__(self, data_dir, corruption_name, transform=None):
+        self.data_dir = data_dir
+        self.corruption_name = corruption_name
         self.transform = transform
-        
-        # Assuming the file structure is <cifar100_c_path>/<corruption_name>.npy for images
-        images_path = os.path.join(cifar100_c_path, f"{corruption_name}.npy")
-        labels_path = os.path.join(cifar100_c_path, "labels.npy")
+        self.images, self.labels = self.load_data()
 
-        if not os.path.exists(images_path) or not os.path.exists(labels_path):
-            raise ValueError(f"Data files not found for corruption: {corruption_name}")
-
-        self.images = np.load(images_path)
-        self.labels = np.load(labels_path)
+    def load_data(self):
+        np_labels = np.load(os.path.join(self.data_dir, "labels.npy"))
+        corruption_file = f"{self.corruption_name}.npy"
+        np_images = np.load(os.path.join(self.data_dir, corruption_file))
+        return np_images, np_labels
 
     def __len__(self):
         return len(self.images)
     
     def __getitem__(self, idx):
-        image = self.images[idx]
-        label = self.labels[idx]
-
-        if self.transform:
-            image = Image.fromarray(image)
-            image = self.transform(image)
-
-        return image, label
+        image, label = self.images[idx], self.labels[idx]
+        image = Image.fromarray(image)
+        return self.transform(image) if self.transform else image, label
 
 class CIFAR100Filtered(CIFAR100):
     def __init__(self, root, train=True, transform=None, target_transform=None, download=False, select_indices=None, retain_orig_ids=False):

@@ -3,6 +3,10 @@ import clip
 from torchvision.datasets import CIFAR100, ImageNet
 from torchvision import transforms
 from torch.utils.data import DataLoader, Dataset
+import torch.distributed as dist
+from torch.nn.parallel import DistributedDataParallel as DDP
+from torch.utils.data.distributed import DistributedSampler
+
 from PIL import Image
 import numpy as np
 import argparse
@@ -19,6 +23,7 @@ from models.projector import ProjectionHead
 
 from ZSL_dataloaders import get_zsl_datasets
 
+import utils_ddp
 
 def get_transform(feature_extractor_name):
     """ Returns appropriate transform based on model type """
@@ -96,7 +101,7 @@ def get_CLIP_text_encodings(texts, device):
 
     return text_encodings
 
-def get_dataloader(dataset_name, transform, batch_size, device, corruption_type=None, get_text_encodings=False):
+def get_dataset(dataset_name, transform, batch_size, device, corruption_type=None, get_text_encodings=False):
     """ Load the appropriate dataset """
     if dataset_name.lower() == 'imagenet':
         dataset = ImageNet(root=args.data_path, download=True, transform=transform, train=False)
@@ -115,19 +120,36 @@ def get_dataloader(dataset_name, transform, batch_size, device, corruption_type=
     else:
         raise ValueError(f"Dataset {dataset_name} not supported.")
 
-    dataLoader = DataLoader(dataset, batch_size=batch_size, shuffle=False, num_workers=4, pin_memory=True)
     if get_text_encodings:
         text_encodings = get_CLIP_text_encodings(class_names, device)
-        return dataLoader, text_encodings
+        return dataset, text_encodings
 
+    return dataset
+    
+def reduce_tensor(rt, rank):
+    #rt = tensor.clone()
+    dist.all_reduce(rt, op=dist.ReduceOp.SUM)
+    rt /= dist.get_world_size()
+    return rt
 
-    return dataLoader
+def progbar_wrapper(iterable, total, rank, **kwargs):
+    """Wraps the iterable with tqdm for global rank zero.
 
-def evaluate(model, dataloader, text_encodings, device, feature_extractor_name):
+    Args:
+        iterable: the iterable to wrap with tqdm
+        total: the total length of the iterable, necessary in case the number of batches was limited.
+
+    """
+    if rank == 0:
+        return tqdm(iterable, total=total, **kwargs)
+    return iterable
+
+def evaluate(model, dataloader, text_encodings, device, feature_extractor_name, rank=0):
     """ Evaluate the model on the given dataloader """
     
-    total_accuracy = 0
+    total_accuracy = torch.tensor(0.0).to(device)
     with torch.no_grad():
+        pbar = progbar_wrapper(dataloader, total=len(dataloader), rank=rank, desc="Evaluating")
         for images, labels in tqdm(dataloader):
             images, labels = images.to(device), labels.to(device)
 
@@ -151,7 +173,10 @@ def evaluate(model, dataloader, text_encodings, device, feature_extractor_name):
 
             total_accuracy += compute_accuracy(probabilities, labels)
 
-    return total_accuracy / len(dataloader)
+    # TODO: CHECK Reduce losses across all processes
+    total_accuracy = reduce_tensor(total_accuracy, rank).item()/len(dataloader)
+
+    return total_accuracy
 
 def save_results_to_csv(dataset_name, feature_extractor_name, accuracy, csv_file="evaluation_results.csv"):
     """ Save evaluation results to a CSV file """
@@ -170,8 +195,16 @@ def setup_logging():
     logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 def main(args):
+
+    try:
+        utils_ddp.init_distributed_mode_lassen(args)
+    except:
+        assert Exception("Failed to initialize distributed mode")
+    
+    world_size = utils_ddp.get_world_size()
+    rank = utils_ddp.get_rank()
+    
     device = "cuda" if torch.cuda.is_available() else "cpu"
-    logging.info(f"Using device: {device}")
 
     # supported_datasets = ["cifar10", "cifar100", 'cifar100-c', "gtsrb", "svhn", "dtd", "oxfordpets",  "food101", "eurosat", "ucf101", "stanfordcars", "flowers102"]
     supported_datasets = ["food101", "eurosat", "ucf101", "stanfordcars", "flowers102"]
@@ -184,19 +217,23 @@ def main(args):
         "snow", "spatter", "speckle_noise", "zoom_blur"
     ]
 
-    # Extract the log path from the projector checkpoint path
-    if args.projector_checkpoint_path is not None:
-        log_path = os.path.dirname(args.projector_checkpoint_path)
-        log_path = os.path.join(log_path, 'evaluation')
+    if rank == 0:
 
-        os.makedirs(log_path, exist_ok=True)
-        logging.info(f"\n\nSaving logs to {log_path}")
-        log_file = os.path.join(log_path, f"ZSL_results.csv")
-    
+        # Extract the log path from the projector checkpoint path
+        if args.projector_checkpoint_path is not None:
+            log_path = os.path.dirname(args.projector_checkpoint_path)
+            log_path = os.path.join(log_path, 'evaluation')
+
+            os.makedirs(log_path, exist_ok=True)
+            logging.info(f"\n\nSaving logs to {log_path}")
+            log_file = os.path.join(log_path, f"ZSL_results.csv")
+        
 
     feature_extractor, _, transform = build_feature_extractor(args.feature_extractor_name, args.feature_extractor_checkpoint_path, device)
+    feature_extractor = DDP(feature_extractor, device_ids=[0])
     if args.feature_extractor_name != 'clip':
         projector = load_projector(args.projector_checkpoint_path, feature_extractor.feature_dim, args.proj_dim, device)
+        projector = DDP(projector, device_ids=[0])
         model = (feature_extractor, projector)
     else:
         model = feature_extractor
@@ -209,15 +246,25 @@ def main(args):
 
         if dataset_name.lower() == 'cifar100-c':
             for corruption in cifar100_corruptions:
-                dataloader, text_encodings = get_dataloader(dataset_name, transform, args.batch_size, device, corruption_type=corruption, get_text_encodings=True)
+                dataset, text_encodings = get_dataloaderset(dataset_name, transform, args.batch_size, device, corruption_type=corruption, get_text_encodings=True)
+                                   
+                sampler = DistributedSampler(dataset, num_replicas=world_size, rank=rank, shuffle=False)
+                dataloader = torch.utils.data.DataLoader(dataset, batch_size=args.batch_size, sampler=sampler)
+            
                 accuracy = evaluate(model, dataloader, text_encodings, device, args.feature_extractor_name)
-                logging.info(f"{args.feature_extractor_name} {dataset_name} {corruption} Accuracy: {accuracy:.6f}")
-                save_results_to_csv(f"{dataset_name}-{corruption}", args.feature_extractor_name, accuracy, log_file)
+                if rank == 0:
+                    logging.info(f"{args.feature_extractor_name} {dataset_name} {corruption} Accuracy: {accuracy:.6f}")
+                    save_results_to_csv(f"{dataset_name}-{corruption}", args.feature_extractor_name, accuracy, log_file)
         else:
-            dataloader, text_encodings = get_dataloader(dataset_name, transform, args.batch_size, device, get_text_encodings=True)
-            accuracy = evaluate(model, dataloader, text_encodings, device, args.feature_extractor_name)
-            logging.info(f"{args.feature_extractor_name} {dataset_name} Accuracy: {accuracy:.6f}")
-            save_results_to_csv(dataset_name, args.feature_extractor_name, accuracy, log_file)
+                dataset, text_encodings = get_dataloaderset(dataset_name, transform, args.batch_size, device, get_text_encodings=True)
+                                   
+                sampler = DistributedSampler(dataset, num_replicas=world_size, rank=rank, shuffle=False)
+                dataloader = torch.utils.data.DataLoader(dataset, batch_size=args.batch_size, sampler=sampler)
+            
+                accuracy = evaluate(model, dataloader, text_encodings, device, args.feature_extractor_name)
+                if rank == 0:
+                    logging.info(f"{args.feature_extractor_name} {dataset_name} {corruption} Accuracy: {accuracy:.6f}")
+                    save_results_to_csv(f"{dataset_name}-{corruption}", args.feature_extractor_name, accuracy, log_file)
         
         del dataloader, text_encodings
 
@@ -235,6 +282,11 @@ if __name__ == "__main__":
 
     parser.add_argument('--projector_checkpoint_path', type=str)
     parser.add_argument('--proj_dim', type=int, default=1024)
+
+    parser.add_argument('--distributed', action='store_true', default=False, help='Enabling distributed training')
+    parser.add_argument('--world_size', default=8, type=int, help='number of distributed processes')
+    parser.add_argument('--dist_url', default='env://', help='url used to set up distributed training')
+
     args = parser.parse_args()
 
     print(f"Arguments: {args}")

@@ -57,6 +57,8 @@ class CustomResNet(nn.Module):
         num_ftrs = self.model.fc.in_features
         self.model.fc = nn.Linear(num_ftrs, num_classes)
 
+        self.feature_dim = self.features(torch.zeros(1, 3, 224, 224)).squeeze(-1).squeeze(-1).shape[-1]
+
     def forward(self, x, return_features=False):
         if return_features:
             features = self.features(x)
