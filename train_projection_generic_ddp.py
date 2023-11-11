@@ -88,7 +88,7 @@ def progbar_wrapper(iterable, total, rank, **kwargs):
         return tqdm(iterable, total=total, **kwargs)
     return iterable
     
-def train_one_epoch(train_loader, clip_model, feature_extractor, projector, criterion, optimizer, epoch, rank):
+def train_one_epoch(train_loader, clip_model, feature_extractor, projector, criterion, optimizer, epoch, rank, device):
     clip_model.eval()
     feature_extractor.eval()
     projector.train()
@@ -103,14 +103,14 @@ def train_one_epoch(train_loader, clip_model, feature_extractor, projector, crit
         optimizer.zero_grad()
         
         # Ensure data is on the correct device
-        images_batch = images_batch.to(rank)
+        images_batch = images_batch.to(device)
         captions_batch = [caption for caption in captions_batch]
 
         # clip_image_embeddings = clip_model.encode_image(images_clip_batch)
 
         # Extract features for images and text
         with torch.no_grad():
-            text_tokens = clip.tokenize(captions_batch, truncate=True).to(rank)
+            text_tokens = clip.tokenize(captions_batch, truncate=True).to(device)
             clip_txt_embeddings = clip_model.encode_text(text_tokens)
 
         custom_image_embeddings = feature_extractor(images_batch)
@@ -130,7 +130,7 @@ def train_one_epoch(train_loader, clip_model, feature_extractor, projector, crit
         # We want to maximize the diagonal entries of the logits matrix while minimizing the off-diagonal entries
 
         # labels are indexes to the diagonal entries of the logits matrix
-        pseudo_labels = torch.arange(len(proj_embeddings)).long().to(rank) # (batch_size)
+        pseudo_labels = torch.arange(len(proj_embeddings)).long().to(device) # (batch_size)
 
         loss_image = F.cross_entropy(logits_per_projection, pseudo_labels)
         loss_text = F.cross_entropy(logits_per_text, pseudo_labels)
@@ -157,7 +157,7 @@ def train_one_epoch(train_loader, clip_model, feature_extractor, projector, crit
     return total_loss, total_image_loss, total_text_loss
 
 @torch.no_grad()
-def validate(val_loader, clip_model, feature_extractor, projector, criterion, epoch, rank):
+def validate(val_loader, clip_model, feature_extractor, projector, criterion, epoch, rank, device):
     
     clip_model.eval()
     feature_extractor.eval()
@@ -171,14 +171,14 @@ def validate(val_loader, clip_model, feature_extractor, projector, criterion, ep
     for images_batch, images_clip_batch, captions_batch, image_names_batch in pbar:
 
         # Ensure data is on the correct device
-        images_batch = images_batch.to(rank)
+        images_batch = images_batch.to(device)
         captions_batch = [caption for caption in captions_batch]
 
         # clip_image_embeddings = clip_model.encode_image(images_clip_batch)
 
         # Extract features for images and text
         with torch.no_grad():
-            text_tokens = clip.tokenize(captions_batch, truncate=True).to(rank)
+            text_tokens = clip.tokenize(captions_batch, truncate=True).to(device)
             clip_txt_embeddings = clip_model.encode_text(text_tokens)
 
         custom_image_embeddings = feature_extractor(images_batch)
@@ -198,7 +198,7 @@ def validate(val_loader, clip_model, feature_extractor, projector, criterion, ep
         # We want to maximize the diagonal entries of the logits matrix while minimizing the off-diagonal entries
 
         # labels are indexes to the diagonal entries of the logits matrix
-        pseudo_labels = torch.arange(len(proj_embeddings)).long().to(rank) # (batch_size)
+        pseudo_labels = torch.arange(len(proj_embeddings)).long().to(device) # (batch_size)
 
         loss_image = F.cross_entropy(logits_per_projection, pseudo_labels)
         loss_text = F.cross_entropy(logits_per_text, pseudo_labels)
@@ -272,15 +272,17 @@ def main(args):
             for arg, value in vars(args).items():
                 f.write(f"{arg}: {value}\n")
 
+
     # Load the CLIP model and build feature extractor, projector
     # Ensure models and data are on the correct device
-    clip_model, clip_preprocess = clip.load(args.clip_model_name, device=rank)
+    device = torch.device(f'cuda:{rank}' if torch.cuda.is_available() else 'cpu')
+    clip_model, clip_preprocess = clip.load(args.clip_model_name, device=device)
     feature_extractor, transform = build_feature_extractor(args.feature_extractor_name)
-    feature_extractor.to(rank)
+    feature_extractor.to(device)
     feature_extractor = DDP(feature_extractor, device_ids=[rank])
 
     projector = ProjectionHead(input_dim=feature_extractor.module.feature_dim, output_dim=args.projection_dim)
-    projector.to(rank)
+    projector.to(device)
     projector = DDP(projector, device_ids=[rank])
 
     # Create the optimizer
@@ -333,11 +335,11 @@ def main(args):
     for epoch in range(args.num_epochs):
         train_sampler.set_epoch(epoch)
         train_loss, train_image_loss, train_text_loss = train_one_epoch(train_loader, clip_model, feature_extractor, projector, 
-                                                                        criterion, optimizer, epoch, rank)
+                                                                        criterion, optimizer, epoch, rank, device)
 
         if epoch % args.val_freq == 0:
             val_loss, val_image_loss, val_text_loss = validate(val_loader, clip_model, feature_extractor, projector, 
-                                                            criterion, epoch, rank)
+                                                            criterion, epoch, rank, device)
 
         if rank == 0:
             print(f"{epoch}/{args.num_epochs}| Total Train Loss: {train_loss:.4f}, Train Image Loss: {train_image_loss:.4f}, Train Text Loss: {train_text_loss:.4f}, Total Val Loss: {val_loss:.4f}, Val Image Loss: {val_image_loss:.4f}, Val Text Loss: {val_text_loss:.4f}")
