@@ -96,7 +96,7 @@ def train_one_epoch(train_loader, clip_model, feature_extractor, projector, crit
         total_image_loss += loss_image.item()
         total_text_loss += loss_text.item()
         
-        pbar.set_postfix({"Batch Loss": batch_loss, "Image Loss": loss_image.item(), "Text Loss": loss_text.item()})
+        pbar.set_postfix_str({"Batch Loss": batch_loss, "Image Loss": loss_image.item(), "Text Loss": loss_text.item()})
 
     # TODO: Check if this is correct
     total_loss = fabric.all_gather(total_loss).sum() / len(train_loader)
