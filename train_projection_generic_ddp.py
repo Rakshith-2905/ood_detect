@@ -11,6 +11,10 @@ import argparse
 import os
 from datetime import datetime
 import clip
+import csv
+from tqdm import tqdm
+import numpy as np
+import random
 
 from models.ViT_models import SAMBackbone, MAEBackbone, DINOBackbone
 from models.resnet import CustomFeatureModel
@@ -119,7 +123,7 @@ def train_one_epoch(train_loader, clip_model, feature_extractor, projector, crit
         # We want to maximize the diagonal entries of the logits matrix while minimizing the off-diagonal entries
 
         # labels are indexes to the diagonal entries of the logits matrix
-        pseudo_labels = fabric.to_device(torch.arange(len(proj_embeddings)).long()) # (batch_size)
+        pseudo_labels = torch.arange(len(proj_embeddings)).long().to(rank) # (batch_size)
 
         loss_image = F.cross_entropy(logits_per_projection, pseudo_labels)
         loss_text = F.cross_entropy(logits_per_text, pseudo_labels)
@@ -156,7 +160,7 @@ def validate(val_loader, clip_model, feature_extractor, projector, criterion, ep
     total_image_loss = 0
     total_text_loss = 0
 
-    pbar = progbar_wrapper(train_loader, total=len(train_loader), rank=rank, desc=f"Validation Epoch {epoch + 1}")
+    pbar = progbar_wrapper(train_loader, total=len(val_loader), rank=rank, desc=f"Validation Epoch {epoch + 1}")
     for images_batch, images_clip_batch, captions_batch, image_names_batch in pbar:
 
         # Ensure data is on the correct device
@@ -187,7 +191,7 @@ def validate(val_loader, clip_model, feature_extractor, projector, criterion, ep
         # We want to maximize the diagonal entries of the logits matrix while minimizing the off-diagonal entries
 
         # labels are indexes to the diagonal entries of the logits matrix
-        pseudo_labels = fabric.to_device(torch.arange(len(proj_embeddings)).long()) # (batch_size)
+        pseudo_labels = torch.arange(len(proj_embeddings)).long().to(rank) # (batch_size)
 
         loss_image = F.cross_entropy(logits_per_projection, pseudo_labels)
         loss_text = F.cross_entropy(logits_per_text, pseudo_labels)
@@ -263,7 +267,7 @@ def main(args):
 
     # Load the CLIP model and build feature extractor, projector
     # Ensure models and data are on the correct device
-    clip_model, _ = clip.load(args.clip_model_name, device=rank)
+    clip_model, clip_preprocess = clip.load(args.clip_model_name, device=rank)
     feature_extractor, transform = build_feature_extractor(args.feature_extractor_name)
     feature_extractor.to(rank)
     feature_extractor = DDP(feature_extractor, device_ids=[rank])
