@@ -275,7 +275,7 @@ def main(args):
 
     # Load the CLIP model and build feature extractor, projector
     # Ensure models and data are on the correct device
-    device = torch.device(f'cuda:{rank}' if torch.cuda.is_available() else 'cpu')
+    device = torch.device(f'cuda' if torch.cuda.is_available() else 'cpu')
     clip_model, clip_preprocess = clip.load(args.clip_model_name, device=device)
     feature_extractor, transform = build_feature_extractor(args.feature_extractor_name)
     feature_extractor.to(device)
