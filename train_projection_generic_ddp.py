@@ -322,7 +322,7 @@ def main(args):
     val_text_loss = float("inf")
 
     best_val_loss = float("inf")
-    for epoch in range(args.num_epochs):
+    for epoch in range(start_epoch, args.num_epochs):
         train_sampler.set_epoch(epoch)
         train_loss, train_image_loss, train_text_loss = train_one_epoch(train_loader, clip_model, feature_extractor, projector, 
                                                                         criterion, optimizer, epoch, rank, device)

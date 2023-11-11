@@ -37,7 +37,7 @@ class SAMBackbone(nn.Module):
             self.model = sam_model_registry[model_name](checkpoint=checkpoint_path)
 
             # TODO: Fix this
-            self.feature_dim = 1024
+            self.feature_dim = 4096
             # self.predictor = SamPredictor(sam)    
             self.image_encoder = self.model.image_encoder
             # Transform to resize the image to the longest side, add the preprocess that the model expects
@@ -56,7 +56,7 @@ class SAMBackbone(nn.Module):
                                     std=[0.229, 0.224, 0.225])
             ])
             # Add a max pooling layer with stride 2 to reduce the dimensionality of the features
-            self.pool = nn.MaxPool2d(kernel_size=2, stride=2)
+            self.pool = nn.MaxPool2d(kernel_size=16, stride=16)
         except Exception as e:
             assert False, f"Failed to load SAM model: {e}"
     
@@ -90,7 +90,8 @@ class SAMBackbone(nn.Module):
                 images = images.unsqueeze(0)
 
         features = self.image_encoder(images)
-        features = self.pool(features).squeeze(-1).squeeze(-1)
+        features = self.pool(features)
+        features = features.view(features.shape[0], -1)
         return features
 
 class MAEBackbone(nn.Module):
@@ -237,9 +238,9 @@ if __name__ == "__main__":
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
 
-    # sam = SAMBackbone(model_name="vit_h", checkpoint_path="checkpoints/sam_vit_h_4b8939.pth").to(device)
+    sam = SAMBackbone(model_name="vit_h", checkpoint_path="checkpoints/sam_vit_h_4b8939.pth").to(device)
     # mae = MAEBackbone(model_name="mae_vit_large_patch16", checkpoint_path='./checkpoints/mae_visualize_vit_large_ganloss.pth').to(device)
-    dino = DINOBackbone(model_name="dino_vits16", checkpoint_path=None).to(device)
+    # dino = DINOBackbone(model_name="dino_vits16", checkpoint_path=None).to(device)
 
     pil_image = Image.open("./data/domainnet_v1.0/real/toothpaste/real_318_000284.jpg")
     # pil_images = [pil_image, pil_image, pil_image, pil_image, pil_image, pil_image, pil_image, pil_image]
@@ -248,11 +249,11 @@ if __name__ == "__main__":
     torch_images = torch.randn(4, 3, 224, 224).to(device)
 
     with torch.no_grad():
-        # features = sam(pil_images)
+        features = sam(pil_images)
         # Flatten features using average pooling
         # features = F.adaptive_avg_pool2d(features, (1, 1)).squeeze(-1).squeeze(-1)
 
         # features = mae(torch_images)
-        features = dino(pil_images)
+        # features = dino(pil_images)
 
     print(features.shape)
