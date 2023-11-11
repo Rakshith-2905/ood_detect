@@ -259,7 +259,7 @@ def main(args):
         losses_dict = {"train_loss": train_loss, "train_image_loss": train_image_loss, "train_text_loss": train_text_loss,
                         "val_loss": val_loss, "val_image_loss": val_image_loss, "val_text_loss": val_text_loss}
 
-        fabric.log_metrics(losses_dict, step=epoch)
+        fabric.log_dict(losses_dict, step=epoch)
         
         # Save best model based on validation loss
         if val_loss < best_val_loss:
