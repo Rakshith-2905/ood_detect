@@ -80,7 +80,7 @@ def train_one_epoch(train_loader, clip_model, feature_extractor, projector, crit
         # We want to maximize the diagonal entries of the logits matrix while minimizing the off-diagonal entries
 
         # labels are indexes to the diagonal entries of the logits matrix
-        pseudo_labels = torch.arange(len(proj_embeddings)).long() # (batch_size)
+        pseudo_labels = fabric.to_device(torch.arange(len(proj_embeddings)).long()) # (batch_size)
 
         loss_image = F.cross_entropy(logits_per_projection, pseudo_labels)
         loss_text = F.cross_entropy(logits_per_text, pseudo_labels)
