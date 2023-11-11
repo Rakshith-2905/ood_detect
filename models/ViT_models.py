@@ -64,7 +64,7 @@ class SAMBackbone(nn.Module):
             images_torch = self.transform(images).unsqueeze(0).to(device)
         
         return images_torch
-
+    @torch.no_grad()
     def forward(self, images):
         """
         Args:
@@ -132,7 +132,7 @@ class MAEBackbone(nn.Module):
             images_torch = self.transform(images).unsqueeze(0)
         
         return images_torch
-
+    @torch.no_grad()
     def forward(self, images, decode=False):
         """
         Args:
@@ -144,7 +144,7 @@ class MAEBackbone(nn.Module):
         else:
             if len(images.shape) == 3:
                 images = images.unsqueeze(0)
-
+       
         features,_, ids_restore = self.model.forward_encoder(images, mask_ratio=0)
 
         if decode:
@@ -190,7 +190,7 @@ class DINOBackbone(nn.Module):
             images_torch = self.transform(images).unsqueeze(0).to(device)
         
         return images_torch
-
+    @torch.no_grad()
     def forward(self, images):
         """
         Args:
