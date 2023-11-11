@@ -315,6 +315,9 @@ if __name__ == "__main__":
 
 
 
+    tb_logger = TensorBoardLogger(args.save_dir)
+    csv_logger = CSVLogger(args.save_dir)
+
     fabric = L.Fabric(accelerator="cuda", devices=args.num_gpus, strategy="ddp", loggers=[tb_logger, csv_logger])
     fabric.launch()
     
@@ -336,8 +339,6 @@ if __name__ == "__main__":
                 f.write(f"{arg}: {value}\n")
                 
 
-    tb_logger = TensorBoardLogger(args.save_dir)
-    csv_logger = CSVLogger(args.save_dir)
 
     seed_everything(args.seed)
 
