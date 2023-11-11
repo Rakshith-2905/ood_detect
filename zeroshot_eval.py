@@ -17,7 +17,7 @@ from tqdm import tqdm
 import os
 
 from cifar100_data import get_CIFAR100_loaders
-from utils import SimpleDINOLoss, compute_accuracy, compute_similarities, plot_grad_flow, NumpyDataLoader
+from utils_proj import SimpleDINOLoss, compute_accuracy, compute_similarities, plot_grad_flow, NumpyDataLoader
 from models.resnet import CustomResNet
 from models.projector import ProjectionHead
 

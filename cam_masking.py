@@ -29,7 +29,7 @@ from itertools import cycle
 from models.resnet import CustomResNet
 from models.projector import ProjectionHead
 from domainnet_data import DomainNetDataset, get_domainnet_loaders, get_data_from_saved_files
-from utils import SimpleDINOLoss, compute_accuracy, compute_similarities, plot_grad_flow, plot_confusion_matrix
+from utils_proj import SimpleDINOLoss, compute_accuracy, compute_similarities, plot_grad_flow, plot_confusion_matrix
 from prompts.FLM import generate_label_mapping_by_frequency, label_mapping_base
 
 

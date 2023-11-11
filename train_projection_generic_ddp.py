@@ -29,7 +29,7 @@ from models.ViT_models import SAMBackbone, MAEBackbone, DINOBackbone
 from models.resnet import CustomFeatureModel
 from models.projector import ProjectionHead
 from YFCC_feature_extract import ImageTextDataset
-from utils import SimpleDINOLoss, compute_accuracy, compute_similarities, plot_grad_flow
+from utils_proj import SimpleDINOLoss, compute_accuracy, compute_similarities, plot_grad_flow
 
 
 def cleanup():
