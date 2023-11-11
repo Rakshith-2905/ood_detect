@@ -45,7 +45,8 @@ class SAMBackbone(nn.Module):
                 transforms.Normalize(mean=[123.675, 116.28, 103.53],
                                     std=[58.395, 57.12, 57.375])
             ])
-
+            # Add a max pooling layer with stride 2 to reduce the dimensionality of the features
+            self.pool = nn.MaxPool2d(kernel_size=2, stride=2)
         except Exception as e:
             assert False, f"Failed to load SAM model: {e}"
     
@@ -79,6 +80,7 @@ class SAMBackbone(nn.Module):
                 images = images.unsqueeze(0)
 
         features = self.image_encoder(images)
+        features = self.pool(features).squeeze(-1).squeeze(-1)
         return features
 
 class MAEBackbone(nn.Module):
