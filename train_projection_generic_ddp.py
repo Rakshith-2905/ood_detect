@@ -260,11 +260,10 @@ def main(args):
             for arg, value in vars(args).items():
                 f.write(f"{arg}: {value}\n")
 
-
+    device = torch.device(f'cuda:{rank}' if torch.cuda.is_available() else 'cpu')
     # Load the CLIP model and build feature extractor, projector
     # Ensure models and data are on the correct device
-    device = torch.device(f'cuda' if torch.cuda.is_available() else 'cpu')
-    clip_model, clip_preprocess = clip.load(args.clip_model_name, device=device)
+    clip_model, clip_preprocess = clip.load(args.clip_model_name, device='cuda')
     feature_extractor, transform = build_feature_extractor(args.feature_extractor_name)
     feature_extractor.to(device)
     feature_extractor = DDP(feature_extractor, device_ids=[rank])
@@ -272,9 +271,6 @@ def main(args):
     projector = ProjectionHead(input_dim=feature_extractor.module.feature_dim, output_dim=args.projection_dim)
     projector.to(device)
     projector = DDP(projector, device_ids=[rank])
-
-    # Create the optimizer
-    optimizer = torch.optim.Adam(projector.parameters(), lr=args.learning_rate)
 
     # Create Distributed Samplers and DataLoaders
     train_dataset = ImageTextDataset(args.json_file, args.data_dir, start_index=args.train_start_index, end_index=args.train_end_index, 
