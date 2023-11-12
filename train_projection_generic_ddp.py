@@ -26,7 +26,7 @@ import numpy as np
 import random
 
 from models.ViT_models import SAMBackbone, MAEBackbone, DINOBackbone
-from models.resnet import CustomFeatureModel
+from models.resnet import CustomFeatureModel, CustomSegmentationModel
 from models.projector import ProjectionHead
 from YFCC_feature_extract import ImageTextDataset
 from utils_proj import SimpleDINOLoss, compute_accuracy, compute_similarities, plot_grad_flow
