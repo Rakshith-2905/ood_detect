@@ -224,7 +224,8 @@ def build_feature_extractor(feature_extractor_name, feature_extractor_checkpoint
     elif feature_extractor_name == 'dino_vits16':
         feature_extractor = DINOBackbone("dino_vits16", None)
     elif feature_extractor_name == 'clip':
-        feature_extractor, _ = clip.load(args.clip_model_name, device=device)
+        model, _ = clip.load(args.clip_model_name, device=device)
+        feature_extractor = model.encode_image
         transforms = get_transform('clip')
     elif feature_extractor_name in ['resnet18', 'resnet50', 'resnet101']:
         feature_extractor = CustomResNet(feature_extractor_name, 0, use_pretrained=True)
