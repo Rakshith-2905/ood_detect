@@ -73,8 +73,7 @@ def train_one_epoch(train_loader, resnet_model, projector, text_encodings, crite
 
         loss_image = F.cross_entropy(logits_per_projection, pseudo_labels)
         loss_text = F.cross_entropy(logits_per_text, pseudo_labels)
-        # loss = (loss_image + loss_text)/2
-        loss = loss_image
+        loss = (loss_image + loss_text)/2
         loss.backward()
 
         optimizer.step()
@@ -140,8 +139,7 @@ def validate(val_loader, resnet_model, projector, text_encodings, criterion, dev
 
             loss_image = F.cross_entropy(logits_per_projection, pseudo_labels)
             loss_text = F.cross_entropy(logits_per_text, pseudo_labels)
-            # loss = (loss_image + loss_text)/2
-            loss = loss_image
+            loss = (loss_image + loss_text)/2
 
             # Probs from logits
             zero_shot_logits = compute_similarities(proj_embeddings, text_encodings, mode='cosine') # (batch_size, num_classes)
