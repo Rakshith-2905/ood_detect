@@ -16,7 +16,7 @@ from io import BytesIO
 from tqdm import tqdm
 import pandas as pd
 import json
-
+import time
 import torch
 import torch.distributed as dist
 from torch.nn.parallel import DistributedDataParallel as DDP
@@ -150,13 +150,15 @@ def process_data_loader(args, feature_extractor, device, transform, save_path, c
                 'captions': []
             }
             processed_images = 0
+            chunk_start_index = chunk_end_index + 1
 
     # Save any remaining data
     if processed_images > 0:
 
         chunk_end_index = chunk_start_index + processed_images - 1
         save_chunk_data(accumulated_data, save_path, chunk_start_index, chunk_end_index, feature_extractor_name, clip_model_name)
-            
+        chunk_start_index = chunk_end_index + 1
+
     if fabric.is_global_zero:
         logging.info(f"Completed processing all images.")
 
@@ -255,7 +257,7 @@ if __name__ == "__main__":
     # Argument parser
     parser = argparse.ArgumentParser(description='Process a large JSON file and extract image and text features.')
     parser.add_argument('--json_file', required=True, help='Path to the JSON file.')
-    parser.add_argument('--feature_extractor_name', required=True, choices=['sam_vit_h', 'mae_vit_large_patch16', 'dino_vits16'],  help='Name of the feature extractor to use.')
+    parser.add_argument('--feature_extractor_name', required=True,    help='Name of the feature extractor to use sam_vit_h, mae_vit_large_patch16, dino_vits16, resnet50, resnet50_adv_l2_0.1, resnet50_adv_l2_0.5, resnet50x1_bitm, resnetv2_101x1_bit.goog_in21k, deeplabv3_resnet50, deeplabv3_resnet101, fcn_resnet50, fcn_resnet101')
     parser.add_argument('--clip_model_name', default='ViT-B/32', help='Name of the CLIP model to use.')
     parser.add_argument('--save_path', required=True, help='Path where to save the features.')
     parser.add_argument('--data_path', required=True, help='Path to the data.')
@@ -280,9 +282,7 @@ if __name__ == "__main__":
 
     # Makes image per chunk a multiple of batch size*world size
     args.images_per_chunk = args.images_per_chunk - (args.images_per_chunk % (args.batch_size * fabric.world_size))
-
+    
     fabric.print(f"No. of images per chunk: {args.images_per_chunk}")
-
+    time.sleep(10)
     main(args)
-
-    fabric.close()
