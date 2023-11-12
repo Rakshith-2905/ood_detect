@@ -15,6 +15,7 @@ from PIL import Image
 from io import BytesIO
 from tqdm import tqdm
 import pandas as pd
+import json
 
 import torch
 import torch.distributed as dist
@@ -25,7 +26,8 @@ import utils_ddp
 from torchvision import transforms
 import random
 from models.ViT_models import SAMBackbone, MAEBackbone, DINOBackbone
-
+from models.resnet import CustomFeatureModel, CustomSegmentationModel
+from models.projector import ProjectionHead
 
 # Initialize logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -97,20 +99,26 @@ def save_chunk_features(rank, world_size, image_features, text_features, save_pa
         combined_text_features = torch.cat(gathered_text_features, dim=0).detach().cpu()
 
         # Save the combined features
-        image_features_filename = os.path.join(save_path, f"{feature_extractor_name}_image_features_{chunk_start_index}_{chunk_end_index}.pt")
-        text_features_filename = os.path.join(save_path, f"CLIP_{clip_model_name}_text_features_{chunk_start_index}_{chunk_end_index}.pt")
+
+        image_features_filename = f"{save_path}/{feature_extractor_name}_image_features_{chunk_start_index}_{chunk_end_index}.pt"
+        text_features_filename = f"{save_path}/CLIP_{clip_model_name.replace('/','_')}_text_features_{chunk_start_index}_{chunk_end_index}.pt"
         torch.save(combined_image_features, image_features_filename)
         torch.save(combined_text_features, text_features_filename)
 
         # Save the chunk filenames (assuming they are the same across all processes)
-        chunk_filenames_path = os.path.join(save_path, f"chunk_{chunk_start_index}_{chunk_end_index}_filenames.txt")
-        with open(chunk_filenames_path, 'w') as f:
-            for filename in chunk_filenames:
-                f.write(f"{filename}\n")
+        chunk_filenames_path = os.path.join(save_path, f"chunk_{chunk_start_index}_{chunk_end_index}_filenames.json")
+       
+        # dump chunk_filenames as json using pandas
+        df = pd.DataFrame(chunk_filenames)
+        df.to_json(chunk_filenames_path, orient='records', lines=True)
+        # with open(chunk_filenames_path, 'w') as f:
+        #     for filename in chunk_filenames:
+        #         f.write(f"{filename}\n")
 
 
 def process_data_loader(rank, world_size, args, feature_extractor, device, transform, save_path, clip_model_name, feature_extractor_name):
-
+    if rank==0:
+        os.makedirs(save_path, exist_ok=True)
     # Initialize CLIP
     clip_model, preprocess = clip.load(args.clip_model_name, device=device)
     
@@ -129,11 +137,12 @@ def process_data_loader(rank, world_size, args, feature_extractor, device, trans
     
     for images_batch, captions_batch, image_names_batch in tqdm(data_loader, desc="Processing batches", unit="batch"):
         images_batch = images_batch.to(device)
-        
+        captions_batch = [caption for caption in captions_batch]
+        image_names_batch = [image_name for image_name in image_names_batch]
         # Extract features for images and text
         with torch.no_grad():
             image_features = feature_extractor(images_batch)
-            text_tokens = clip.tokenize(captions_batch).to(device)
+            text_tokens = clip.tokenize(captions_batch,truncate=True).to(device)
             text_features = clip_model.encode_text(text_tokens)
 
         # Accumulate features and filenames
@@ -240,6 +249,7 @@ def main(args):
     device = "cuda" if torch.cuda.is_available() else "cpu"
     # Initialize the feature extractor
     feature_extractor, transform, _ = build_feature_extractor(args.feature_extractor_name, args.feature_extractor_checkpoint_path, device)
+    feature_extractor.to(device)
     feature_extractor = DDP(feature_extractor, device_ids=[0])
 
     process_data_loader(rank, world_size, args, feature_extractor, device, transform, args.save_path, args.clip_model_name, args.feature_extractor_name)
@@ -265,4 +275,4 @@ if __name__ == "__main__":
     parser.add_argument('--dist_url', default='env://', help='url used to set up distributed training')
 
     args = parser.parse_args()
-
+    main(args)
