@@ -110,6 +110,7 @@ def process_data_loader(args, feature_extractor, device, transform, save_path, c
         'captions': []
     }
     processed_images = torch.tensor(0)
+    chunk_start_index = args.start_index
     fabric.print(processed_images)
     for images_batch, captions_batch, image_names_batch in tqdm(data_loader, desc="Processing batches", unit="batch"):
         images_batch = images_batch.to(device)
@@ -139,7 +140,8 @@ def process_data_loader(args, feature_extractor, device, transform, save_path, c
         
         # Save and reset after processing X number of images
         if processed_images >= args.images_per_chunk:
-            save_chunk_data(accumulated_data, save_path, feature_extractor_name, clip_model_name)
+            chunk_end_index = chunk_start_index + processed_images - 1
+            save_chunk_data(accumulated_data, save_path, chunk_start_index, chunk_end_index, feature_extractor_name, clip_model_name)
             # Reset for the next chunk
             accumulated_data = {
                 'image_features': [],
@@ -151,17 +153,18 @@ def process_data_loader(args, feature_extractor, device, transform, save_path, c
 
     # Save any remaining data
     if processed_images > 0:
-        save_chunk_data(accumulated_data, save_path, feature_extractor_name, clip_model_name)
 
+        chunk_end_index = chunk_start_index + processed_images - 1
+        save_chunk_data(accumulated_data, save_path, chunk_start_index, chunk_end_index, feature_extractor_name, clip_model_name)
+            
     if fabric.is_global_zero:
         logging.info(f"Completed processing all images.")
 
-def save_chunk_data(accumulated_data, save_path, feature_extractor_name, clip_model_name):
+def save_chunk_data(accumulated_data, save_path, chunk_start_index, chunk_end_index, feature_extractor_name, clip_model_name):
     # Convert lists of tensors to a single tensor
     image_features_tensor = torch.cat(accumulated_data['image_features'], dim=0).detach().cpu()
     text_features_tensor = torch.cat(accumulated_data['text_features'], dim=0).detach().cpu()
-    print(f'image_features_tensor.shape: {image_features_tensor.shape}, text_features_tensor.shape: {text_features_tensor.shape}')
-    
+
     # Prepare data for saving
     save_data = {
         'image_features': image_features_tensor,
@@ -170,13 +173,13 @@ def save_chunk_data(accumulated_data, save_path, feature_extractor_name, clip_mo
         'captions': accumulated_data['captions']
     }
 
+    image_features_filename = f"{save_path}/{feature_extractor_name}_{chunk_start_index}_{chunk_end_index}.pt"
     # Construct filename
     save_filename = os.path.join(save_path, f"{feature_extractor_name}_{clip_model_name}_data_chunk.pt")
 
     # Save the combined data
     torch.save(save_data, save_filename)
-    
-    assert False
+
 
 
 def get_transform(feature_extractor_name):
@@ -277,4 +280,11 @@ if __name__ == "__main__":
     # The total number of processes running across all devices and nodes
     fabric.print(f"World size: {fabric.world_size}")  # 2 * 3 = 6
 
+    # Makes image per chunk a multiple of batch size*world size
+    args.images_per_chunk = args.images_per_chunk - (args.images_per_chunk % (args.batch_size * fabric.world_size))
+
+    fabric.print(f"No. of images per chunk: {args.images_per_chunk}")
+
     main(args)
+
+    fabric.close()
