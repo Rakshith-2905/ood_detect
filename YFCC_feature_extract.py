@@ -164,7 +164,7 @@ def save_chunk_data(accumulated_data, save_path, chunk_start_index, chunk_end_in
     # Convert lists of tensors to a single tensor
     image_features_tensor = torch.cat(accumulated_data['image_features'], dim=0).detach().cpu()
     text_features_tensor = torch.cat(accumulated_data['text_features'], dim=0).detach().cpu()
-
+    fabric.print(f'image_features_tensor.shape: {image_features_tensor.shape}, text_features_tensor.shape: {text_features_tensor.shape}')
     # Prepare data for saving
     save_data = {
         'image_features': image_features_tensor,
@@ -173,10 +173,8 @@ def save_chunk_data(accumulated_data, save_path, chunk_start_index, chunk_end_in
         'captions': accumulated_data['captions']
     }
 
-    image_features_filename = f"{save_path}/{feature_extractor_name}_{chunk_start_index}_{chunk_end_index}.pt"
-    # Construct filename
-    save_filename = os.path.join(save_path, f"{feature_extractor_name}_{clip_model_name}_data_chunk.pt")
-
+    save_filename = f"{save_path}/{feature_extractor_name}_{chunk_start_index}_{chunk_end_index}.pt"
+  
     # Save the combined data
     torch.save(save_data, save_filename)
 
