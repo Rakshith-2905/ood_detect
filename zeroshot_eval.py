@@ -188,9 +188,14 @@ def main(args):
     # Extract the log path from the projector checkpoint path
     if args.projector_checkpoint_path is not None:
         log_path = os.path.dirname(args.projector_checkpoint_path)
+        
         log_path = os.path.join(log_path, 'evaluation')
-
-        os.makedirs(log_path, exist_ok=True)
+        try:
+            os.makedirs(log_path, exist_ok=True)
+        except:
+            model_name= args.projector_checkpoint_path.split('/')[-2]
+            log_path = os.path.join(os.getcwd(),model_name, 'evaluation')
+            os.makedirs(log_path, exist_ok=True)
         logging.info(f"\n\nSaving logs to {log_path}")
         log_file = os.path.join(log_path, f"ZSL_results.csv")
     
@@ -230,11 +235,11 @@ if __name__ == "__main__":
     parser.add_argument('--data_path', type=str, default='./data')
     parser.add_argument('--batch_size', type=int, default=32)
     parser.add_argument('--text_encoding_path', type=str, required=False)
-    parser.add_argument('--feature_extractor_name', type=str, default='mae_vit_large_patch16')
+    parser.add_argument('--feature_extractor_name', type=str, default='dino_vits16')
     parser.add_argument('--feature_extractor_checkpoint_path', type=str)    
     parser.add_argument('--clip_model_name', type=str, default='ViT-B/32')
 
-    parser.add_argument('--projector_checkpoint_path', type=str,default="/p/gpfs1/KDML/ckpts_13M/mae_vit_large_patch16full_13M/projector_weights_final.pth")
+    parser.add_argument('--projector_checkpoint_path', type=str,default="/p/gpfs1/KDML/ckpts_13M_vivek/dino_vits16full_13M_lr_1e-3/projector_weights_epoch_10.pth")
     parser.add_argument('--proj_dim', type=int, default=512)
     args = parser.parse_args()
 
