@@ -342,7 +342,8 @@ def main(args):
                 'train_text_loss': train_text_loss,
                 'val_loss': val_loss,
                 'val_image_loss': val_image_loss,
-                'val_text_loss': val_text_loss
+                'val_text_loss': val_text_loss,
+                'lr': scheduler.get_last_lr(),
             }
             log_to_csv(csv_filename, log_data)
 
