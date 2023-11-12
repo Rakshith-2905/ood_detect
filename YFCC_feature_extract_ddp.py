@@ -14,6 +14,7 @@ import logging
 from PIL import Image
 from io import BytesIO
 from tqdm import tqdm
+import pandas as pd
 
 import torch
 import torch.distributed as dist
@@ -21,7 +22,8 @@ from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.utils.data import Dataset, DataLoader, DistributedSampler
 import clip
 import utils_ddp
-
+from torchvision import transforms
+import random
 from models.ViT_models import SAMBackbone, MAEBackbone, DINOBackbone
 
 
@@ -185,7 +187,7 @@ def get_transform(feature_extractor_name):
                                  std=[0.229, 0.224, 0.225]),
         ])
 
-def build_feature_extractor(feature_extractor_name, feature_extractor_checkpoint_path=None):
+def build_feature_extractor(feature_extractor_name, feature_extractor_checkpoint_path=None, device='cpu'):
     """
     Builds the feature extractor based on the provided name.
     Args:
@@ -237,7 +239,7 @@ def main(args):
     # Initialize the device
     device = "cuda" if torch.cuda.is_available() else "cpu"
     # Initialize the feature extractor
-    feature_extractor, transform, _ = build_feature_extractor(args.feature_extractor_name, feature_extractor_checkpoint_path)
+    feature_extractor, transform, _ = build_feature_extractor(args.feature_extractor_name, args.feature_extractor_checkpoint_path, device)
     feature_extractor = DDP(feature_extractor, device_ids=[0])
 
     process_data_loader(rank, world_size, args, feature_extractor, device, args.save_path, args.clip_model_name, args.feature_extractor_name)
@@ -253,6 +255,7 @@ if __name__ == "__main__":
     parser.add_argument('--save_path', required=True, help='Path where to save the features.')
     parser.add_argument('--data_path', required=True, help='Path to the data.')
     parser.add_argument('--batch_size', type=int, default=1024, help='Batch size for the feature extractor.')
+    parser.add_argument('--feature_extractor_checkpoint_path', type=str)
     parser.add_argument('--num_batches_per_chunk', type=int, default=100, help='How many batches make a chunk.')
     parser.add_argument('--start_index', type=int, default=0, help='The starting line index in the JSON file.')
     parser.add_argument('--end_index', type=int, required=True, help='The ending line index in the JSON file.')
