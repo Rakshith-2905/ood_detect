@@ -229,7 +229,10 @@ def build_feature_extractor(feature_extractor_name, feature_extractor_checkpoint
         feature_extractor = MAEBackbone("mae_vit_large_patch16", feature_extractor_checkpoint_path)
     elif args.feature_extractor_name == 'dino_vits16':
         feature_extractor = DINOBackbone("dino_vits16", None)
-    elif args.feature_extractor_name in ['resnet18', 'resnet50', 'resnet101', 'resnet50x1_bitm', 'resnetv2_101x1_bit.goog_in21k']:
+    elif args.feature_extractor_name in ['deeplabv3_resnet50', 'deeplabv3_resnet101']:
+        feature_extractor = CustomSegmentationModel(args.feature_extractor_name, use_pretrained=True)
+
+    elif args.feature_extractor_name in ['resnet18', 'resnet50', 'resnet101', 'resnet50_adv', 'deeplabv3_resnet50', 'resnet50x1_bitm', 'resnetv2_101x1_bit.goog_in21k']:
         feature_extractor = CustomFeatureModel(args.feature_extractor_name, use_pretrained=True)
     else:
         raise NotImplementedError(f"{feature_extractor_name} is not implemented.")
@@ -380,7 +383,7 @@ if __name__ == "__main__":
     parser.add_argument('--batch_size', type=int, default=32, help='Batch size for the dataloader')
     parser.add_argument('--seed', type=int, default=42, help='Seed for reproducibility')
 
-    parser.add_argument('--feature_extractor_name', required=True,  help='Name of the feature extractor to use sam_vit_h, mae_vit_large_patch16, dino_vits16, resnet50, resnet50x1_bitm, resnetv2_101x1_bit.goog_in21k')
+    parser.add_argument('--feature_extractor_name', required=True,  help='Name of the feature extractor to use sam_vit_h, mae_vit_large_patch16, dino_vits16, resnet50, resnet50_adv, resnet50x1_bitm, resnetv2_101x1_bit.goog_in21k')
     parser.add_argument('--clip_model_name', default='ViT-B/32', help='Name of the CLIP model to use.')
     parser.add_argument('--resume_checkpoint_path', type=str, help='Path to checkpoint to resume training from')
 

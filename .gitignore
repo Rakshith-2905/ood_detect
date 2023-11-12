@@ -100,3 +100,4 @@ prompts/text_embeddings.pth
 *.out
 ./bash_files/*
 *.sh
+*.ckpt

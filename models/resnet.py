@@ -21,12 +21,26 @@ class CustomFeatureModel(nn.Module):
                                                 std=[0.229, 0.224, 0.225])                
                         ])
 
-        supported_models = ['resnet18', 'resnet50', 'resnet101']
+        supported_models = ['resnet18', 'resnet50', 'resnet101', 'resnet50_adv']
         #  'resnet50x1_bitm', 'resnetv2_101x1_bit.goog_in21k'
         if model_name not in supported_models:
             raise ValueError(f"Invalid model_name. Expected one of {supported_models}, but got {model_name}")
 
-        self.model = timm.create_model(model_name, pretrained=use_pretrained, num_classes=0)
+        if model_name == 'resnet50_adv':
+            self.model = timm.create_model('resnet50')
+            checkpoint = torch.load('./checkpoints/resnet50_l2_eps0.1.ckpt')['model']
+            modified_checkpoint = {}
+            for k, v in checkpoint.items():
+                if 'attacker' in k:
+                    continue
+                modified_checkpoint[k.replace('module.model.', '')] = v
+
+            self.model.load_state_dict(modified_checkpoint, strict=False) #https://huggingface.co/madrylab/robust-imagenet-models/resolve/main/resnet50_l2_eps0.1.ckpt
+
+            # Remoce the last FC layer
+            self.model = nn.Sequential(*list(self.model.children())[:-1])
+        else:
+            self.model = timm.create_model(model_name, pretrained=use_pretrained, num_classes=0)
 
         # self.feature_dim = self.model.num_featuress
         self.feature_dim = self.model(torch.zeros(1, 3, 224, 224)).shape[-1]
@@ -68,17 +82,20 @@ class CustomSegmentationModel(nn.Module):
                                             std=[0.229, 0.224, 0.225])                
                     ])
 
-        self.transform = transforms.Compose([
-                            transforms.Resize(520),
-                            transforms.CenterCrop(520),
-                            transforms.ToTensor(),
-                            transforms.Normalize(mean=[0.485, 0.456, 0.406],
-                                                std=[0.229, 0.224, 0.225])                
-                        ])
+        # self.transform = transforms.Compose([
+        #                     transforms.Resize(520),
+        #                     transforms.CenterCrop(520),
+        #                     transforms.ToTensor(),
+        #                     transforms.Normalize(mean=[0.485, 0.456, 0.406],
+        #                                         std=[0.229, 0.224, 0.225])                
+        #                 ])
                         
         self.feature_model = self.model.backbone
         # Add a max pooling layer with stride 16 to reduce the dimensionality of the features
-        self.pool = nn.MaxPool2d(kernel_size=16, stride=16)
+        self.pool = nn.MaxPool2d(kernel_size=1, stride=1)
+
+        #TODO: add the feature dimension
+        
 
     
     def preprocess_pil(self, images):
@@ -156,7 +173,8 @@ class CustomResNet(nn.Module):
 if __name__ == "__main__":
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    # model = CustomFeatureModel(model_name='resnet101', use_pretrained=True)
+
+    # model = CustomFeatureModel(model_name='resnet50', use_pretrained=True)
     # features = model(torch.zeros(1, 3, 224, 224))
     # print(features.shape)
     # print(model.feature_dim)
