@@ -26,7 +26,7 @@ import numpy as np
 import random
 
 from models.ViT_models import SAMBackbone, MAEBackbone, DINOBackbone
-from models.resnet import CustomFeatureModel
+from models.resnet import CustomFeatureModel, CustomSegmentationModel
 from models.projector import ProjectionHead
 from YFCC_feature_extract import ImageTextDataset
 from utils_proj import SimpleDINOLoss, compute_accuracy, compute_similarities, plot_grad_flow
@@ -232,7 +232,7 @@ def build_feature_extractor(feature_extractor_name, feature_extractor_checkpoint
     elif args.feature_extractor_name in ['deeplabv3_resnet50', 'deeplabv3_resnet101']:
         feature_extractor = CustomSegmentationModel(args.feature_extractor_name, use_pretrained=True)
 
-    elif args.feature_extractor_name in ['resnet18', 'resnet50', 'resnet101', 'resnet50_adv', 'deeplabv3_resnet50', 'resnet50x1_bitm', 'resnetv2_101x1_bit.goog_in21k']:
+    elif args.feature_extractor_name in ['resnet18', 'resnet50', 'resnet101', 'resnet50_adv_l2_0.1', 'resnet50_adv_l2_0.5', 'resnet50x1_bitm', 'resnetv2_101x1_bit.goog_in21k']:
         feature_extractor = CustomFeatureModel(args.feature_extractor_name, use_pretrained=True)
     else:
         raise NotImplementedError(f"{feature_extractor_name} is not implemented.")
@@ -370,7 +370,7 @@ def main(args):
         torch.save(checkpoint, os.path.join(args.save_dir, "projector_weights_final.pth"))
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description='Train ResNet on WILDS Dataset')
+    parser = argparse.ArgumentParser(description='Train ResNet on YFCC Dataset')
 
     parser.add_argument('--data_dir', type=str, default='data/domainnet_v1.0', help='Path to the data directory')
     parser.add_argument('--train_json_file', required=False, default= "/usr/workspace/KDML/yfcc/yfcc15m_clean_open_data_already_downloaded_train_final.json",  help='Path to the JSON file.')
@@ -383,7 +383,7 @@ if __name__ == "__main__":
     parser.add_argument('--batch_size', type=int, default=32, help='Batch size for the dataloader')
     parser.add_argument('--seed', type=int, default=42, help='Seed for reproducibility')
 
-    parser.add_argument('--feature_extractor_name', required=True,  help='Name of the feature extractor to use sam_vit_h, mae_vit_large_patch16, dino_vits16, resnet50, resnet50_adv, resnet50x1_bitm, resnetv2_101x1_bit.goog_in21k')
+    parser.add_argument('--feature_extractor_name', required=True,  help='Name of the feature extractor to use sam_vit_h, mae_vit_large_patch16, dino_vits16, resnet50, resnet50_adv_l2_0.1, resnet50_adv_l2_0.5, resnet50x1_bitm, resnetv2_101x1_bit.goog_in21k, deeplabv3_resnet50, deeplabv3_resnet101, fcn_resnet50, fcn_resnet101')
     parser.add_argument('--clip_model_name', default='ViT-B/32', help='Name of the CLIP model to use.')
     parser.add_argument('--resume_checkpoint_path', type=str, help='Path to checkpoint to resume training from')
 

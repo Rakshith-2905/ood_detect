@@ -1,3 +1,5 @@
+import ssl
+ssl._create_default_https_context = ssl._create_unverified_context
 import torch
 import torch.nn as nn
 from torchvision.models import resnet18, resnet34, resnet50, resnet101, resnet152
@@ -14,19 +16,26 @@ class CustomFeatureModel(nn.Module):
         super(CustomFeatureModel, self).__init__()
 
         self.transform = transforms.Compose([
-                            transforms.Resize(224),
-                            transforms.CenterCrop(224),
+                            transforms.RandomResizedCrop(224),
+                            transforms.RandomHorizontalFlip(),
                             transforms.ToTensor(),
                             transforms.Normalize(mean=[0.485, 0.456, 0.406],
                                                 std=[0.229, 0.224, 0.225])                
                         ])
+        
+        self.test_transform = transforms.Compose([
+                        transforms.Resize(256),
+                        transforms.CenterCrop(224),
+                        transforms.ToTensor(),
+                        transforms.Normalize(mean=[0.485, 0.456, 0.406],
+                                            std=[0.229, 0.224, 0.225])                
+                    ])
 
-        supported_models = ['resnet18', 'resnet50', 'resnet101', 'resnet50_adv']
-        #  'resnet50x1_bitm', 'resnetv2_101x1_bit.goog_in21k'
+        supported_models = ['resnet18', 'resnet50', 'resnet101', 'resnet50_adv_l2_0.1', 'resnet50_adv_l2_0.5', 'resnet50x1_bitm', 'resnetv2_101x1_bit.goog_in21k']
         if model_name not in supported_models:
             raise ValueError(f"Invalid model_name. Expected one of {supported_models}, but got {model_name}")
 
-        if model_name == 'resnet50_adv':
+        if model_name == 'resnet50_adv_l2_0.1':
             self.model = timm.create_model('resnet50')
             checkpoint = torch.load('./checkpoints/resnet50_l2_eps0.1.ckpt')['model']
             modified_checkpoint = {}
@@ -39,14 +48,30 @@ class CustomFeatureModel(nn.Module):
 
             # Remoce the last FC layer
             self.model = nn.Sequential(*list(self.model.children())[:-1])
+        
+        elif model_name == 'resnet50_adv_l2_0.5':
+            self.model = timm.create_model('resnet50')
+            checkpoint = torch.load('./checkpoints/resnet50_l2_eps0.5.ckpt')['model']
+            modified_checkpoint = {}
+            for k, v in checkpoint.items():
+                if 'attacker' in k:
+                    continue
+                modified_checkpoint[k.replace('module.model.', '')] = v
+
+            self.model.load_state_dict(modified_checkpoint, strict=False) #https://huggingface.co/madrylab/robust-imagenet-models/resolve/main/resnet50_l2_eps0.5.ckpt
+
+            # Remove the last FC layer
+            self.model = nn.Sequential(*list(self.model.children())[:-1])
+
         else:
             self.model = timm.create_model(model_name, pretrained=use_pretrained, num_classes=0)
 
         # self.feature_dim = self.model.num_featuress
         self.feature_dim = self.model(torch.zeros(1, 3, 224, 224)).shape[-1]
-
+    
+    @torch.no_grad()
     def forward(self, x):
-            return self.model(x)
+        return self.model(x)
 
 class CustomSegmentationModel(nn.Module):
     def __init__(self, model_name, use_pretrained=False):
@@ -67,34 +92,33 @@ class CustomSegmentationModel(nn.Module):
 
         self.model = torch.hub.load('pytorch/vision:v0.6.0', model_name, weights=weights)
 
-        self.transform = transforms.Compose([
-                        transforms.RandomResizedCrop(224),
-                        transforms.RandomHorizontalFlip(),
-                        transforms.ToTensor(),
-                        transforms.Normalize(mean=[0.485, 0.456, 0.406],
-                                            std=[0.229, 0.224, 0.225])                
-                    ])
+        # self.transform = transforms.Compose([
+        #                 transforms.RandomResizedCrop(224),
+        #                 transforms.ToTensor(),
+        #                 transforms.Normalize(mean=[0.485, 0.456, 0.406],
+        #                                     std=[0.229, 0.224, 0.225])                
+        #             ])
         self.test_transform = transforms.Compose([
-                        transforms.Resize(256, interpolation=3),
+                        transforms.Resize(256),
                         transforms.CenterCrop(224),
                         transforms.ToTensor(),
                         transforms.Normalize(mean=[0.485, 0.456, 0.406],
                                             std=[0.229, 0.224, 0.225])                
                     ])
 
-        # self.transform = transforms.Compose([
-        #                     transforms.Resize(520),
-        #                     transforms.CenterCrop(520),
-        #                     transforms.ToTensor(),
-        #                     transforms.Normalize(mean=[0.485, 0.456, 0.406],
-        #                                         std=[0.229, 0.224, 0.225])                
-        #                 ])
+        self.transform = transforms.Compose([
+                            transforms.Resize((520,520)),
+                            transforms.ToTensor(),
+                            transforms.Normalize(mean=[0.485, 0.456, 0.406],
+                                                std=[0.229, 0.224, 0.225])                
+                        ])
                         
         self.feature_model = self.model.backbone
-        # Add a max pooling layer with stride 16 to reduce the dimensionality of the features
-        self.pool = nn.MaxPool2d(kernel_size=1, stride=1)
+        # Add a max pooling layer with stride 32 to reduce the dimensionality of the features [2048,2,2]
+        self.pool = nn.MaxPool2d(kernel_size=32, stride=32)
 
         #TODO: add the feature dimension
+        self.feature_dim = 8192
         
 
     
@@ -120,6 +144,7 @@ class CustomSegmentationModel(nn.Module):
                 images = images.unsqueeze(0)
         features = self.feature_model(images)['out']
         features = self.pool(features)
+        features = features.view(features.shape[0],-1)
         
         return features
 
@@ -174,15 +199,15 @@ if __name__ == "__main__":
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    # model = CustomFeatureModel(model_name='resnet50', use_pretrained=True)
+    model = CustomFeatureModel(model_name='resnet50x1_bitm', use_pretrained=True).to(device)
     # features = model(torch.zeros(1, 3, 224, 224))
     # print(features.shape)
     # print(model.feature_dim)
 
-    model = CustomSegmentationModel(model_name='deeplabv3_resnet101', use_pretrained=True).to(device)
+    #model = CustomSegmentationModel(model_name='deeplabv3_resnet101', use_pretrained=True).to(device)
     pil_image = Image.open("./data/domainnet_v1.0/real/toothpaste/real_318_000284.jpg")
-    pil_images = [pil_image]
-    torch_tensor = torch.zeros(3, 224, 224).to(device)
-    features = model(pil_images)
+    pil_images = [pil_image,pil_image]
+    torch_tensor = torch.zeros(1024,3, 224, 224).to(device)
+    features = model(torch_tensor)
     print(features.shape)
 
