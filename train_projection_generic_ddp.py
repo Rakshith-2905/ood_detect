@@ -299,14 +299,16 @@ def main(args):
     elif args.optimizer == 'adamw':
         optimizer = torch.optim.AdamW(projector.parameters(), lr=args.learning_rate)
 
-    scheduler = CosineAnnealingLR(optimizer, T_max=args.num_epochs, eta_min=0.0)
+    #scheduler = CosineAnnealingLR(optimizer, T_max=args.num_epochs, eta_min=0.0)
+    # Multi step LR
+    scheduler = torch.optim.lr_scheduler.MultiStepLR(optimizer, milestones=[10], gamma=0.3)
 
     # Load checkpoint if available
     if args.resume_checkpoint_path and os.path.isfile(args.resume_checkpoint_path):
         checkpoint = torch.load(args.resume_checkpoint_path, map_location='cpu')
         projector.module.load_state_dict(checkpoint['projector_state'])
         optimizer.load_state_dict(checkpoint['optimizer_state'])
-        scheduler.load_state_dict(checkpoint['scheduler_state'])
+        # scheduler.load_state_dict(checkpoint['scheduler_state'])
         start_epoch = checkpoint['epoch']
     else:
         start_epoch = 0
@@ -389,7 +391,7 @@ if __name__ == "__main__":
 
     parser.add_argument('--num_epochs', type=int, default=100, help='Number of training epochs')
     parser.add_argument('--optimizer', type=str, choices=['adam','adamw', 'sgd'], default='adamw', help='Type of optimizer to use')
-    parser.add_argument('--learning_rate', type=float, default=1e-3, help='Learning rate for the optimizer')
+    parser.add_argument('--learning_rate', type=float, default=1e-2, help='Learning rate for the optimizer')
     parser.add_argument('--val_freq', type=int, default=1, help='Validation frequency')
     parser.add_argument('--save_dir', type=str, default='checkpoints', help='Directory to save the results')
     parser.add_argument('--prefix', type=str, default='', help='prefix to add to the save directory')
