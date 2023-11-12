@@ -332,7 +332,7 @@ def main(args):
                                                             criterion, epoch, rank, device)
 
         if rank == 0:
-            print(f"{epoch}/{args.num_epochs}| Total Train Loss: {train_loss:.4f}, Train Image Loss: {train_image_loss:.4f}, Train Text Loss: {train_text_loss:.4f}, Total Val Loss: {val_loss:.4f}, Val Image Loss: {val_image_loss:.4f}, Val Text Loss: {val_text_loss:.4f}")
+            print(f"{epoch}/{args.num_epochs}| LR: {scheduler.get_last_lr()}| Total Train Loss: {train_loss:.4f}, Train Image Loss: {train_image_loss:.4f}, Train Text Loss: {train_text_loss:.4f}, Total Val Loss: {val_loss:.4f}, Val Image Loss: {val_image_loss:.4f}, Val Text Loss: {val_text_loss:.4f}")
             
             # Log data to CSV
             log_data = {
