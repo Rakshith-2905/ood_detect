@@ -23,7 +23,6 @@ import clip
 import utils_ddp
 
 from models.ViT_models import SAMBackbone, MAEBackbone, DINOBackbone
-import lightning as L
 
 
 # Initialize logging
@@ -108,8 +107,12 @@ def save_chunk_features(rank, world_size, image_features, text_features, save_pa
                 f.write(f"{filename}\n")
 
 
-def process_data_loader(rank, world_size, args, feature_extractor, clip_model, device, save_path, clip_model_name, feature_extractor_name):
+def process_data_loader(rank, world_size, args, feature_extractor, device, save_path, clip_model_name, feature_extractor_name):
+
+    # Initialize CLIP
+    clip_model, preprocess = clip.load(args.clip_model_name, device=device)
     
+    # Initialize the dataset and data loader
     dataset = ImageTextDataset(args.json_file, args.data_path, start_index=args.start_index, end_index=args.end_index, 
                                 transform=feature_extractor.transform, transform2=None)
     sampler = DistributedSampler(dataset, num_replicas=world_size, rank=rank)
@@ -128,7 +131,7 @@ def process_data_loader(rank, world_size, args, feature_extractor, clip_model, d
         # Extract features for images and text
         with torch.no_grad():
             image_features = feature_extractor(images_batch)
-            text_tokens = clip.tokenize(captions_batch)
+            text_tokens = clip.tokenize(captions_batch).to(device)
             text_features = clip_model.encode_text(text_tokens)
 
         # Accumulate features and filenames
@@ -162,8 +165,65 @@ def process_data_loader(rank, world_size, args, feature_extractor, clip_model, d
     if rank == 0:
         logging.info(f"Completed processing {processed_images} images.")
 
-def cleanup():
-    dist.destroy_process_group()
+
+def get_transform(feature_extractor_name):
+    """ Returns appropriate transform based on model type """
+    if feature_extractor_name == 'clip':
+        return transforms.Compose([
+            transforms.Resize(224, interpolation=transforms.InterpolationMode.BICUBIC),
+            transforms.CenterCrop(224),
+            transforms.ToTensor(),
+            transforms.Normalize(mean=[0.48145466, 0.4578275, 0.40821073],
+                                 std=[0.26862954, 0.26130258, 0.27577711]),
+        ])
+    else:  # For projection model
+        return transforms.Compose([
+            transforms.Resize(256),
+            transforms.CenterCrop(224),
+            transforms.ToTensor(),
+            transforms.Normalize(mean=[0.485, 0.456, 0.406],
+                                 std=[0.229, 0.224, 0.225]),
+        ])
+
+def build_feature_extractor(feature_extractor_name, feature_extractor_checkpoint_path=None):
+    """
+    Builds the feature extractor based on the provided name.
+    Args:
+        feature_extractor_name (str): The name of the feature extractor to use.
+        feature_extractor_checkpoint_path (str, optional): Path to the checkpoint file.
+        device (str): The device to load the model onto.
+    Returns:
+        torch.nn.Module: The feature extractor.
+        transforms.Compose: Train transform.
+        transforms.Compose: Test transform.
+    """
+    if feature_extractor_name == 'sam_vit_h':
+        if feature_extractor_checkpoint_path is None:
+            feature_extractor_checkpoint_path = "checkpoints/sam_vit_h_4b8939.pth"
+        feature_extractor = SAMBackbone("vit_h", feature_extractor_checkpoint_path)
+    elif feature_extractor_name == 'mae_vit_large_patch16':
+        if feature_extractor_checkpoint_path is None:
+            feature_extractor_checkpoint_path = "checkpoints/mae_visualize_vit_large_ganloss.pth"
+        feature_extractor = MAEBackbone("mae_vit_large_patch16", feature_extractor_checkpoint_path)
+    elif feature_extractor_name == 'dino_vits16':
+        feature_extractor = DINOBackbone("dino_vits16", None)
+    elif feature_extractor_name == 'clip':
+        feature_extractor, _ = clip.load(args.clip_model_name, device=device)
+        transforms = get_transform('clip')
+    elif feature_extractor_name in ['resnet18', 'resnet50', 'resnet101']:
+        feature_extractor = CustomResNet(feature_extractor_name, 0, use_pretrained=True)
+    else:
+        raise NotImplementedError(f"{feature_extractor_name} is not implemented.")
+
+    train_transform = feature_extractor.transform if hasattr(feature_extractor, 'transform') else None
+    test_transform = feature_extractor.test_transform if hasattr(feature_extractor, 'test_transform') else None
+
+    if train_transform is None:
+        train_transform = get_transform(feature_extractor_name)
+    if test_transform is None:
+        test_transform = get_transform(feature_extractor_name)
+    
+    return feature_extractor, train_transform, test_transform
 
 def main(args):
     try:
@@ -174,36 +234,14 @@ def main(args):
     world_size = utils_ddp.get_world_size()
     rank = utils_ddp.get_rank()
 
+    # Initialize the device
     device = "cuda" if torch.cuda.is_available() else "cpu"
-    # Initialize CLIP
-    clip_model, preprocess = clip.load(args.clip_model_name, device=device)
-
-    feature_extractor, transform = build_feature_extractor(args.feature_extractor_name, device)
+    # Initialize the feature extractor
+    feature_extractor, transform, _ = build_feature_extractor(args.feature_extractor_name, feature_extractor_checkpoint_path)
     feature_extractor = DDP(feature_extractor, device_ids=[0])
 
-    process_data_loader(rank, world_size, args, feature_extractor, clip_model, device, args.save_path, args.clip_model_name, args.feature_extractor_name)
+    process_data_loader(rank, world_size, args, feature_extractor, device, args.save_path, args.clip_model_name, args.feature_extractor_name)
 
-    cleanup()
-
-def build_feature_extractor(feature_extractor_name):
-    """
-    Builds the feature extractor based on the provided name.
-    Args:
-        feature_extractor_name (str): The name of the feature extractor to use.
-    Returns:
-        torch.nn.Module: The feature extractor.
-    """
-    if args.feature_extractor_name == 'sam_vit_h':
-        feature_extractor = SAMBackbone("vit_h", "checkpoints/sam_vit_h_4b8939.pth").to(device)
-    elif args.feature_extractor_name == 'mae_vit_large_patch16':
-        feature_extractor = MAEBackbone("mae_vit_large_patch16", "checkpoints/mae_visualize_vit_large_ganloss.pth")
-    elif args.feature_extractor_name == 'dino_vits16':
-        feature_extractor = DINOBackbone("dino_vits16", None)
-    else:
-        raise NotImplementedError(f"{feature_extractor_name} is not implemented.")
-
-    transform = feature_extractor.transform
-    return feature_extractor, transform
 
 if __name__ == "__main__":
 
@@ -211,7 +249,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Process a large JSON file and extract image and text features.')
     parser.add_argument('--json_file', required=True, help='Path to the JSON file.')
     parser.add_argument('--feature_extractor_name', required=True, choices=['sam_vit_h', 'mae_vit_large_patch16', 'dino_vits16'],  help='Name of the feature extractor to use.')
-    parser.add_argument('--clip_model_name', default='RN50', help='Name of the CLIP model to use.')
+    parser.add_argument('--clip_model_name', default='ViT-B/32', help='Name of the CLIP model to use.')
     parser.add_argument('--save_path', required=True, help='Path where to save the features.')
     parser.add_argument('--data_path', required=True, help='Path to the data.')
     parser.add_argument('--batch_size', type=int, default=1024, help='Batch size for the feature extractor.')
@@ -219,24 +257,9 @@ if __name__ == "__main__":
     parser.add_argument('--start_index', type=int, default=0, help='The starting line index in the JSON file.')
     parser.add_argument('--end_index', type=int, required=True, help='The ending line index in the JSON file.')
 
+    parser.add_argument('--distributed', action='store_true', default=False, help='Enabling distributed training')
+    parser.add_argument('--world_size', default=8, type=int, help='number of distributed processes')
+    parser.add_argument('--dist_url', default='env://', help='url used to set up distributed training')
+
     args = parser.parse_args()
 
-    # Initialize CLIP
-    device = "cuda" if torch.cuda.is_available() else "cpu"
-    model, preprocess = clip.load(args.clip_model_name, device=device)
-
-    fabric = L.Fabric(accelerator="cuda", devices=8, strategy="ddp")
-    fabric.launch()
-
-
-    feature_extractor, transform = build_feature_extractor(args.feature_extractor_name)
-    # Create the dataset and data loader
-    dataset = ImageTextDataset(args.json_file, args.data_path, start_index=args.start_index, end_index=args.end_index, transform=transform)
-    data_loader = DataLoader(dataset, batch_size=args.batch_size, shuffle=False)
-
-    feature_extractor, optimizer = fabric.setup(feature_extractor, optimizer)
-    data_loader = fabric.setup_dataloaders(data_loader)
-
-    # Process the dataset
-    process_data_loader(data_loader, feature_extractor, model, device, args.save_path, args.clip_model_name, 
-                        args.feature_extractor_name, args.num_batches_per_chunk, args.start_index)
