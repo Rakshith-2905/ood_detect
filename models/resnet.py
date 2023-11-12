@@ -31,7 +31,7 @@ class CustomFeatureModel(nn.Module):
                                             std=[0.229, 0.224, 0.225])                
                     ])
 
-        supported_models = ['resnet18', 'resnet50', 'resnet101', 'resnet50_adv_l2_0.1', 'resnet50_adv_l2_0.5', 'resnet50x1_bitm', 'resnetv2_101x1_bit.goog_in21k']
+        supported_models = ['resnet18', 'resnet50', 'resnet101', 'resnet50_adv_l2_0.1', 'resnet50_adv_l2_0.5', 'resnet50x1_bitm','resnetv2_50x1_bitm', 'resnetv2_101x1_bitm','resnetv2_101x1_bit.goog_in21k']
         if model_name not in supported_models:
             raise ValueError(f"Invalid model_name. Expected one of {supported_models}, but got {model_name}")
 
@@ -199,15 +199,15 @@ if __name__ == "__main__":
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    model = CustomFeatureModel(model_name='resnet50x1_bitm', use_pretrained=True).to(device)
+    model = CustomFeatureModel(model_name='resnetv2_101x1_bit.goog_in21k', use_pretrained=True).to(device)
     # features = model(torch.zeros(1, 3, 224, 224))
     # print(features.shape)
     # print(model.feature_dim)
 
     #model = CustomSegmentationModel(model_name='deeplabv3_resnet101', use_pretrained=True).to(device)
-    pil_image = Image.open("./data/domainnet_v1.0/real/toothpaste/real_318_000284.jpg")
-    pil_images = [pil_image,pil_image]
-    torch_tensor = torch.zeros(1024,3, 224, 224).to(device)
+    #pil_image = Image.open("./data/domainnet_v1.0/real/toothpaste/real_318_000284.jpg")
+    #pil_images = [pil_image,pil_image]
+    torch_tensor = torch.zeros(1,3, 224, 224).to(device)
     features = model(torch_tensor)
     print(features.shape)
 
