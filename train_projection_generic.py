@@ -1,14 +1,15 @@
 import os
+import sys
 try:
     del os.environ['OMP_PLACES']
     del os.environ['OMP_PROC_BIND']
 except:
     pass
-
+import time
 import torch
 import torch.nn.functional as F
 from torchmetrics.classification import Accuracy
-
+from torch.optim.lr_scheduler import CosineAnnealingLR
 import lightning as L
 from lightning.fabric import Fabric, seed_everything
 from lightning.fabric.loggers import TensorBoardLogger, CSVLogger
@@ -19,10 +20,15 @@ from functools import partial
 from datetime import datetime
 
 import clip
-from YFCC_feature_extract import ImageTextDataset
+import csv
+from tqdm import tqdm
+import numpy as np
+import random
+
 from models.ViT_models import SAMBackbone, MAEBackbone, DINOBackbone
-from models.resnet import CustomFeatureModel
+from models.resnet import CustomFeatureModel, CustomSegmentationModel
 from models.projector import ProjectionHead
+from YFCC_feature_extract import ImageTextDataset
 from utils_proj import SimpleDINOLoss, compute_accuracy, compute_similarities, plot_grad_flow
 
 def get_save_dir(args):
@@ -67,7 +73,7 @@ def train_one_epoch(train_loader, clip_model, feature_extractor, projector, crit
         optimizer.zero_grad()
         
         # clip_image_embeddings = clip_model.encode_image(images_clip_batch)
-
+        captions_batch = [caption for caption in captions_batch]
         # Extract features for images and text
         with torch.no_grad():
             text_tokens = fabric.to_device(clip.tokenize(captions_batch, truncate=True))
@@ -131,8 +137,8 @@ def validate(val_loader, clip_model, feature_extractor, projector, criterion, ep
     )
     for images_batch, images_clip_batch, captions_batch, image_names_batch in pbar:
 
-        clip_image_embeddings = clip_model.encode_image(images_clip_batch)
-
+       # clip_image_embeddings = clip_model.encode_image(images_clip_batch)
+        captions_batch = [caption for caption in captions_batch]
         text_tokens = fabric.to_device(clip.tokenize(captions_batch, truncate=True))
         clip_txt_embeddings = clip_model.encode_text(text_tokens)
 
@@ -193,28 +199,32 @@ def build_feature_extractor(feature_extractor_name, feature_extractor_checkpoint
         feature_extractor = MAEBackbone("mae_vit_large_patch16", feature_extractor_checkpoint_path)
     elif args.feature_extractor_name == 'dino_vits16':
         feature_extractor = DINOBackbone("dino_vits16", None)
-    elif args.feature_extractor_name in ['resnet18', 'resnet50', 'resnet101', 'resnet50x1_bitm', 'resnetv2_101x1_bit.goog_in21k']:
+    elif args.feature_extractor_name in ['deeplabv3_resnet50', 'deeplabv3_resnet101']:
+        feature_extractor = CustomSegmentationModel(args.feature_extractor_name, use_pretrained=True)
+
+    elif args.feature_extractor_name in ['resnet18', 'resnet50', 'resnet101', 'resnet50_adv_l2_0.1', 'resnet50_adv_l2_0.5', 'resnet50x1_bitm', 'resnetv2_101x1_bit.goog_in21k']:
         feature_extractor = CustomFeatureModel(args.feature_extractor_name, use_pretrained=True)
     else:
         raise NotImplementedError(f"{feature_extractor_name} is not implemented.")
 
-    transform = feature_extractor.transform
-    return feature_extractor, transform
+    train_transform = feature_extractor.transform
+    test_transform = feature_extractor.test_transform
+    return feature_extractor, train_transform, test_transform
 
 def main(args):
     
     # Load the CLIP model
     clip_model, clip_preprocess = clip.load(args.clip_model_name)
 
-    feature_extractor, transform = build_feature_extractor(args.feature_extractor_name)
+    feature_extractor, train_transform, test_transform = build_feature_extractor(args.feature_extractor_name)
 
     projector = ProjectionHead(input_dim=feature_extractor.feature_dim, output_dim=args.projection_dim)
 
     # Create the data loader and wrap them with Fabric
-    train_dataset = ImageTextDataset(args.json_file, args.data_dir, start_index=args.train_start_index, end_index=args.train_end_index, 
-                                        transform=transform, transform2=clip_preprocess)
-    val_dataset = ImageTextDataset(args.json_file, args.data_dir, start_index=args.val_start_index, end_index=args.val_end_index, 
-                                        transform=transform, transform2=clip_preprocess)
+    train_dataset = ImageTextDataset(args.train_json_file, args.data_dir, start_index=args.train_start_index, end_index=args.train_end_index, 
+                                        transform=train_transform, transform2=clip_preprocess)
+    val_dataset = ImageTextDataset(args.val_json_file, args.data_dir, start_index=args.val_start_index, end_index=args.val_end_index, 
+                                        transform=test_transform, transform2=clip_preprocess)
 
     train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True, num_workers=8, pin_memory=True)
     val_loader = torch.utils.data.DataLoader(val_dataset, batch_size=args.batch_size, shuffle=False, num_workers=8, pin_memory=True)
@@ -226,6 +236,11 @@ def main(args):
         optimizer = torch.optim.Adam(projector.parameters(), lr=args.learning_rate)
     elif args.optimizer == 'sgd':
         optimizer = torch.optim.SGD(projector.parameters(), lr=args.learning_rate, momentum=0.9)
+    elif args.optimizer == 'adamw':
+        optimizer = torch.optim.AdamW(projector.parameters(), lr=args.learning_rate)
+
+    scheduler = CosineAnnealingLR(optimizer, T_max=args.num_epochs, eta_min=0.0)
+
 
     # scheduler = torch.optim.lr_scheduler.MultiStepLR(optimizer, milestones=[30, 60, 90], gamma=0.1)
 
@@ -260,6 +275,7 @@ def main(args):
         train_loss,  train_image_loss, train_text_loss = train_one_epoch(train_loader, clip_model, feature_extractor, projector, 
                                                                                     criterion, optimizer, epoch)
 
+        scheduler.step()
         if epoch % args.val_freq == 0:
             val_loss, val_image_loss, val_text_loss = validate(val_loader, clip_model, feature_extractor, projector, 
                                                                         criterion, epoch)
@@ -288,7 +304,8 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Train ResNet on WILDS Dataset')
 
     parser.add_argument('--data_dir', type=str, default='data/domainnet_v1.0', help='Path to the data directory')
-    parser.add_argument('--json_file', required=True, help='Path to the JSON file.')
+    parser.add_argument('--train_json_file', required=False, default= "/usr/workspace/KDML/yfcc/yfcc15m_clean_open_data_already_downloaded_train_final.json",  help='Path to the JSON file.')
+    parser.add_argument('--val_json_file', required=False,default= "/usr/workspace/KDML/yfcc/yfcc15m_clean_open_data_already_downloaded_test_final.json", help='Path to the JSON file.')
     parser.add_argument('--train_start_index', type=int, default=0, help='The starting line index in the JSON file.')
     parser.add_argument('--train_end_index', type=int, help='The ending line index in the JSON file.')
     parser.add_argument('--val_start_index', type=int, default=0, help='The starting line index in the JSON file.')
@@ -297,13 +314,13 @@ if __name__ == "__main__":
     parser.add_argument('--batch_size', type=int, default=32, help='Batch size for the dataloader')
     parser.add_argument('--seed', type=int, default=42, help='Seed for reproducibility')
 
-    parser.add_argument('--feature_extractor_name', required=True,  help='Name of the feature extractor to use sam_vit_h, mae_vit_large_patch16, dino_vits16, resnet50, resnet50x1_bitm, resnetv2_101x1_bit.goog_in21k')
+    parser.add_argument('--feature_extractor_name', required=True,  help='Name of the feature extractor to use sam_vit_h, mae_vit_large_patch16, dino_vits16, resnet50, resnet50_adv_l2_0.1, resnet50_adv_l2_0.5, resnet50x1_bitm, resnetv2_101x1_bit.goog_in21k, deeplabv3_resnet50, deeplabv3_resnet101, fcn_resnet50, fcn_resnet101')
     parser.add_argument('--clip_model_name', default='ViT-B/32', help='Name of the CLIP model to use.')
     parser.add_argument('--resume_checkpoint_path', type=str, help='Path to checkpoint to resume training from')
 
     parser.add_argument('--num_epochs', type=int, default=100, help='Number of training epochs')
-    parser.add_argument('--optimizer', type=str, choices=['adam', 'sgd'], default='adam', help='Type of optimizer to use')
-    parser.add_argument('--learning_rate', type=float, default=0.1, help='Learning rate for the optimizer')
+    parser.add_argument('--optimizer', type=str, choices=['adam','adamw', 'sgd'], default='adamw', help='Type of optimizer to use')
+    parser.add_argument('--learning_rate', type=float, default=1e-3, help='Learning rate for the optimizer')
     parser.add_argument('--val_freq', type=int, default=1, help='Validation frequency')
     parser.add_argument('--save_dir', type=str, default='checkpoints', help='Directory to save the results')
     parser.add_argument('--prefix', type=str, default='', help='prefix to add to the save directory')
@@ -312,25 +329,26 @@ if __name__ == "__main__":
     parser.add_argument('--teacher_temp', type=float, default=0.5, help='Temperature for Dino loss')
     parser.add_argument('--student_temp', type=float, default=1, help='Temperature for Dino loss')
 
-    parser.add_argument('--num_gpus', type=int, default=8, help='Number of gpus for DDP')
-
+    parser.add_argument('--num_gpus', type=int, default=4, help='Number of gpus for DDP per node')
+    parser.add_argument('--num_nodes', type=int, default=1, help='Number of nodes for DDP')
     args = parser.parse_args()
 
     # Print the arguments
     print(args)
-
-
+    sys.stdout.flush()
+    time.sleep(5)
 
     tb_logger = TensorBoardLogger(args.save_dir)
     csv_logger = CSVLogger(args.save_dir)
 
-    fabric = L.Fabric(accelerator="cuda", devices=args.num_gpus, strategy="ddp", loggers=[tb_logger, csv_logger])
+    fabric = L.Fabric(accelerator="cuda",num_nodes=args.num_nodes, devices=args.num_gpus, strategy="auto", loggers=[tb_logger, csv_logger])
+   
     fabric.launch()
     
 
     # The total number of processes running across all devices and nodes
     fabric.print(f"World size: {fabric.world_size}")  # 2 * 3 = 6
-
+    
     if fabric.is_global_zero:
         # Make directory for saving results
         args.save_dir = get_save_dir(args)
