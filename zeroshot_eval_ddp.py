@@ -246,7 +246,7 @@ def main(args):
 
         if dataset_name.lower() == 'cifar100-c':
             for corruption in cifar100_corruptions:
-                dataset, text_encodings = get_dataloaderset(dataset_name, transform, args.batch_size, device, corruption_type=corruption, get_text_encodings=True)
+                dataset, text_encodings = get_dataset(dataset_name, transform, args.batch_size, device, corruption_type=corruption, get_text_encodings=True)
                                    
                 sampler = DistributedSampler(dataset, num_replicas=world_size, rank=rank, shuffle=False)
                 dataloader = torch.utils.data.DataLoader(dataset, batch_size=args.batch_size, sampler=sampler)
@@ -256,7 +256,7 @@ def main(args):
                     logging.info(f"{args.feature_extractor_name} {dataset_name} {corruption} Accuracy: {accuracy:.6f}")
                     save_results_to_csv(f"{dataset_name}-{corruption}", args.feature_extractor_name, accuracy, log_file)
         else:
-                dataset, text_encodings = get_dataloaderset(dataset_name, transform, args.batch_size, device, get_text_encodings=True)
+                dataset, text_encodings = get_dataset(dataset_name, transform, args.batch_size, device, get_text_encodings=True)
                                    
                 sampler = DistributedSampler(dataset, num_replicas=world_size, rank=rank, shuffle=False)
                 dataloader = torch.utils.data.DataLoader(dataset, batch_size=args.batch_size, sampler=sampler)
