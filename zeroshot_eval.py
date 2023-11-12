@@ -18,7 +18,8 @@ from models.ViT_models import SAMBackbone, MAEBackbone, DINOBackbone
 from models.projector import ProjectionHead
 
 from ZSL_dataloaders import get_zsl_datasets
-
+import ssl
+ssl._create_default_https_context = ssl._create_unverified_context
 
 def get_transform(feature_extractor_name):
     """ Returns appropriate transform based on model type """
@@ -82,7 +83,7 @@ def build_feature_extractor(feature_extractor_name, feature_extractor_checkpoint
 def load_projector(projector_checkpoint_path, feature_dim, proj_dim, device="cpu"):
     """ Load the projector model """
     projector = ProjectionHead(feature_dim, proj_dim).to(device)
-    projector.load_state_dict(torch.load(projector_checkpoint_path, map_location=device))
+    projector.load_state_dict(torch.load(projector_checkpoint_path, map_location=device)['projector_state'])
     return projector
     
 def get_CLIP_text_encodings(texts, device):
@@ -173,8 +174,8 @@ def main(args):
     device = "cuda" if torch.cuda.is_available() else "cpu"
     logging.info(f"Using device: {device}")
 
-    # supported_datasets = ["cifar10", "cifar100", 'cifar100-c', "gtsrb", "svhn", "dtd", "oxfordpets",  "food101", "eurosat", "ucf101", "stanfordcars", "flowers102"]
-    supported_datasets = ["food101", "eurosat", "ucf101", "stanfordcars", "flowers102"]
+    supported_datasets = ["cifar10", "cifar100",  "gtsrb", "svhn", "dtd", "oxfordpets",  "food101", "eurosat", "ucf101", "stanfordcars", "flowers102"]
+    #supported_datasets = ["food101", "eurosat", "ucf101", "stanfordcars", "flowers102"]
     datasets_to_evaluate = supported_datasets if args.dataset_name == 'all' else [args.dataset_name]
 
     cifar100_corruptions = [
@@ -228,14 +229,16 @@ if __name__ == "__main__":
                         help='Name of the dataset to evaluate on, or "all" for all datasets.')
     parser.add_argument('--data_path', type=str, default='./data')
     parser.add_argument('--batch_size', type=int, default=32)
-    parser.add_argument('--text_encoding_path', type=str, required=True)
-    parser.add_argument('--feature_extractor_name', type=str, default='clip')
-    parser.add_argument('--feature_extractor_checkpoint_path', type=str)
-    parser.add_argument('--clip_model_name', type=str, default='RN50')
+    parser.add_argument('--text_encoding_path', type=str, required=False)
+    parser.add_argument('--feature_extractor_name', type=str, default='mae_vit_large_patch16')
+    parser.add_argument('--feature_extractor_checkpoint_path', type=str)    
+    parser.add_argument('--clip_model_name', type=str, default='ViT-B/32')
 
-    parser.add_argument('--projector_checkpoint_path', type=str)
-    parser.add_argument('--proj_dim', type=int, default=1024)
+    parser.add_argument('--projector_checkpoint_path', type=str,default="/p/gpfs1/KDML/ckpts_13M/mae_vit_large_patch16full_13M/projector_weights_final.pth")
+    parser.add_argument('--proj_dim', type=int, default=512)
     args = parser.parse_args()
 
     print(f"Arguments: {args}")
+    args.data_path =os.path.join("/usr/workspace/thopalli/ICLR2024/rich_datasets", "datasets")
+    args.dataset_name= 'all'
     main(args)

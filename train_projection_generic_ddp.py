@@ -384,8 +384,8 @@ if __name__ == "__main__":
     parser.add_argument('--resume_checkpoint_path', type=str, help='Path to checkpoint to resume training from')
 
     parser.add_argument('--num_epochs', type=int, default=100, help='Number of training epochs')
-    parser.add_argument('--optimizer', type=str, choices=['adam', 'sgd'], default='adam', help='Type of optimizer to use')
-    parser.add_argument('--learning_rate', type=float, default=8e-4, help='Learning rate for the optimizer')
+    parser.add_argument('--optimizer', type=str, choices=['adam','adamw', 'sgd'], default='adamw', help='Type of optimizer to use')
+    parser.add_argument('--learning_rate', type=float, default=1e-3, help='Learning rate for the optimizer')
     parser.add_argument('--val_freq', type=int, default=1, help='Validation frequency')
     parser.add_argument('--save_dir', type=str, default='checkpoints', help='Directory to save the results')
     parser.add_argument('--prefix', type=str, default='', help='prefix to add to the save directory')
