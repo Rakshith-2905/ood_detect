@@ -109,14 +109,14 @@ def save_chunk_features(rank, world_size, image_features, text_features, save_pa
                 f.write(f"{filename}\n")
 
 
-def process_data_loader(rank, world_size, args, feature_extractor, device, save_path, clip_model_name, feature_extractor_name):
+def process_data_loader(rank, world_size, args, feature_extractor, device, transform, save_path, clip_model_name, feature_extractor_name):
 
     # Initialize CLIP
     clip_model, preprocess = clip.load(args.clip_model_name, device=device)
     
     # Initialize the dataset and data loader
     dataset = ImageTextDataset(args.json_file, args.data_path, start_index=args.start_index, end_index=args.end_index, 
-                                transform=feature_extractor.transform, transform2=None)
+                                transform=transform, transform2=None)
     sampler = DistributedSampler(dataset, num_replicas=world_size, rank=rank)
     data_loader = DataLoader(dataset, batch_size=args.batch_size, sampler=sampler, shuffle=False)
 
@@ -225,7 +225,7 @@ def build_feature_extractor(feature_extractor_name, feature_extractor_checkpoint
     if test_transform is None:
         test_transform = get_transform(feature_extractor_name)
     
-    return feature_extractor, train_transform, test_transform
+    return feature_extractor, test_transform, test_transform
 
 def main(args):
     try:
@@ -242,7 +242,7 @@ def main(args):
     feature_extractor, transform, _ = build_feature_extractor(args.feature_extractor_name, args.feature_extractor_checkpoint_path, device)
     feature_extractor = DDP(feature_extractor, device_ids=[0])
 
-    process_data_loader(rank, world_size, args, feature_extractor, device, args.save_path, args.clip_model_name, args.feature_extractor_name)
+    process_data_loader(rank, world_size, args, feature_extractor, device, transform, args.save_path, args.clip_model_name, args.feature_extractor_name)
 
 
 if __name__ == "__main__":
