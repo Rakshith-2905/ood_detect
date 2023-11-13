@@ -68,38 +68,26 @@ def train_one_epoch(train_loader, clip_model, feature_extractor, projector, crit
     pbar = progbar_wrapper(
         train_loader, total=len(train_loader), desc=f"Training Epoch {epoch+1}"
     )
-    for images_batch, images_clip_batch, captions_batch, image_names_batch in pbar:
+    for images_batch, images_clip_batch, labels in pbar:
 
         optimizer.zero_grad()
         
-        # clip_image_embeddings = clip_model.encode_image(images_clip_batch)
-        captions_batch = [caption for caption in captions_batch]
-        # Extract features for images and text
-        with torch.no_grad():
-            text_tokens = fabric.to_device(clip.tokenize(captions_batch, truncate=True))
-            clip_txt_embeddings = clip_model.encode_text(text_tokens)
+        classifier_logits, classifier_embeddings = feature_extractor(images_batch) # (batch_size, embedding_dim)
 
-        custom_image_embeddings = feature_extractor(images_batch)
-
-        # Project the resnet embeddings
-        proj_embeddings = projector(custom_image_embeddings)
+        # Project the classifier embeddings
+        proj_embeddings = projector(classifier_embeddings) # (batch_size, projection_dim)
 
         normalized_proj_embeddings = F.normalize(proj_embeddings, dim=-1)
-        normalized_text_encodings = F.normalize(clip_txt_embeddings, dim=-1)
+        normalized_text_encodings = F.normalize(text_encodings, dim=-1)# (num_classes, projection_dim)
 
         # make the text embeddings to the same data type as image embeddings
         normalized_text_encodings = normalized_text_encodings.type_as(normalized_proj_embeddings)
-        # The logits dimension (batch_size, batch_size)
-        logits_per_projection = 100*normalized_proj_embeddings @ normalized_text_encodings.t() # 100 is the logits scale from CLIP
-        logits_per_text = logits_per_projection.t()
+        # T100 is the logits scale from CLIP
+        logits_projection = 100*normalized_proj_embeddings @ normalized_text_encodings.t() # (batch_size, num_classes)
 
-        # We want to maximize the diagonal entries of the logits matrix while minimizing the off-diagonal entries
 
-        # labels are indexes to the diagonal entries of the logits matrix
-        pseudo_labels = fabric.to_device(torch.arange(len(proj_embeddings)).long()) # (batch_size)
-
-        loss_image = F.cross_entropy(logits_per_projection, pseudo_labels)
-        loss_text = F.cross_entropy(logits_per_text, pseudo_labels)
+        loss_image = criterion(logits_projection, classifier_logits)
+        loss_text = criterion(logits_projection.t(), classifier_logits.t())
         loss = (loss_image + loss_text)/2
         
         fabric.backward(loss)
@@ -112,7 +100,7 @@ def train_one_epoch(train_loader, clip_model, feature_extractor, projector, crit
         total_image_loss += loss_image.item()
         total_text_loss += loss_text.item()
         
-        # pbar.set_postfix_str({"Batch Loss": batch_loss, "Image Loss": loss_image.item(), "Text Loss": loss_text.item()})
+        pbar.set_description({"Batch Loss": batch_loss, "Image Loss": loss_image.item(), "Text Loss": loss_text.item()})
 
     # TODO: Check if this is correct
     total_loss = fabric.all_gather(total_loss).sum() / len(train_loader)

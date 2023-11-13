@@ -77,7 +77,7 @@ def get_CIFAR100_loaders(batch_size=512,train_shuffle=True, data_dir='./data', s
                                     select_indices=select_indices, retain_orig_ids=retain_orig_ids)
 
     if return_dataset:
-        return train_dataset, test_dataset
+        return train_dataset, test_dataset, train_dataset.classes
 
     train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=train_shuffle, num_workers=8)
     test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False, num_workers=8)
