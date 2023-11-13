@@ -301,7 +301,7 @@ def main(args):
 
     #scheduler = CosineAnnealingLR(optimizer, T_max=args.num_epochs, eta_min=0.0)
     # Multi step LR
-    scheduler = torch.optim.lr_scheduler.MultiStepLR(optimizer, milestones=[10], gamma=0.3)
+    scheduler = torch.optim.lr_scheduler.MultiStepLR(optimizer, milestones=[25, 50], gamma=0.1)
 
     # Load checkpoint if available
     if args.resume_checkpoint_path and os.path.isfile(args.resume_checkpoint_path):
@@ -391,7 +391,7 @@ if __name__ == "__main__":
 
     parser.add_argument('--num_epochs', type=int, default=100, help='Number of training epochs')
     parser.add_argument('--optimizer', type=str, choices=['adam','adamw', 'sgd'], default='adamw', help='Type of optimizer to use')
-    parser.add_argument('--learning_rate', type=float, default=1e-2, help='Learning rate for the optimizer')
+    parser.add_argument('--learning_rate', type=float, default=1e-1, help='Learning rate for the optimizer')
     parser.add_argument('--val_freq', type=int, default=1, help='Validation frequency')
     parser.add_argument('--save_dir', type=str, default='checkpoints', help='Directory to save the results')
     parser.add_argument('--prefix', type=str, default='', help='prefix to add to the save directory')
