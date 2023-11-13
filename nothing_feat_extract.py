@@ -148,7 +148,7 @@ def save_chunk_data(accumulated_data, save_path, chunk_start_index, chunk_end_in
         'captions': accumulated_data['captions']
     }
 
-    save_filename = f"{save_path}/{feature_extractor_name}/{chunk_start_index}_{chunk_end_index}.pt"
+    save_filename = f"{save_path}/{feature_extractor_name}_{chunk_start_index}_{chunk_end_index}.pt"
   
     # Save the combined data
     torch.save(save_data, save_filename)
