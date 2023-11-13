@@ -3,6 +3,8 @@ from torch.utils.data import Dataset
 import os
 import glob
 import pandas as pd
+
+
 class ChunkedDataset(Dataset):
     def __init__(self, save_path, feature_extractor_name):
         self.save_path = save_path
@@ -73,18 +75,62 @@ class ChunkedDataset(Dataset):
         text_features = self.current_chunk_data['text_features'][within_chunk_index]
         return image_features, text_features
 
+def group_and_save_chunks(original_path, grouped_path, feature_extractor_name, group_size):
+    chunk_files = sorted(glob.glob(f"{original_path}/{feature_extractor_name}_*.pt"))
+    current_group = {'image_features': [], 'text_features': []}
+    group_index = 0  # Index to keep track of the group number
+
+    num_images = 0
+    for chunk_file in chunk_files:
+        data = torch.load(chunk_file)
+        current_group['image_features'].extend(data['image_features'])
+        current_group['text_features'].extend(data['text_features'])
+
+        num_images += data['image_features'].shape[0]
+        print(num_images)
+        # Check if the current group reached the desired group size
+        if num_images >= group_size:
+            start_index = group_index * group_size
+            end_index = start_index + num_images - 1
+
+            # Save the current group
+            save_filename = f"{grouped_path}/{feature_extractor_name}_{start_index}_{end_index}.pt"
+            torch.save(current_group, save_filename)
+            print(f"Saved grouped chunk: {save_filename}")
+
+            # Prepare for the next group
+            current_group = {'image_features': [], 'text_features': []}
+            group_index += 1
+            num_images = 0
+
+    # Save the last group if it's not empty
+    if current_group['image_features']:
+        start_index = group_index * group_size
+        end_index = start_index + len(current_group['image_features']) - 1
+        save_filename = f"{grouped_path}/{feature_extractor_name}_{start_index}_{end_index}.pt"
+        torch.save(current_group, save_filename)
+        print(f"Saved grouped chunk: {save_filename}")
+
 
 if __name__ == '__main__':
     save_path = '/p/gpfs1/KDML/feats/test'
     feature_extractor_name = 'dino_vits16'
 
-    dataset = ChunkedDataset(save_path, feature_extractor_name)
+    # dataset = ChunkedDataset(save_path, feature_extractor_name)
     
-    data_loader = torch.utils.data.DataLoader(dataset, batch_size=32, shuffle=False)
+    # data_loader = torch.utils.data.DataLoader(dataset, batch_size=32, shuffle=False)
     
-    for image_features, text_features in data_loader:
-        # print(image_features.shape)
-        # print(text_features.shape)
-        pass
-        # Process your data here
+    # for image_features, text_features in data_loader:
+    #     # print(image_features.shape)
+    #     # print(text_features.shape)
+    #     pass
+    #     # Process your data here
+        
+    # Usage
+    original_path = '/p/gpfs1/KDML/feats/test'
+    grouped_path = '/p/gpfs1/KDML/feats/test_grouped'
+    feature_extractor_name = 'dino_vits16'
+    group_size = 1000000  # Define the size of each group based on your needs
+
+    group_and_save_chunks(original_path, grouped_path, feature_extractor_name, group_size)
         
