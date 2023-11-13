@@ -2,7 +2,7 @@ import torch
 from torch.utils.data import Dataset
 import os
 import glob
-
+import pandas as pd
 class ChunkedDataset(Dataset):
     def __init__(self, save_path, feature_extractor_name):
         self.save_path = save_path
@@ -12,7 +12,14 @@ class ChunkedDataset(Dataset):
         # Precompute and store the start and end indices for each chunk
         self.chunk_indices = []
         self.cumulative_index = 0  # Cumulative index to handle non-sequential chunks
+        error_files=[]
         for chunk_file in self.chunk_files:
+            # try:
+            #     data = torch.load(chunk_file)
+            # except:
+            #     error_files.append(chunk_file)
+                
+            #     continue
             parts = os.path.basename(chunk_file).split('_')
             start_index, end_index = int(parts[-2]), int(parts[-1].split('.')[0])
             self.chunk_indices.append((self.cumulative_index, self.cumulative_index + (end_index - start_index)))
@@ -24,11 +31,30 @@ class ChunkedDataset(Dataset):
 
         # Total size is the cumulative index at the end
         self.total_size = self.cumulative_index
+    #     # add error files to error_files.txt
+    #     # for each error_file use pandas
+    #     start_indices=[]
+    #     end_indices=[]
+    #     for error_file in error_files:
+    #         # get the start and end indices
+    #         parts = os.path.basename(error_file).split('_')
+    #         start_index, end_index = int(parts[-2]), int(parts[-1].split('.')[0])
+    #         # add the start and end indices to error_files.txt
+    #         start_indices.append(start_index)
+    #         end_indices.append(end_index+1)
+    #     data = {'start_indices': start_indices, 'end_indices': end_indices}
+    #     df = pd.DataFrame(data, columns=['start_indices', 'end_indices'], index=None)
+    #   #  df.to_csv('error_files.txt', sep='\t', index=False)
 
+    #     assert False
+
+        
     def _load_chunk(self, chunk_file, start_index, end_index):
-        self.current_chunk_data = torch.load(chunk_file)
+
+        self.current_chunk_data = torch.load(chunk_file,map_location="cpu")
         self.current_chunk_start = start_index
         self.current_chunk_end = end_index
+       # print(f"Loaded chunk {chunk_file.split('/')[-1]} with indices {start_index} to {end_index},length {len(self.current_chunk_data['image_features'])} ")
 
     def __len__(self):
         return self.total_size
@@ -49,10 +75,11 @@ class ChunkedDataset(Dataset):
 
 
 if __name__ == '__main__':
-    save_path = '/p/gpfs1/KDML/feats/train'
+    save_path = '/p/gpfs1/KDML/feats/test'
     feature_extractor_name = 'dino_vits16'
 
     dataset = ChunkedDataset(save_path, feature_extractor_name)
+    
     data_loader = torch.utils.data.DataLoader(dataset, batch_size=32, shuffle=False)
     
     for image_features, text_features in data_loader:
