@@ -153,6 +153,7 @@ def save_chunk_data(accumulated_data, save_path, chunk_start_index, chunk_end_in
     # Save the combined data
     torch.save(save_data, save_filename)
     logging.info(f"Saved chunk {chunk_start_index} to {chunk_end_index} to {save_filename}")
+
 def get_transform(feature_extractor_name):
     """ Returns appropriate transform based on model type """
     if feature_extractor_name == 'clip':
@@ -197,7 +198,10 @@ def build_feature_extractor(feature_extractor_name, feature_extractor_checkpoint
         feature_extractor = DINOBackbone("dino_vits16", None)
     elif args.feature_extractor_name in ['deeplabv3_resnet50', 'deeplabv3_resnet101']:
         feature_extractor = CustomSegmentationModel(args.feature_extractor_name, use_pretrained=True)
-
+    elif args.feature_extractor_name == 'clip':
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+        model,_ = clip.load(args.clip_model_name, device=device)
+        feature_extractor = feature_extractor.visual
     elif args.feature_extractor_name in ['resnet18', 'resnet50', 'resnet101', 'resnet50_adv_l2_0.1', 'resnet50_adv_l2_0.5', 'resnet50x1_bitm', 'resnetv2_101x1_bit.goog_in21k']:
         feature_extractor = CustomFeatureModel(args.feature_extractor_name, use_pretrained=True)
     else:
