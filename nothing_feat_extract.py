@@ -76,7 +76,10 @@ class ImageTextDataset(Dataset):
 @torch.no_grad()
 def process_data_loader(args, feature_extractor, device, transform, save_path, clip_model_name, feature_extractor_name):
     # Initialize CLIP
+    os.makedirs(save_path, exist_ok=True)
     clip_model, _ = clip.load(args.clip_model_name, device=device)
+
+    clip_model.eval()
 
     # Initialize the dataset and data loader
     dataset = ImageTextDataset(args.json_file, args.data_path, start_index=args.start_index, end_index=args.end_index, 
@@ -145,7 +148,7 @@ def save_chunk_data(accumulated_data, save_path, chunk_start_index, chunk_end_in
         'captions': accumulated_data['captions']
     }
 
-    save_filename = f"{save_path}/{feature_extractor_name}_{chunk_start_index}_{chunk_end_index}.pt"
+    save_filename = f"{save_path}/{feature_extractor_name}/{chunk_start_index}_{chunk_end_index}.pt"
   
     # Save the combined data
     torch.save(save_data, save_filename)
@@ -180,25 +183,26 @@ def build_feature_extractor(feature_extractor_name, feature_extractor_checkpoint
         torch.nn.Module: The feature extractor.
         transforms.Compose: Train transform.
         transforms.Compose: Test transform.
+
     """
-    if feature_extractor_name == 'sam_vit_h':
+    if args.feature_extractor_name == 'sam_vit_h':
         if feature_extractor_checkpoint_path is None:
             feature_extractor_checkpoint_path = "checkpoints/sam_vit_h_4b8939.pth"
         feature_extractor = SAMBackbone("vit_h", feature_extractor_checkpoint_path)
-    elif feature_extractor_name == 'mae_vit_large_patch16':
+    elif args.feature_extractor_name == 'mae_vit_large_patch16':
         if feature_extractor_checkpoint_path is None:
             feature_extractor_checkpoint_path = "checkpoints/mae_visualize_vit_large_ganloss.pth"
         feature_extractor = MAEBackbone("mae_vit_large_patch16", feature_extractor_checkpoint_path)
-    elif feature_extractor_name == 'dino_vits16':
+    elif args.feature_extractor_name == 'dino_vits16':
         feature_extractor = DINOBackbone("dino_vits16", None)
-    elif feature_extractor_name == 'clip':
-        model, _ = clip.load(args.clip_model_name, device=device)
-        feature_extractor = model.encode_image
-        transforms = get_transform('clip')
-    elif feature_extractor_name in ['resnet18', 'resnet50', 'resnet101']:
-        feature_extractor = CustomResNet(feature_extractor_name, 0, use_pretrained=True)
+    elif args.feature_extractor_name in ['deeplabv3_resnet50', 'deeplabv3_resnet101']:
+        feature_extractor = CustomSegmentationModel(args.feature_extractor_name, use_pretrained=True)
+
+    elif args.feature_extractor_name in ['resnet18', 'resnet50', 'resnet101', 'resnet50_adv_l2_0.1', 'resnet50_adv_l2_0.5', 'resnet50x1_bitm', 'resnetv2_101x1_bit.goog_in21k']:
+        feature_extractor = CustomFeatureModel(args.feature_extractor_name, use_pretrained=True)
     else:
         raise NotImplementedError(f"{feature_extractor_name} is not implemented.")
+
 
     train_transform = feature_extractor.transform if hasattr(feature_extractor, 'transform') else None
     test_transform = feature_extractor.test_transform if hasattr(feature_extractor, 'test_transform') else None
@@ -207,8 +211,47 @@ def build_feature_extractor(feature_extractor_name, feature_extractor_checkpoint
         train_transform = get_transform(feature_extractor_name)
     if test_transform is None:
         test_transform = get_transform(feature_extractor_name)
-    
+   
     return feature_extractor, test_transform, test_transform
+
+# def build_feature_extractor(feature_extractor_name, feature_extractor_checkpoint_path=None, device='cpu'):
+#     """
+#     Builds the feature extractor based on the provided name.
+#     Args:
+#         feature_extractor_name (str): The name of the feature extractor to use.
+#     Returns:
+#         torch.nn.Module: The feature extractor.
+#     """
+#     if args.feature_extractor_name == 'sam_vit_h':
+#         if feature_extractor_checkpoint_path is None:
+#             feature_extractor_checkpoint_path = "checkpoints/sam_vit_h_4b8939.pth"
+#         feature_extractor = SAMBackbone("vit_h", feature_extractor_checkpoint_path)
+#     elif args.feature_extractor_name == 'mae_vit_large_patch16':
+#         if feature_extractor_checkpoint_path is None:
+#             feature_extractor_checkpoint_path = "checkpoints/mae_visualize_vit_large_ganloss.pth"
+#         feature_extractor = MAEBackbone("mae_vit_large_patch16", feature_extractor_checkpoint_path)
+#     elif args.feature_extractor_name == 'dino_vits16':
+#         feature_extractor = DINOBackbone("dino_vits16", None)
+#     elif args.feature_extractor_name in ['deeplabv3_resnet50', 'deeplabv3_resnet101']:
+#         feature_extractor = CustomSegmentationModel(args.feature_extractor_name, use_pretrained=True)
+
+#     elif args.feature_extractor_name in ['resnet18', 'resnet50', 'resnet101', 'resnet50_adv_l2_0.1', 'resnet50_adv_l2_0.5', 'resnet50x1_bitm', 'resnetv2_101x1_bit.goog_in21k']:
+#         feature_extractor = CustomFeatureModel(args.feature_extractor_name, use_pretrained=True)
+#     else:
+#         raise NotImplementedError(f"{feature_extractor_name} is not implemented.")
+
+#     train_transform = feature_extractor.transform
+#     test_transform = feature_extractor.test_transform
+
+#     if train_transform is None:
+#         train_transform = get_transform(feature_extractor_name)
+#     if test_transform is None:
+#         test_transform = get_transform(feature_extractor_name)
+   
+   
+#     return feature_extractor, test_transform, test_transform
+
+
 
 def main(args):
 
@@ -217,6 +260,9 @@ def main(args):
     # Initialize the feature extractor
     feature_extractor, transform, _ = build_feature_extractor(args.feature_extractor_name, args.feature_extractor_checkpoint_path, device)
     feature_extractor.to(device)
+    feature_extractor.eval()
+    #dataparallel
+    feature_extractor= torch.nn.DataParallel(feature_extractor)
 
     process_data_loader(args, feature_extractor, device, transform, args.save_path, args.clip_model_name, args.feature_extractor_name)
 
@@ -243,4 +289,5 @@ if __name__ == "__main__":
     
     print(f"No. of images per chunk: {args.images_per_chunk}")
     time.sleep(10)
-    main(args)
+    with torch.no_grad():
+        main(args)
