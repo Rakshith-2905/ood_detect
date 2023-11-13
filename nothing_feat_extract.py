@@ -73,6 +73,12 @@ class ImageTextDataset(Dataset):
 
         return image_trans, caption, image_path
 
+def convert_models_to_fp32(model):
+    for p in model.parameters():
+        p.data = p.data.float()
+        if p.grad:
+            p.grad.data = p.grad.data.float()
+
 @torch.no_grad()
 def process_data_loader(args, feature_extractor, device, transform, save_path, clip_model_name, feature_extractor_name):
     # Initialize CLIP
@@ -201,7 +207,9 @@ def build_feature_extractor(feature_extractor_name, feature_extractor_checkpoint
     elif args.feature_extractor_name == 'clip':
         device = "cuda" if torch.cuda.is_available() else "cpu"
         model,_ = clip.load(args.clip_model_name, device=device)
-        feature_extractor = feature_extractor.visual
+        convert_models_to_fp32(model)
+        feature_extractor = model.visual
+
     elif args.feature_extractor_name in ['resnet18', 'resnet50', 'resnet101', 'resnet50_adv_l2_0.1', 'resnet50_adv_l2_0.5', 'resnet50x1_bitm', 'resnetv2_101x1_bit.goog_in21k']:
         feature_extractor = CustomFeatureModel(args.feature_extractor_name, use_pretrained=True)
     else:
