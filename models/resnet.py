@@ -2,11 +2,15 @@ import ssl
 ssl._create_default_https_context = ssl._create_unverified_context
 import torch
 import torch.nn as nn
-from torchvision.models import resnet18, resnet34, resnet50, resnet101, resnet152
+import torchvision
+from torchvision.models import resnet18, resnet34, resnet50, resnet101, resnet152, swin_b, vit_b_16
 from torchvision.models.segmentation import deeplabv3_resnet50, deeplabv3_resnet101, DeepLabV3_ResNet50_Weights, DeepLabV3_ResNet101_Weights
 from torchvision.models.segmentation import fcn_resnet50, fcn_resnet101, FCN_ResNet50_Weights, FCN_ResNet101_Weights
-from torchvision import transforms
+
+
 from torchvision.models.feature_extraction import get_graph_node_names, create_feature_extractor
+from torchvision import transforms
+
 
 from PIL import Image
 import timm
@@ -190,16 +194,86 @@ class CustomResNet(nn.Module):
         else:
             return self.model(x)
 
-# Example usage:
-# model = CustomResNet(model_name='resnet50', num_classes=len(train_set.selected_classes))
-# model.to(device)
+class CustomClassifier(nn.Module):
+    def __init__(self, model_name, use_pretrained=False):
+        super(CustomClassifier, self).__init__()
 
+        self.train_transform = transforms.Compose([
+                            transforms.RandomResizedCrop(224),
+                            transforms.RandomHorizontalFlip(),
+                            transforms.ToTensor(),
+                            transforms.Normalize(mean=[0.485, 0.456, 0.406],
+                                                std=[0.229, 0.224, 0.225])                
+                        ])
+        
+        self.test_transform = transforms.Compose([
+                        transforms.Resize(256),
+                        transforms.CenterCrop(224),
+                        transforms.ToTensor(),
+                        transforms.Normalize(mean=[0.485, 0.456, 0.406],
+                                            std=[0.229, 0.224, 0.225])                
+                    ])
+
+        if model_name == "resnet_18":
+            from torchvision.models import resnet18, ResNet18_Weights
+            network = resnet18(weights=ResNet18_Weights.IMAGENET1K_V1).to(device)
+            self.network_feat_extractor = create_feature_extractor(network,return_nodes=['flatten','head'])
+        elif model_name == "resnet_50":
+            from torchvision.models import resnet50, ResNet50_Weights
+            network = resnet50(weights=ResNet50_Weights.IMAGENET1K_V1).to(device)
+
+            self.network_feat_extractor = create_feature_extractor(network,return_nodes=['flatten','fc'])
+        elif model_name == "regnet":
+            from torchvision.models import regnet_y_800mf, RegNet_Y_800MF_Weights
+            network = torchvision.models.get_model("regnet_y_800mf",weights=RegNet_Y_800MF_Weights.IMAGENET1K_V1 ).to(device)
+        elif model_name == "vit_b_16":
+            from torchvision.models import vit_b_16, ViT_B_16_Weights
+            network = torchvision.models.get_model("vit_b_16",weights = ViT_B_16_Weights.IMAGENET1K_V1).to(device)
+            self.network_feat_extractor = create_feature_extractor(network,return_nodes=['getitem_5','heads'])
+        elif model_name =='swin_v2_t':
+            from torchvision.models import swin_v2_t, Swin_V2_T_Weights
+            network = torchvision.models.get_model("swin_v2_t",weights= Swin_V2_T_Weights.IMAGENET1K_V1).to(device)
+            self.network_feat_extractor = create_feature_extractor(network,return_nodes=['flatten','head'])
+        elif model_name == "swin_b":
+            from torchvision.models import swin_b, Swin_B_Weights
+            network = torchvision.models.get_model("swin_b",weights= Swin_B_Weights.IMAGENET1K_V1).to(device)
+            self.network_feat_extractor = create_feature_extractor(network,return_nodes=['flatten','head'])
+        elif model_name == "deit_tiny":
+            network = torch.hub.load('facebookresearch/deit:main', 'deit_tiny_patch16_224', pretrained=True).to(device)
+            self.network_feat_extractor = create_feature_extractor(network,return_nodes=['flatten','head'])
+        elif model_name == "deit_small":
+            network = torch.hub.load('facebookresearch/deit:main', 'deit_small_patch16_224', pretrained=True).to(device)
+            self.network_feat_extractor = create_feature_extractor(network,return_nodes=['flatten','head'])
+        elif model_name =="clip_rn50":
+            clip_model, preprocess_clip = clip.load("RN50", device=device)
+            self.network_feat_extractor = clip_model
+            preprocess= transforms.Compose([transforms.Resize(256),
+                    transforms.CenterCrop(224),
+                    preprocess_clip])
+        else:
+            raise NotImplementedError(f"{model_name} is not supported")
+
+    def forward(self, x, return_features=False):
+
+        results = self.network_feat_extractor(x)
+        keys = list(results.keys())
+        for k in keys:
+            if 'head' in k or 'fc' in k:
+                logits = results[k]
+            else:
+                feature = results[k]
+
+        if return_features:
+            return logits, feature
+        else:
+            return logits
 
 if __name__ == "__main__":
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    model = CustomFeatureModel(model_name='resnetv2_101x1_bit.goog_in21k', use_pretrained=True).to(device)
+    # model = CustomFeatureModel(model_name='resnetv2_101x1_bit.goog_in21k', use_pretrained=True).to(device)
+    model = CustomClassifier(model_name='swin_b', use_pretrained=True).to(device)
     # features = model(torch.zeros(1, 3, 224, 224))
     # print(features.shape)
     # print(model.feature_dim)
@@ -208,6 +282,7 @@ if __name__ == "__main__":
     #pil_image = Image.open("./data/domainnet_v1.0/real/toothpaste/real_318_000284.jpg")
     #pil_images = [pil_image,pil_image]
     torch_tensor = torch.zeros(1,3, 224, 224).to(device)
-    features = model(torch_tensor)
+    logits, features = model(torch_tensor, return_features=True)
+    print(logits.shape)
     print(features.shape)
 

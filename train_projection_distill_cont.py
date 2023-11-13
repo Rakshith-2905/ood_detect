@@ -5,9 +5,16 @@ try:
     del os.environ['OMP_PROC_BIND']
 except:
     pass
+
 import time
 import torch
 import torch.nn.functional as F
+
+import torchvision.transforms as trn
+import torchvision.datasets as dset
+from torch.utils.data import Dataset, DataLoader, TensorDataset
+
+
 from torchmetrics.classification import Accuracy
 from torch.optim.lr_scheduler import CosineAnnealingLR
 import lightning as L
@@ -25,11 +32,28 @@ from tqdm import tqdm
 import numpy as np
 import random
 
-from models.ViT_models import SAMBackbone, MAEBackbone, DINOBackbone
-from models.resnet import CustomFeatureModel, CustomSegmentationModel
+from domainnet_data import DomainNetDataset
+
+from models.resnet import CustomClassifier
 from models.projector import ProjectionHead
 from YFCC_feature_extract import ImageTextDataset
 from utils_proj import SimpleDINOLoss, compute_accuracy, compute_similarities, plot_grad_flow
+
+def get_dataset(data_name, train_transforms, test_transforms, data_dir='../data'):
+
+    if data_name == 'imagenet':
+        train_dataset = dset.ImageFolder(root=f'{data_dir}/imagenet_train_examples', transform=train_transforms)
+        val_dataset = dset.ImageFolder(root=f'{data_dir}/imagenet_val_examples', transform=test_transforms)
+        class_names = train_dataset.classes
+
+    elif data_name == 'domainnet':
+        train_dataset = DomainNetDataset(root_dir=data_dir, domain=args.domain_name, \
+                                        split='train', transform=train_transforms)
+        val_dataset = DomainNetDataset(root_dir=data_dir, domain=args.domain_name, \
+                                        split='test', transform=test_transforms)
+        class_names = train_dataset.targets
+
+    return train_dataset, val_dataset, class_names
 
 def get_save_dir(args):
     
@@ -38,7 +62,7 @@ def get_save_dir(args):
         save_dir = os.path.dirname(args.resume_checkpoint_path)
         return save_dir
 
-    save_dir = os.path.join(args.save_dir, args.feature_extractor_name)
+    save_dir = os.path.join(args.save_dir, args.classifier_name)
     save_dir += f"{args.prefix}"
     # save_dir += f"_{datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}"
 
@@ -56,23 +80,28 @@ def progbar_wrapper(iterable, total, **kwargs):
         return tqdm(iterable, total=total, **kwargs)
     return iterable
     
-def train_one_epoch(train_loader, clip_model, feature_extractor, projector, criterion, optimizer, epoch):
+def train_one_epoch(train_loader, clip_model, classifier, projector, text_encodings, criterion, optimizer, epoch):
     clip_model.eval()
-    feature_extractor.eval()
+    classifier.eval()
     projector.train()
     
     total_loss = 0
     total_image_loss = 0
     total_text_loss = 0
 
+    total_base_model_acc = 0
+    total_clip_acc = 0
     pbar = progbar_wrapper(
         train_loader, total=len(train_loader), desc=f"Training Epoch {epoch+1}"
     )
-    for images_batch, images_clip_batch, labels in pbar:
+    for images_batch, labels in pbar:
+
+        images_batch = fabric.to_device(images_batch)
+        labels = fabric.to_device(labels)
 
         optimizer.zero_grad()
         
-        classifier_logits, classifier_embeddings = feature_extractor(images_batch) # (batch_size, embedding_dim)
+        classifier_logits, classifier_embeddings = classifier(images_batch) # (batch_size, embedding_dim)
 
         # Project the classifier embeddings
         proj_embeddings = projector(classifier_embeddings) # (batch_size, projection_dim)
@@ -85,7 +114,6 @@ def train_one_epoch(train_loader, clip_model, feature_extractor, projector, crit
         # T100 is the logits scale from CLIP
         logits_projection = 100*normalized_proj_embeddings @ normalized_text_encodings.t() # (batch_size, num_classes)
 
-
         loss_image = criterion(logits_projection, classifier_logits)
         loss_text = criterion(logits_projection.t(), classifier_logits.t())
         loss = (loss_image + loss_text)/2
@@ -94,126 +122,115 @@ def train_one_epoch(train_loader, clip_model, feature_extractor, projector, crit
 
         optimizer.step()
 
+        probs_from_classifier = F.softmax(classifier_logits, dim=-1)
+        probs_from_proj = F.softmax(logits_projection, dim=-1)
+
+        batch_base_model_acc = compute_accuracy(probs_from_classifier, labels)
+        batch_clip_acc = compute_accuracy(probs_from_proj, labels)
+
+        total_base_model_acc += batch_base_model_acc
+        total_clip_acc += batch_clip_acc
+
         batch_loss = loss.item() 
         total_loss += batch_loss
-        
+
         total_image_loss += loss_image.item()
         total_text_loss += loss_text.item()
-        
-        pbar.set_description({"Batch Loss": batch_loss, "Image Loss": loss_image.item(), "Text Loss": loss_text.item()})
 
-    # TODO: Check if this is correct
+        # pbar.set_postfix({"Batch Loss": batch_loss, "Base model Acc": batch_base_model_acc, "CLIP Acc": batch_clip_acc})
+    
     total_loss = fabric.all_gather(total_loss).sum() / len(train_loader)
     total_image_loss = fabric.all_gather(total_image_loss).sum() / len(train_loader)
     total_text_loss = fabric.all_gather(total_text_loss).sum() / len(train_loader)
+    
+    total_base_model_acc = fabric.all_gather(total_base_model_acc).sum() / len(train_loader)
+    total_clip_acc = fabric.all_gather(total_clip_acc).sum() / len(train_loader)
 
-    return  total_loss, total_image_loss, total_text_loss
+    return total_loss, total_base_model_acc, total_clip_acc, \
+            total_feature_loss, total_distill_loss_img, total_distill_loss_txt
 
 @torch.no_grad()
-def validate(val_loader, clip_model, feature_extractor, projector, criterion, epoch, label_mapping=None):
+def validate(val_loader, clip_model, classifier, projector, text_encodings, criterion, optimizer, epoch):
     
     clip_model.eval()
-    feature_extractor.eval()
-    projector.train()
+    classifier.eval()
+    projector.eval()
     
     total_loss = 0
     total_image_loss = 0
     total_text_loss = 0
+    
+    total_base_model_acc = 0
+    total_clip_acc = 0
+
 
     pbar = progbar_wrapper(
-        val_loader, total=len(val_loader), desc=f"Validation Epoch {epoch+1}"
+        train_loader, total=len(val_loader), desc=f"Validating Epoch {epoch+1}"
     )
-    for images_batch, images_clip_batch, captions_batch, image_names_batch in pbar:
+    for images_batch, labels in pbar:
 
-       # clip_image_embeddings = clip_model.encode_image(images_clip_batch)
-        captions_batch = [caption for caption in captions_batch]
-        text_tokens = fabric.to_device(clip.tokenize(captions_batch, truncate=True))
-        clip_txt_embeddings = clip_model.encode_text(text_tokens)
+        images_batch = fabric.to_device(images_batch)
+        labels = fabric.to_device(labels)
+        
+        classifier_logits, classifier_embeddings = classifier(images_batch) # (batch_size, embedding_dim)
 
-        custom_image_embeddings = feature_extractor(images_batch)
-
-        # Project the resnet embeddings
-        proj_embeddings = projector(custom_image_embeddings)
+        # Project the classifier embeddings
+        proj_embeddings = projector(classifier_embeddings) # (batch_size, projection_dim)
 
         normalized_proj_embeddings = F.normalize(proj_embeddings, dim=-1)
-        normalized_text_encodings = F.normalize(clip_txt_embeddings, dim=-1)
+        normalized_text_encodings = F.normalize(text_encodings, dim=-1)# (num_classes, projection_dim)
 
         # make the text embeddings to the same data type as image embeddings
         normalized_text_encodings = normalized_text_encodings.type_as(normalized_proj_embeddings)
-        # The logits dimension (batch_size, batch_size)
-        logits_per_projection = 100*normalized_proj_embeddings @ normalized_text_encodings.t() # 100 is the logits scale from CLIP
-        logits_per_text = logits_per_projection.t()
+        # T100 is the logits scale from CLIP
+        logits_projection = 100*normalized_proj_embeddings @ normalized_text_encodings.t() # (batch_size, num_classes)
 
-        # We want to maximize the diagonal entries of the logits matrix while minimizing the off-diagonal entries
-
-        # labels are indexes to the diagonal entries of the logits matrix
-        pseudo_labels = fabric.to_device(torch.arange(len(proj_embeddings)).long()) # (batch_size)
-
-        loss_image = F.cross_entropy(logits_per_projection, pseudo_labels)
-        loss_text = F.cross_entropy(logits_per_text, pseudo_labels)
+        loss_image = criterion(logits_projection, classifier_logits)
+        loss_text = criterion(logits_projection.t(), classifier_logits.t())
         loss = (loss_image + loss_text)/2
+        
+        probs_from_classifier = F.softmax(classifier_logits, dim=-1)
+        probs_from_proj = F.softmax(logits_projection, dim=-1)
+
+        batch_base_model_acc = compute_accuracy(probs_from_classifier, labels)
+        batch_clip_acc = compute_accuracy(probs_from_proj, labels)
+
+        total_base_model_acc += batch_base_model_acc
+        total_clip_acc += batch_clip_acc
 
         batch_loss = loss.item() 
         total_loss += batch_loss
-        
+
         total_image_loss += loss_image.item()
         total_text_loss += loss_text.item()
-        
-        # pbar.set_postfix({"Batch Loss": batch_loss, "Image Loss": loss_image.item(), "Text Loss": loss_text.item()})
 
-    # TODO: Check if this is correct
-    # all_gather is used to aggregated the value across processes
+        # pbar.set_postfix({"Batch Loss": batch_loss, "Base model Acc": batch_base_model_acc, "CLIP Acc": batch_clip_acc})
+    
     total_loss = fabric.all_gather(total_loss).sum() / len(val_loader)
     total_image_loss = fabric.all_gather(total_image_loss).sum() / len(val_loader)
     total_text_loss = fabric.all_gather(total_text_loss).sum() / len(val_loader)
+    
+    total_base_model_acc = fabric.all_gather(total_base_model_acc).sum() / len(val_loader)
+    total_clip_acc = fabric.all_gather(total_clip_acc).sum() / len(val_loader)
 
-    return  total_loss, total_image_loss, total_text_loss
 
-def build_feature_extractor(feature_extractor_name, feature_extractor_checkpoint_path=None):
-    """
-    Builds the feature extractor based on the provided name.
-    Args:
-        feature_extractor_name (str): The name of the feature extractor to use.
-    Returns:
-        torch.nn.Module: The feature extractor.
-    """
-    if args.feature_extractor_name == 'sam_vit_h':
-        if feature_extractor_checkpoint_path is None:
-            feature_extractor_checkpoint_path = "checkpoints/sam_vit_h_4b8939.pth"
-        feature_extractor = SAMBackbone("vit_h", feature_extractor_checkpoint_path)
-    elif args.feature_extractor_name == 'mae_vit_large_patch16':
-        if feature_extractor_checkpoint_path is None:
-            feature_extractor_checkpoint_path = "checkpoints/mae_visualize_vit_large_ganloss.pth"
-        feature_extractor = MAEBackbone("mae_vit_large_patch16", feature_extractor_checkpoint_path)
-    elif args.feature_extractor_name == 'dino_vits16':
-        feature_extractor = DINOBackbone("dino_vits16", None)
-    elif args.feature_extractor_name in ['deeplabv3_resnet50', 'deeplabv3_resnet101']:
-        feature_extractor = CustomSegmentationModel(args.feature_extractor_name, use_pretrained=True)
-
-    elif args.feature_extractor_name in ['resnet18', 'resnet50', 'resnet101', 'resnet50_adv_l2_0.1', 'resnet50_adv_l2_0.5', 'resnet50x1_bitm', 'resnetv2_101x1_bit.goog_in21k']:
-        feature_extractor = CustomFeatureModel(args.feature_extractor_name, use_pretrained=True)
-    else:
-        raise NotImplementedError(f"{feature_extractor_name} is not implemented.")
-
-    train_transform = feature_extractor.transform
-    test_transform = feature_extractor.test_transform
-    return feature_extractor, train_transform, test_transform
+    return total_loss, total_base_model_acc, total_clip_acc, \
+            total_feature_loss, total_distill_loss_img, total_distill_loss_txt
 
 def main(args):
     
     # Load the CLIP model
     clip_model, clip_preprocess = clip.load(args.clip_model_name)
 
-    feature_extractor, train_transform, test_transform = build_feature_extractor(args.feature_extractor_name)
+    classifier = CustomClassifier(args.classifier_name)
+    train_transform = classifier.train_transform
+    test_transform = classifier.test_transform
 
-    projector = ProjectionHead(input_dim=feature_extractor.feature_dim, output_dim=args.projection_dim)
+    projector = ProjectionHead(input_dim=classifier.feature_dim, output_dim=args.projection_dim)
 
     # Create the data loader and wrap them with Fabric
-    train_dataset = ImageTextDataset(args.train_json_file, args.data_dir, start_index=args.train_start_index, end_index=args.train_end_index, 
-                                        transform=train_transform, transform2=clip_preprocess)
-    val_dataset = ImageTextDataset(args.val_json_file, args.data_dir, start_index=args.val_start_index, end_index=args.val_end_index, 
-                                        transform=test_transform, transform2=clip_preprocess)
-
+    train_dataset, val_dataset = get_dataset(args.dataset_name, train_transform, test_transform, data_dir=args.data_dir)
+    
     train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True, num_workers=8, pin_memory=True)
     val_loader = torch.utils.data.DataLoader(val_dataset, batch_size=args.batch_size, shuffle=False, num_workers=8, pin_memory=True)
 
@@ -227,9 +244,6 @@ def main(args):
     elif args.optimizer == 'adamw':
         optimizer = torch.optim.AdamW(projector.parameters(), lr=args.learning_rate)
 
-    scheduler = CosineAnnealingLR(optimizer, T_max=args.num_epochs, eta_min=0.0)
-
-
     # scheduler = torch.optim.lr_scheduler.MultiStepLR(optimizer, milestones=[30, 60, 90], gamma=0.1)
 
     # Loss function
@@ -237,7 +251,7 @@ def main(args):
 
 
     clip_model = fabric.to_device(clip_model)
-    feature_extractor = fabric.to_device(feature_extractor)
+    classifier = fabric.to_device(classifier)
 
     # Wrap the feature extractor and optimizer with Fabric
     projector, optimizer = fabric.setup(projector, optimizer)
@@ -253,25 +267,21 @@ def main(args):
         fabric.print(f"Already finished training for {args.num_epochs} epochs. Exiting...")
         return
 
-    val_loss = float("inf")
-    val_image_loss = float("inf")
-    val_text_loss = float("inf")
-
     best_val_loss = float("inf")
     for epoch in range(start_epoch, args.num_epochs):
-
-        train_loss,  train_image_loss, train_text_loss = train_one_epoch(train_loader, clip_model, feature_extractor, projector, 
-                                                                                    criterion, optimizer, epoch)
+        
+        train_loss,  train_base_acc, train_clip_acc, train_loss_img, train_loss_txt = train_one_epoch(train_loader, clip_model, classifier, projector, text_encodings, criterion, optimizer, epoch)
 
         scheduler.step()
         if epoch % args.val_freq == 0:
-            val_loss, val_image_loss, val_text_loss = validate(val_loader, clip_model, feature_extractor, projector, 
-                                                                        criterion, epoch)
+            val_loss, val_base_acc, val_clip_acc, val_loss_img, val_loss_txt = validate(val_loader, clip_model, classifier, projector, text_encodings, criterion, epoch)
 
-        fabric.print(f"{epoch}/{args.num_epochs}| Total Train Loss: {train_loss:.4f}, Train Image Loss: {train_image_loss:.4f}, Train Text Loss: {train_text_loss:.4f}, Total Val Loss: {val_loss:.4f}, Val Image Loss: {val_image_loss:.4f}, Val Text Loss: {val_text_loss:.4f}")
+        fabric.print(f"Epoch {epoch}/{args.num_epochs}| Train Loss: {train_loss:.4f}, Train Base Model Accuracy: {train_base_acc:.4f}, Train CLIP Accuracy: {train_clip_acc:.4f}, Val Loss: {val_loss:.4f}, Val Base Model Accuracy: {val_base_acc:.4f}, Val CLIP Accuracy: {val_clip_acc:.4f}")
 
-        losses_dict = {"train_loss": train_loss, "train_image_loss": train_image_loss, "train_text_loss": train_text_loss,
-                        "val_loss": val_loss, "val_image_loss": val_image_loss, "val_text_loss": val_text_loss}
+        losses_dict = {"train_loss": train_loss, "train_loss_img": train_loss_img, "train_loss_txt": train_loss_txt,
+                        "train_base_acc": train_base_acc, "train_clip_acc": train_clip_acc,
+                        "val_loss": val_loss, "val_loss_img": val_loss_img, "val_loss_txt": val_loss_txt, 
+                        "val_base_acc": val_base_acc, "val_clip_acc": val_clip_acc}
 
         fabric.log_dict(losses_dict, step=epoch)
         
@@ -282,7 +292,7 @@ def main(args):
             state.update(epoch=epoch)
             fabric.save(os.path.join(args.save_dir, "best_projector_weights.pth"), state)
         
-        if epoch % 10 == 0:
+        if epoch % 1 == 0:
             state.update(epoch=epoch)
             fabric.save(os.path.join(args.save_dir, "projector_weights.pth"), state)
 
@@ -292,17 +302,13 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Train ResNet on WILDS Dataset')
 
     parser.add_argument('--data_dir', type=str, default='data/domainnet_v1.0', help='Path to the data directory')
-    parser.add_argument('--train_json_file', required=False, default= "/usr/workspace/KDML/yfcc/yfcc15m_clean_open_data_already_downloaded_train_final.json",  help='Path to the JSON file.')
-    parser.add_argument('--val_json_file', required=False,default= "/usr/workspace/KDML/yfcc/yfcc15m_clean_open_data_already_downloaded_test_final.json", help='Path to the JSON file.')
-    parser.add_argument('--train_start_index', type=int, default=0, help='The starting line index in the JSON file.')
-    parser.add_argument('--train_end_index', type=int, help='The ending line index in the JSON file.')
-    parser.add_argument('--val_start_index', type=int, default=0, help='The starting line index in the JSON file.')
-    parser.add_argument('--val_end_index', type=int, help='The ending line index in the JSON file.')
+    parser.add_argument('--train_domain', type=str, default='clipart', help='Domain to use for training')
+    parser.add_argument('--dataset_name', type=str, default='domainnet', help='Name of the dataset')
     
     parser.add_argument('--batch_size', type=int, default=32, help='Batch size for the dataloader')
     parser.add_argument('--seed', type=int, default=42, help='Seed for reproducibility')
 
-    parser.add_argument('--feature_extractor_name', required=True,  help='Name of the feature extractor to use sam_vit_h, mae_vit_large_patch16, dino_vits16, resnet50, resnet50_adv_l2_0.1, resnet50_adv_l2_0.5, resnet50x1_bitm, resnetv2_101x1_bit.goog_in21k, deeplabv3_resnet50, deeplabv3_resnet101, fcn_resnet50, fcn_resnet101')
+    parser.add_argument('--classifier_name', required=True,  help='Name of the classifier to use sam_vit_h, mae_vit_large_patch16, dino_vits16, resnet50, resnet50_adv_l2_0.1, resnet50_adv_l2_0.5, resnet50x1_bitm, resnetv2_101x1_bit.goog_in21k, deeplabv3_resnet50, deeplabv3_resnet101, fcn_resnet50, fcn_resnet101')
     parser.add_argument('--clip_model_name', default='ViT-B/32', help='Name of the CLIP model to use.')
     parser.add_argument('--resume_checkpoint_path', type=str, help='Path to checkpoint to resume training from')
 
