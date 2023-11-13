@@ -16,10 +16,37 @@ from utils_proj import SimpleDINOLoss, compute_accuracy, compute_similarities, p
 from models.resnet import CustomResNet, CustomFeatureModel
 from models.ViT_models import SAMBackbone, MAEBackbone, DINOBackbone
 from models.projector import ProjectionHead
+from torchvision.utils import make_grid
+import matplotlib.pyplot as plt
 
 from ZSL_dataloaders import get_zsl_datasets
 import ssl
 ssl._create_default_https_context = ssl._create_unverified_context
+
+def visualize_dataset(dataset, class_names, num_images=20):
+    """ Visualize a grid of images from a dataset with their class names. """
+    images, labels = [], []
+    for i, (img, label) in enumerate(dataset):
+        if i >= num_images:
+            break
+        images.append(img)
+        labels.append(label)
+
+    # Creating a grid of images
+    img_grid = make_grid(torch.stack(images, dim=0), nrow=5)
+
+    # Displaying the images and their labels
+    plt.figure(figsize=(15, 15))
+    plt.imshow(img_grid.permute(1, 2, 0))
+    plt.axis('off')
+
+    # Displaying class labels on each sub-image
+    for i, label in enumerate(labels):
+        print(class_names[label])
+        # plt.text(i % 5 * img_grid.size(2) + 20, i // 5 * img_grid.size(1) + 10,
+        #          f'Class: {class_names[label]}', color='white', backgroundcolor='black')
+
+    plt.savefig('./gtsrb.png')
 
 def get_transform(feature_extractor_name):
     """ Returns appropriate transform based on model type """
@@ -109,9 +136,17 @@ def get_dataloader(dataset_name, transform, batch_size, device, corruption_type=
             print(f"\n\nDataset: {dataset_name}-{corruption_type}\nClasses: {class_names}\nNumber of classes: {len(class_names)}\nNumber of samples: {len(dataset)}")
         else:
             raise ValueError("Corruption type must be specified for CIFAR100-C.")
+    elif dataset_name.lower() == 'cifar100':
+            _, dataset, class_names = get_CIFAR100_loaders(batch_size=batch_size, data_dir=args.data_path,    
+                                            train_transform=transform, test_transform=transform, return_dataset=True)
+            dataset = CIFAR100(root=args.data_path, download=True, transform=transform, train=False)
+            print(f"\n\nDataset: {dataset_name}\nClasses: {class_names}\nNumber of classes: {len(class_names)}\nNumber of samples: {len(dataset)}")
     elif dataset_name.lower() in ["cifar10", "cifar100", "gtsrb", "svhn", "dtd", "oxfordpets",  "food101", "eurosat", "sun397", "ucf101", "stanfordcars", "flowers102"]:
         dataset_dict, class_names = get_zsl_datasets(dataset_name, data_path=args.data_path, preprocess=transform)
         dataset = dataset_dict['test']
+        #visualize_dataset(dataset, class_names, num_images=20)
+        #assert False
+
         print(f"\n\nDataset: {dataset_name}\nClasses: {class_names}\nNumber of classes: {len(class_names)}\nNumber of samples: {len(dataset)}")
     else:
         raise ValueError(f"Dataset {dataset_name} not supported.")
@@ -148,6 +183,7 @@ def evaluate(model, dataloader, text_encodings, device, feature_extractor_name):
                 features = projector(backbone_embeddings)
 
             similarities = compute_similarities(features, text_encodings)
+    
             probabilities = torch.nn.functional.softmax(similarities, dim=-1)
 
             total_accuracy += compute_accuracy(probabilities, labels)
@@ -174,8 +210,8 @@ def main(args):
     device = "cuda" if torch.cuda.is_available() else "cpu"
     logging.info(f"Using device: {device}")
 
-    supported_datasets = ["cifar10", "cifar100",  "gtsrb", "svhn", "dtd", "oxfordpets",  "food101", "eurosat", "ucf101", "stanfordcars", "flowers102"]
-    #supported_datasets = ["food101", "eurosat", "ucf101", "stanfordcars", "flowers102"]
+    #supported_datasets = ["cifar10", "cifar100",  "gtsrb", "svhn", "dtd", "oxfordpets",  "food101", "eurosat", "ucf101", "stanfordcars", "flowers102"]
+    supported_datasets = ["cifar100"]
     datasets_to_evaluate = supported_datasets if args.dataset_name == 'all' else [args.dataset_name]
 
     cifar100_corruptions = [
@@ -219,6 +255,7 @@ def main(args):
                 accuracy = evaluate(model, dataloader, text_encodings, device, args.feature_extractor_name)
                 logging.info(f"{args.feature_extractor_name} {dataset_name} {corruption} Accuracy: {accuracy:.6f}")
                 save_results_to_csv(f"{dataset_name}-{corruption}", args.feature_extractor_name, accuracy, log_file)
+            
         else:
             dataloader, text_encodings = get_dataloader(dataset_name, transform, args.batch_size, device, get_text_encodings=True)
             accuracy = evaluate(model, dataloader, text_encodings, device, args.feature_extractor_name)
@@ -235,15 +272,16 @@ if __name__ == "__main__":
     parser.add_argument('--data_path', type=str, default='./data')
     parser.add_argument('--batch_size', type=int, default=32)
     parser.add_argument('--text_encoding_path', type=str, required=False)
-    parser.add_argument('--feature_extractor_name', type=str, default='dino_vits16')
+    parser.add_argument('--feature_extractor_name', type=str, default='clip')  #dino_vits16
     parser.add_argument('--feature_extractor_checkpoint_path', type=str)    
     parser.add_argument('--clip_model_name', type=str, default='ViT-B/32')
 
-    parser.add_argument('--projector_checkpoint_path', type=str,default="/p/gpfs1/KDML/ckpts_13M_vivek/dino_vits16full_13M_lr_1e-3/projector_weights_epoch_10.pth")
+    parser.add_argument('--projector_checkpoint_path', type=str,default="/p/gpfs1/KDML/ckpts_13M_vivek/dino_vits16full_13M_lr_1e-2_step_lr/projector_weights_epoch_27.pth")
     parser.add_argument('--proj_dim', type=int, default=512)
     args = parser.parse_args()
 
     print(f"Arguments: {args}")
-    args.data_path =os.path.join("/usr/workspace/thopalli/ICLR2024/rich_datasets", "datasets")
+    #args.data_path =os.path.join("/usr/workspace/thopalli/ICLR2024/rich_datasets", "datasets")
+    args.data_path = os.path.join("/usr/workspace/viv41siv/ICASSP2024/ILM_VP_CLIP/datasets")
     args.dataset_name= 'all'
     main(args)
