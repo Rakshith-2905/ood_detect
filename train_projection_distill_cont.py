@@ -32,7 +32,7 @@ from tqdm import tqdm
 import numpy as np
 import random
 
-from domainnet_data import DomainNetDataset
+from domainnet_data import DomainNetDataset, get_data_from_saved_files
 
 from models.resnet import CustomClassifier
 from models.projector import ProjectionHead
@@ -51,9 +51,40 @@ def get_dataset(data_name, train_transforms, test_transforms, data_dir='../data'
                                         split='train', transform=train_transforms)
         val_dataset = DomainNetDataset(root_dir=data_dir, domain=args.domain_name, \
                                         split='test', transform=test_transforms)
-        class_names = train_dataset.targets
+        class_names = train_dataset.class_names
 
     return train_dataset, val_dataset, class_names
+
+def get_dataset_from_file(data_name, data_data_dir='../data'):
+    # TODO: Path names
+    if data_name == 'imagenet':
+        # Load the classifier_embeddings, classifer_logits, clip_features, labels
+        train_classifier_data = torch.load(os.path.join(data_data_dir, f"features_targets_logits.pkl"))
+        train_clip_data = torch.load(os.path.join(data_data_dir, f"features.pkl"))
+        
+        train_classifier_logits = train_classifier_data['logits']
+        train_classifier_embeddings = train_classifier_data['features']
+        train_classifier_labels = train_classifier_data['targets']
+        clip_features = train_clip_data['features']
+        # Create TensorDatasets
+        train_dataset = TensorDataset(train_classifier_logits, train_classifier_embeddings, train_classifier_labels, clip_features)
+        
+        test_classifier_data = torch.load(os.path.join(data_data_dir, f"features_targets_logits.pkl"))
+        test_clip_data = torch.load(os.path.join(data_data_dir, f"features.pkl"))
+        
+        test_classifier_logits = test_classifier_data['logits']
+        test_classifier_embeddings = test_classifier_data['features']
+        test_classifier_labels = test_classifier_data['targets']
+        clip_features = test_clip_data['features']
+        # Create TensorDatasets
+        test_dataset = TensorDataset(train_classifier_logits, train_classifier_embeddings, train_classifier_labels, clip_features)
+        
+        with open('data/imagenet_class_name.txt') as f:
+            class_names = [line.strip() for line in f]
+    elif data_name == 'domainnet':
+        train_dataset, test_dataset = get_data_from_saved_files(data_data_dir, return_dataset=True)
+
+    return train_dataset, test_dataset, class_names
 
 def get_save_dir(args):
     
@@ -67,6 +98,21 @@ def get_save_dir(args):
     # save_dir += f"_{datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}"
 
     return save_dir
+
+@torch.no_grad()
+def get_CLIP_text_encodings(texts, device='cuda'):
+    clip_model, _ = clip.load(args.clip_model_name, device=device)
+    clip_model.eval()
+    clip_model = fabric.to_device(clip_model)
+
+    # append "This is a photo of a" to the beginning of each class name
+    texts = [f"This is a photo of a {text}" for text in texts]
+    with torch.no_grad():
+        text_tokens = clip.tokenize(texts)
+        text_tokens = fabric.to_device(text_tokens)
+        text_encodings = clip_model.encode_text(text_tokens).float()
+
+    return text_encodings
 
 def progbar_wrapper(iterable, total, **kwargs):
     """Wraps the iterable with tqdm for global rank zero.
@@ -101,10 +147,12 @@ def train_one_epoch(train_loader, clip_model, classifier, projector, text_encodi
 
         optimizer.zero_grad()
         
+        # TODO: We cant use the same images for CLIP 
         classifier_logits, classifier_embeddings = classifier(images_batch) # (batch_size, embedding_dim)
 
+        clip_image_embeddings = clip_model.encode_image(images_batch) # (batch_size, embedding_dim)
         # Project the classifier embeddings
-        proj_embeddings = projector(classifier_embeddings) # (batch_size, projection_dim)
+        proj_embeddings = projector(clip_image_embeddings) # (batch_size, projection_dim)
 
         normalized_proj_embeddings = F.normalize(proj_embeddings, dim=-1)
         normalized_text_encodings = F.normalize(text_encodings, dim=-1)# (num_classes, projection_dim)
@@ -146,8 +194,7 @@ def train_one_epoch(train_loader, clip_model, classifier, projector, text_encodi
     total_base_model_acc = fabric.all_gather(total_base_model_acc).sum() / len(train_loader)
     total_clip_acc = fabric.all_gather(total_clip_acc).sum() / len(train_loader)
 
-    return total_loss, total_base_model_acc, total_clip_acc, \
-            total_feature_loss, total_distill_loss_img, total_distill_loss_txt
+    return total_loss, total_base_model_acc, total_clip_acc, total_image_loss, total_text_loss
 
 @torch.no_grad()
 def validate(val_loader, clip_model, classifier, projector, text_encodings, criterion, optimizer, epoch):
@@ -165,7 +212,7 @@ def validate(val_loader, clip_model, classifier, projector, text_encodings, crit
 
 
     pbar = progbar_wrapper(
-        train_loader, total=len(val_loader), desc=f"Validating Epoch {epoch+1}"
+        val_loader, total=len(val_loader), desc=f"Validating Epoch {epoch+1}"
     )
     for images_batch, labels in pbar:
 
@@ -174,8 +221,10 @@ def validate(val_loader, clip_model, classifier, projector, text_encodings, crit
         
         classifier_logits, classifier_embeddings = classifier(images_batch) # (batch_size, embedding_dim)
 
+        # TODO: We cant use the same images for CLIP 
+        clip_image_embeddings = clip_model.encode_image(images_batch) # (batch_size, embedding_dim)
         # Project the classifier embeddings
-        proj_embeddings = projector(classifier_embeddings) # (batch_size, projection_dim)
+        proj_embeddings = projector(clip_image_embeddings) # (batch_size, projection_dim)
 
         normalized_proj_embeddings = F.normalize(proj_embeddings, dim=-1)
         normalized_text_encodings = F.normalize(text_encodings, dim=-1)# (num_classes, projection_dim)
@@ -214,9 +263,144 @@ def validate(val_loader, clip_model, classifier, projector, text_encodings, crit
     total_clip_acc = fabric.all_gather(total_clip_acc).sum() / len(val_loader)
 
 
-    return total_loss, total_base_model_acc, total_clip_acc, \
-            total_feature_loss, total_distill_loss_img, total_distill_loss_txt
+    return total_loss, total_base_model_acc, total_clip_acc, total_image_loss, total_text_loss
 
+def train_one_epoch_feat(train_loader, clip_model, classifier, projector, text_encodings, criterion, optimizer, epoch):
+    clip_model.eval()
+    classifier.eval()
+    projector.train()
+    
+    total_loss = 0
+    total_image_loss = 0
+    total_text_loss = 0
+
+    total_base_model_acc = 0
+    total_clip_acc = 0
+    pbar = progbar_wrapper(
+        train_loader, total=len(train_loader), desc=f"Training Epoch {epoch+1}"
+    )
+    for classifier_logits, classifier_embeddings, labels, clip_image_embeddings in pbar:
+
+        classifier_logits = fabric.to_device(classifier_logits)
+        classifier_embeddings = fabric.to_device(classifier_embeddings)
+        labels = fabric.to_device(labels)
+        clip_features = fabric.to_device(clip_features)
+
+        optimizer.zero_grad()
+
+        # Project the classifier embeddings
+        proj_embeddings = projector(clip_image_embeddings) # (batch_size, projection_dim)
+
+        normalized_proj_embeddings = F.normalize(proj_embeddings, dim=-1)
+        normalized_text_encodings = F.normalize(text_encodings, dim=-1)# (num_classes, projection_dim)
+
+        # make the text embeddings to the same data type as image embeddings
+        normalized_text_encodings = normalized_text_encodings.type_as(normalized_proj_embeddings)
+        # T100 is the logits scale from CLIP
+        logits_projection = 100*normalized_proj_embeddings @ normalized_text_encodings.t() # (batch_size, num_classes)
+
+        loss_image = criterion(logits_projection, classifier_logits)
+        loss_text = criterion(logits_projection.t(), classifier_logits.t())
+        loss = (loss_image + loss_text)/2
+        
+        fabric.backward(loss)
+
+        optimizer.step()
+
+        probs_from_classifier = F.softmax(classifier_logits, dim=-1)
+        probs_from_proj = F.softmax(logits_projection, dim=-1)
+
+        batch_base_model_acc = compute_accuracy(probs_from_classifier, labels)
+        batch_clip_acc = compute_accuracy(probs_from_proj, labels)
+
+        total_base_model_acc += batch_base_model_acc
+        total_clip_acc += batch_clip_acc
+
+        batch_loss = loss.item() 
+        total_loss += batch_loss
+
+        total_image_loss += loss_image.item()
+        total_text_loss += loss_text.item()
+
+        # pbar.set_postfix({"Batch Loss": batch_loss, "Base model Acc": batch_base_model_acc, "CLIP Acc": batch_clip_acc})
+    
+    total_loss = fabric.all_gather(total_loss).sum() / len(train_loader)
+    total_image_loss = fabric.all_gather(total_image_loss).sum() / len(train_loader)
+    total_text_loss = fabric.all_gather(total_text_loss).sum() / len(train_loader)
+    
+    total_base_model_acc = fabric.all_gather(total_base_model_acc).sum() / len(train_loader)
+    total_clip_acc = fabric.all_gather(total_clip_acc).sum() / len(train_loader)
+
+    return total_loss, total_base_model_acc, total_clip_acc, total_image_loss, total_text_loss
+    
+@torch.no_grad()
+def validate_feat(val_loader, clip_model, classifier, projector, text_encodings, criterion, epoch):
+    
+    clip_model.eval()
+    classifier.eval()
+    projector.eval()
+    
+    total_loss = 0
+    total_image_loss = 0
+    total_text_loss = 0
+    
+    total_base_model_acc = 0
+    total_clip_acc = 0
+
+    pbar = progbar_wrapper(
+        val_loader, total=len(val_loader), desc=f"Validating Epoch {epoch+1}"
+    )
+    for images_batch, labels in pbar:
+
+        images_batch = fabric.to_device(images_batch)
+        labels = fabric.to_device(labels)
+        
+        classifier_logits, classifier_embeddings = classifier(images_batch) # (batch_size, embedding_dim)
+
+        # TODO: Change this 
+        clip_image_embeddings = clip_model.encode_image(images_batch) # (batch_size, embedding_dim)
+        # Project the classifier embeddings
+        proj_embeddings = projector(clip_image_embeddings) # (batch_size, projection_dim)
+
+        normalized_proj_embeddings = F.normalize(proj_embeddings, dim=-1)
+        normalized_text_encodings = F.normalize(text_encodings, dim=-1)# (num_classes, projection_dim)
+
+        # make the text embeddings to the same data type as image embeddings
+        normalized_text_encodings = normalized_text_encodings.type_as(normalized_proj_embeddings)
+        # T100 is the logits scale from CLIP
+        logits_projection = 100*normalized_proj_embeddings @ normalized_text_encodings.t() # (batch_size, num_classes)
+
+        loss_image = criterion(logits_projection, classifier_logits)
+        loss_text = criterion(logits_projection.t(), classifier_logits.t())
+        loss = (loss_image + loss_text)/2
+        
+        probs_from_classifier = F.softmax(classifier_logits, dim=-1)
+        probs_from_proj = F.softmax(logits_projection, dim=-1)
+
+        batch_base_model_acc = compute_accuracy(probs_from_classifier, labels)
+        batch_clip_acc = compute_accuracy(probs_from_proj, labels)
+
+        total_base_model_acc += batch_base_model_acc
+        total_clip_acc += batch_clip_acc
+
+        batch_loss = loss.item() 
+        total_loss += batch_loss
+
+        total_image_loss += loss_image.item()
+        total_text_loss += loss_text.item()
+
+        # pbar.set_postfix({"Batch Loss": batch_loss, "Base model Acc": batch_base_model_acc, "CLIP Acc": batch_clip_acc})
+    
+    total_loss = fabric.all_gather(total_loss).sum() / len(val_loader)
+    total_image_loss = fabric.all_gather(total_image_loss).sum() / len(val_loader)
+    total_text_loss = fabric.all_gather(total_text_loss).sum() / len(val_loader)
+    
+    total_base_model_acc = fabric.all_gather(total_base_model_acc).sum() / len(val_loader)
+    total_clip_acc = fabric.all_gather(total_clip_acc).sum() / len(val_loader)
+
+
+    return total_loss, total_base_model_acc, total_clip_acc, total_image_loss, total_text_loss
+    
 def main(args):
     
     # Load the CLIP model
@@ -228,13 +412,19 @@ def main(args):
 
     projector = ProjectionHead(input_dim=classifier.feature_dim, output_dim=args.projection_dim)
 
-    # Create the data loader and wrap them with Fabric
-    train_dataset, val_dataset = get_dataset(args.dataset_name, train_transform, test_transform, data_dir=args.data_dir)
-    
+    if args.use_saved_features:
+        train_dataset, val_dataset, class_names = get_dataset_from_file(args.dataset_name, data_data_dir=args.data_dir)
+    else:
+        # Create the data loader and wrap them with Fabric
+        train_dataset, val_dataset, class_names = get_dataset(args.dataset_name, train_transform, test_transform, data_dir=args.data_dir)
+        
     train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True, num_workers=8, pin_memory=True)
     val_loader = torch.utils.data.DataLoader(val_dataset, batch_size=args.batch_size, shuffle=False, num_workers=8, pin_memory=True)
 
     train_loader, val_loader = fabric.setup_dataloaders(train_loader, val_loader)
+
+    # Get the text encodings for the class names
+    text_encodings = get_CLIP_text_encodings(class_names)
 
     # Create the optimizer and scheduler
     if args.optimizer == 'adam':
@@ -244,7 +434,7 @@ def main(args):
     elif args.optimizer == 'adamw':
         optimizer = torch.optim.AdamW(projector.parameters(), lr=args.learning_rate)
 
-    # scheduler = torch.optim.lr_scheduler.MultiStepLR(optimizer, milestones=[30, 60, 90], gamma=0.1)
+    scheduler = torch.optim.lr_scheduler.MultiStepLR(optimizer, milestones=[30, 60, 90], gamma=0.1)
 
     # Loss function
     criterion = SimpleDINOLoss(student_temp=args.student_temp, teacher_temp=args.teacher_temp)
@@ -330,7 +520,18 @@ if __name__ == "__main__":
     # Print the arguments
     print(args)
     sys.stdout.flush()
-    time.sleep(5)
+
+    # Make directory for saving results
+    args.save_dir = get_save_dir(args)
+    temp_dir = os.path.join(args.save_dir, 'lightning_logs')
+    if not os.path.exists(temp_dir):
+        os.makedirs(temp_dir, exist_ok=True)
+    
+    print(f"Results will be saved to {args.save_dir}")
+    
+    with open(os.path.join(args.save_dir, 'args.txt'), 'w') as f:
+        for arg, value in vars(args).items():
+            f.write(f"{arg}: {value}\n")
 
     tb_logger = TensorBoardLogger(args.save_dir)
     csv_logger = CSVLogger(args.save_dir)
@@ -343,18 +544,6 @@ if __name__ == "__main__":
     # The total number of processes running across all devices and nodes
     fabric.print(f"World size: {fabric.world_size}")  # 2 * 3 = 6
     
-    if fabric.is_global_zero:
-        # Make directory for saving results
-        args.save_dir = get_save_dir(args)
-        temp_dir = os.path.join(args.save_dir, 'lightning_logs')
-        if not os.path.exists(temp_dir):
-            os.makedirs(temp_dir, exist_ok=True)
-        
-        print(f"Results will be saved to {args.save_dir}")
-        
-        with open(os.path.join(args.save_dir, 'args.txt'), 'w') as f:
-            for arg, value in vars(args).items():
-                f.write(f"{arg}: {value}\n")
             
     seed_everything(args.seed)
 
