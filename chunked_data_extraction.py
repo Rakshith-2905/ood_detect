@@ -27,6 +27,8 @@ class ChunkedDataset(Dataset):
         self.current_chunk_data = torch.load(chunk_file)
         self.current_chunk_start = start_index
         self.current_chunk_end = end_index
+        print(f" {chunk_file} {start_index} to {end_index} {self.current_chunk_data ['image_features'].shape} {self.current_chunk_data ['text_features'].shape}")
+
 
     def __len__(self):
         return self.total_size
@@ -34,24 +36,34 @@ class ChunkedDataset(Dataset):
     def __getitem__(self, idx):
         # Check if idx is within the range of the currently loaded chunk
         if not (self.current_chunk_start <= idx <= self.current_chunk_end):
+            
             # Find the chunk that contains idx and load it
             for chunk_file, (start, end) in zip(self.chunk_files, self.chunk_indices):
                 if start <= idx <= end:
+
                     self._load_chunk(chunk_file, start, end)
                     break
+                
 
         within_chunk_index = idx - self.current_chunk_start
-        image_features = self.current_chunk_data['image_features'][within_chunk_index]
-        text_features = self.current_chunk_data['text_features'][within_chunk_index]
+        try:
+            image_features = self.current_chunk_data['image_features'][within_chunk_index]
+            text_features = self.current_chunk_data['text_features'][within_chunk_index]
+        except:
+            print(idx,within_chunk_index,self.current_chunk_start,self.current_chunk_end,len(self.current_chunk_data['image_features']))
+            assert False
         return image_features, text_features
 
 if __name__ == '__main__':
-    save_path = '../Temp_path'
-    feature_extractor_name = 'dino_vit16'
+    save_path = '/p/gpfs1/KDML/feats/train'
+    feature_extractor_name = 'dino_vits16'
 
     dataset = ChunkedDataset(save_path, feature_extractor_name)
     data_loader = torch.utils.data.DataLoader(dataset, batch_size=32, shuffle=False)
-
+    
     for image_features, text_features in data_loader:
-        # Process your data here
+        # print(image_features.shape)
+        # print(text_features.shape)
         pass
+        # Process your data here
+        
