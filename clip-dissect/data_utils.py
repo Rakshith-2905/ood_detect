@@ -4,7 +4,7 @@ import pandas as pd
 from torchvision import datasets, transforms, models
 from torch import nn
 from torch.nn import functional as F
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, ConcatDataset
 import sys
 sys.path.insert(0, '../')
 from domainnet_data import DomainNetDataset, get_domainnet_loaders
@@ -85,7 +85,11 @@ def get_target_model( target_name, device, domain=None):
 
         clip_model, preprocess = clip.load("ViT-B/32", device=device)
         convert_models_to_fp32(clip_model)
-        projector_checkpoint_path = f'logs/classifier/domainnet/plumber/resnet50domain_{domain}_lr_0.1_is_mlp_False/best_projector_weights.pth'
+
+        if domain == 'spc':
+            projector_checkpoint_path = f'logs/classifier/domainnet/plumber/resnet50domain_SPC_lr_0.1_is_mlp_False/best_projector_weights.pth'
+        else:    
+            projector_checkpoint_path = f'logs/classifier/domainnet/plumber/resnet50domain_{domain}_lr_0.1_is_mlp_False/best_projector_weights.pth'
 
         projector = ProjectionHead(input_dim=512, output_dim=512, is_mlp=False).to(device)
         projector.load_state_dict(torch.load(projector_checkpoint_path)["projector"])
@@ -94,8 +98,6 @@ def get_target_model( target_name, device, domain=None):
             ('feature_extractor', clip_model.visual),
             ('projector', projector)
         ])).to(device)
-
-        print(projector)
 
     elif target_name == "CLIP_RN50":
         clip_model, _ = clip.load("RN50", device=device)
@@ -134,7 +136,16 @@ def get_data(dataset_name, preprocess=None, domain=None):
         data = torch.utils.data.ConcatDataset([datasets.ImageFolder(DATASET_ROOTS["imagenet_val"], preprocess), 
                                                      datasets.ImageFolder(DATASET_ROOTS["broden"], preprocess)])
     elif dataset_name == 'custom_domainnet':
-        data = DomainNetDataset(root_dir='data/domainnet_v1.0', domain=domain, split='probe', transform=preprocess)
+
+        if domain = "spc"
+            domains_interest = ['clipart', 'painting', 'sketch']
+            combined_data = []
+            for domain in domains_interest:
+                data = DomainNetDataset(root_dir='data/domainnet_v1.0', domain=domain, split='test', transform=preprocess)
+                combined_data.append(data)
+            data = ConcatDataset(combined_data)
+        else:
+            data = DomainNetDataset(root_dir='data/domainnet_v1.0', domain=domain, split='test', transform=preprocess)
         
     return data
 

@@ -12,7 +12,7 @@ import torch.nn.functional as F
 
 import torchvision.transforms as trn
 import torchvision.datasets as dset
-from torch.utils.data import Dataset, DataLoader, TensorDataset
+from torch.utils.data import Dataset, DataLoader, TensorDataset, ConcatDataset
 
 
 from torchmetrics.classification import Accuracy
@@ -455,7 +455,21 @@ def main(args):
         projector = ProjectionHead(input_dim=classifier.feature_dim, output_dim=args.projection_dim,is_mlp=args.is_mlp)
     
     if args.use_saved_features:
-        train_dataset, val_dataset, class_names = get_dataset_from_file(args.dataset_name, data_dir=args.data_dir)
+        domains_interest = ['clipart', 'painting', 'sketch']
+
+        combined_train_dataset = []
+        combined_val_dataset = []
+        for domain in domains_interest:
+            data_dir = os.path.join(args.data_dir, domain)
+            train_dataset, val_dataset, class_names = get_dataset_from_file(args.dataset_name, data_dir=data_dir)
+            combined_train_dataset.append(train_dataset)
+            combined_val_dataset.append(val_dataset)
+            print(f"Domain: {domain}, Train dataset length: {len(train_dataset)}, Val dataset length: {len(val_dataset)}")
+        
+        train_dataset = ConcatDataset(combined_train_dataset)
+        val_dataset = ConcatDataset(combined_val_dataset)
+
+        # train_dataset, val_dataset, class_names = get_dataset_from_file(args.dataset_name, data_dir=args.data_dir)
     else:
         # Create the data loader and wrap them with Fabric
         train_dataset, val_dataset, class_names = get_dataset(args.dataset_name, train_transform, test_transform, 

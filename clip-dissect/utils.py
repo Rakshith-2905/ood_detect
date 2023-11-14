@@ -182,11 +182,10 @@ def get_similarity_from_activations(target_save_name, clip_save_name, text_save_
 
     similarity = similarity_fn(clip_feats, target_feats, device=device)
     print(f"Target Activation-Concept Similarity matrix shape: {similarity.shape}")
-    del clip_feats
     torch.cuda.empty_cache()
 
     if return_target_feats:
-        return similarity, target_feats
+        return similarity, target_feats, clip_feats
     else:
         del target_feats 
         torch.cuda.empty_cache()
