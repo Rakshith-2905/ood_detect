@@ -216,33 +216,35 @@ class CustomClassifier(nn.Module):
 
         if model_name == "resnet_18":
             from torchvision.models import resnet18, ResNet18_Weights
-            network = resnet18(weights=ResNet18_Weights.IMAGENET1K_V1).to(device)
+            network = resnet18(weights=ResNet18_Weights.IMAGENET1K_V1)
             self.network_feat_extractor = create_feature_extractor(network,return_nodes=['flatten','head'])
         elif model_name == "resnet_50":
             from torchvision.models import resnet50, ResNet50_Weights
-            network = resnet50(weights=ResNet50_Weights.IMAGENET1K_V1).to(device)
+            network = resnet50(weights=ResNet50_Weights.IMAGENET1K_V1)
 
             self.network_feat_extractor = create_feature_extractor(network,return_nodes=['flatten','fc'])
         elif model_name == "regnet":
             from torchvision.models import regnet_y_800mf, RegNet_Y_800MF_Weights
-            network = torchvision.models.get_model("regnet_y_800mf",weights=RegNet_Y_800MF_Weights.IMAGENET1K_V1 ).to(device)
+            network = torchvision.models.get_model("regnet_y_800mf",weights=RegNet_Y_800MF_Weights.IMAGENET1K_V1 )
         elif model_name == "vit_b_16":
             from torchvision.models import vit_b_16, ViT_B_16_Weights
-            network = torchvision.models.get_model("vit_b_16",weights = ViT_B_16_Weights.IMAGENET1K_V1).to(device)
+            network = torchvision.models.get_model("vit_b_16",weights = ViT_B_16_Weights.IMAGENET1K_V1)
             self.network_feat_extractor = create_feature_extractor(network,return_nodes=['getitem_5','heads'])
+            self.feature_dim=768
         elif model_name =='swin_v2_t':
             from torchvision.models import swin_v2_t, Swin_V2_T_Weights
-            network = torchvision.models.get_model("swin_v2_t",weights= Swin_V2_T_Weights.IMAGENET1K_V1).to(device)
+            network = torchvision.models.get_model("swin_v2_t",weights= Swin_V2_T_Weights.IMAGENET1K_V1)
             self.network_feat_extractor = create_feature_extractor(network,return_nodes=['flatten','head'])
         elif model_name == "swin_b":
             from torchvision.models import swin_b, Swin_B_Weights
-            network = torchvision.models.get_model("swin_b",weights= Swin_B_Weights.IMAGENET1K_V1).to(device)
+            network = torchvision.models.get_model("swin_b",weights= Swin_B_Weights.IMAGENET1K_V1)
             self.network_feat_extractor = create_feature_extractor(network,return_nodes=['flatten','head'])
+            self.feature_dim=1024
         elif model_name == "deit_tiny":
-            network = torch.hub.load('facebookresearch/deit:main', 'deit_tiny_patch16_224', pretrained=True).to(device)
+            network = torch.hub.load('facebookresearch/deit:main', 'deit_tiny_patch16_224', pretrained=True)
             self.network_feat_extractor = create_feature_extractor(network,return_nodes=['flatten','head'])
         elif model_name == "deit_small":
-            network = torch.hub.load('facebookresearch/deit:main', 'deit_small_patch16_224', pretrained=True).to(device)
+            network = torch.hub.load('facebookresearch/deit:main', 'deit_small_patch16_224', pretrained=True)
             self.network_feat_extractor = create_feature_extractor(network,return_nodes=['flatten','head'])
         elif model_name =="clip_rn50":
             clip_model, preprocess_clip = clip.load("RN50", device=device)
@@ -252,6 +254,7 @@ class CustomClassifier(nn.Module):
                     preprocess_clip])
         else:
             raise NotImplementedError(f"{model_name} is not supported")
+
 
     def forward(self, x, return_features=False):
 
@@ -272,16 +275,16 @@ if __name__ == "__main__":
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    # model = CustomFeatureModel(model_name='resnetv2_101x1_bit.goog_in21k', use_pretrained=True).to(device)
-    model = CustomClassifier(model_name='swin_b', use_pretrained=True).to(device)
+    # model = CustomFeatureModel(model_name='resnetv2_101x1_bit.goog_in21k', use_pretrained=True)
+    model = CustomClassifier(model_name='swin_b', use_pretrained=True)
     # features = model(torch.zeros(1, 3, 224, 224))
     # print(features.shape)
     # print(model.feature_dim)
 
-    #model = CustomSegmentationModel(model_name='deeplabv3_resnet101', use_pretrained=True).to(device)
+    #model = CustomSegmentationModel(model_name='deeplabv3_resnet101', use_pretrained=True)
     #pil_image = Image.open("./data/domainnet_v1.0/real/toothpaste/real_318_000284.jpg")
     #pil_images = [pil_image,pil_image]
-    torch_tensor = torch.zeros(1,3, 224, 224).to(device)
+    torch_tensor = torch.zeros(1,3, 224, 224)
     logits, features = model(torch_tensor, return_features=True)
     print(logits.shape)
     print(features.shape)
