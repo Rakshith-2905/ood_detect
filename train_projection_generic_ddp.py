@@ -30,7 +30,7 @@ from models.resnet import CustomFeatureModel, CustomSegmentationModel
 from models.projector import ProjectionHead
 from YFCC_feature_extract import ImageTextDataset
 from utils_proj import SimpleDINOLoss, compute_accuracy, compute_similarities, plot_grad_flow
-
+from chunked_data_extraction import ChunkedDataset
 
 def cleanup():
     dist.destroy_process_group()
@@ -102,7 +102,7 @@ def train_one_epoch(train_loader, clip_model, feature_extractor, projector, crit
         with torch.no_grad():
             text_tokens = clip.tokenize(captions_batch, truncate=True).to(device)
             clip_txt_embeddings = clip_model.encode_text(text_tokens)
-
+        
         custom_image_embeddings = feature_extractor(images_batch)
 
         # Project the resnet embeddings
@@ -146,12 +146,70 @@ def train_one_epoch(train_loader, clip_model, feature_extractor, projector, crit
 
     return total_loss, total_image_loss, total_text_loss
 
+def train_one_epoch_feature(train_loader, projector, optimizer, epoch, rank, device):
+
+    
+    projector.train()
+    
+    total_loss = torch.tensor(0.0).to(device)
+    total_image_loss = torch.tensor(0.0).to(device)
+    total_text_loss = torch.tensor(0.0).to(device)
+
+    pbar = progbar_wrapper(train_loader, total=len(train_loader), rank=rank, desc=f"Training Epoch {epoch + 1}")
+    for images_features, text_features in pbar:
+
+        optimizer.zero_grad()
+        
+        # Ensure data is on the correct device
+        images_features = images_features.to(device)
+        text_features = text_features.to(device)
+        # Project the resnet embeddings
+        proj_embeddings = projector(images_features)
+
+        normalized_proj_embeddings = F.normalize(proj_embeddings, dim=-1)
+        normalized_text_encodings = F.normalize(text_features, dim=-1)
+
+        # make the text embeddings to the same data type as image embeddings
+        normalized_text_encodings = normalized_text_encodings.type_as(normalized_proj_embeddings)
+        # The logits dimension (batch_size, batch_size)
+        logits_per_projection = 100*normalized_proj_embeddings @ normalized_text_encodings.t() # 100 is the logits scale from CLIP
+        logits_per_text = logits_per_projection.t()
+
+        # We want to maximize the diagonal entries of the logits matrix while minimizing the off-diagonal entries
+
+        # labels are indexes to the diagonal entries of the logits matrix
+        pseudo_labels = torch.arange(len(proj_embeddings)).long().to(device) # (batch_size)
+
+        loss_image = F.cross_entropy(logits_per_projection, pseudo_labels)
+        loss_text = F.cross_entropy(logits_per_text, pseudo_labels)
+        loss = (loss_image + loss_text)/2
+        
+        loss.backward()
+
+        optimizer.step()
+
+        batch_loss = loss.item() 
+        total_loss += batch_loss
+        
+        total_image_loss += loss_image.item()
+        total_text_loss += loss_text.item()
+
+        if rank == 0:
+            pbar.set_postfix({"Batch Loss": batch_loss, "Image Loss": loss_image.item(), "Text Loss": loss_text.item()})
+
+    # TODO: CHECK Reduce losses across all processes
+    total_loss = reduce_tensor(total_loss, rank).item()/len(train_loader)
+    total_image_loss = reduce_tensor(total_image_loss, rank).item()/len(train_loader)
+    total_text_loss = reduce_tensor(total_text_loss, rank).item()/len(train_loader)
+
+    return total_loss, total_image_loss, total_text_loss
+
 @torch.no_grad()
 def validate(val_loader, clip_model, feature_extractor, projector, criterion, epoch, rank, device):
     
     clip_model.eval()
     feature_extractor.eval()
-    projector.train()
+    projector.eval()
     
     total_loss = torch.tensor(0.0).to(device)
     total_image_loss = torch.tensor(0.0).to(device)
@@ -178,6 +236,60 @@ def validate(val_loader, clip_model, feature_extractor, projector, criterion, ep
 
         normalized_proj_embeddings = F.normalize(proj_embeddings, dim=-1)
         normalized_text_encodings = F.normalize(clip_txt_embeddings, dim=-1)
+
+        # make the text embeddings to the same data type as image embeddings
+        normalized_text_encodings = normalized_text_encodings.type_as(normalized_proj_embeddings)
+        # The logits dimension (batch_size, batch_size)
+        logits_per_projection = 100*normalized_proj_embeddings @ normalized_text_encodings.t() # 100 is the logits scale from CLIP
+        logits_per_text = logits_per_projection.t()
+
+        # We want to maximize the diagonal entries of the logits matrix while minimizing the off-diagonal entries
+
+        # labels are indexes to the diagonal entries of the logits matrix
+        pseudo_labels = torch.arange(len(proj_embeddings)).long().to(device) # (batch_size)
+
+        loss_image = F.cross_entropy(logits_per_projection, pseudo_labels)
+        loss_text = F.cross_entropy(logits_per_text, pseudo_labels)
+        loss = (loss_image + loss_text)/2
+
+        batch_loss = loss.item() 
+        total_loss += batch_loss
+        
+        total_image_loss += loss_image.item()
+        total_text_loss += loss_text.item()
+
+        if rank == 0:
+            pbar.set_postfix({"Batch Loss": batch_loss, "Image Loss": loss_image.item(), "Text Loss": loss_text.item()})
+
+    # TODO: CHECK Reduce losses across all processes
+    total_loss = reduce_tensor(total_loss, rank).item()/len(val_loader)
+    total_image_loss = reduce_tensor(total_image_loss, rank).item()/len(val_loader)
+    total_text_loss = reduce_tensor(total_text_loss, rank).item()/len(val_loader)
+
+    return total_loss, total_image_loss, total_text_loss
+
+@torch.no_grad()
+def validate_feature(val_loader, projector, epoch, rank, device):
+    
+    projector.eval()
+    
+    total_loss = torch.tensor(0.0).to(device)
+    total_image_loss = torch.tensor(0.0).to(device)
+    total_text_loss = torch.tensor(0.0).to(device)
+
+    pbar = progbar_wrapper(val_loader, total=len(val_loader), rank=rank, desc=f"Validation Epoch {epoch + 1}")
+    for images_features, text_features  in pbar:
+
+        # Ensure data is on the correct device
+       
+        images_features = images_features.to(device)
+        text_features = text_features.to(device)
+
+        # Project the resnet embeddings
+        proj_embeddings = projector(images_features)
+
+        normalized_proj_embeddings = F.normalize(proj_embeddings, dim=-1)
+        normalized_text_encodings = F.normalize(text_features, dim=-1)
 
         # make the text embeddings to the same data type as image embeddings
         normalized_text_encodings = normalized_text_encodings.type_as(normalized_proj_embeddings)
@@ -270,22 +382,32 @@ def main(args):
     # Load the CLIP model and build feature extractor, projector
     # Ensure models and data are on the correct device
     clip_model, clip_preprocess = clip.load(args.clip_model_name, device='cuda')
+    
     feature_extractor, train_transform, test_transform = build_feature_extractor(args.feature_extractor_name)
-    feature_extractor.to(device)
-    feature_extractor = DDP(feature_extractor, device_ids=[0])
-
-    projector = ProjectionHead(input_dim=feature_extractor.module.feature_dim, output_dim=args.projection_dim)
+    
+    if not args.use_precomputed_features:
+        feature_extractor.to(device)
+        feature_extractor = DDP(feature_extractor, device_ids=[0])
+    
+        projector = ProjectionHead(input_dim=feature_extractor.module.feature_dim, output_dim=args.projection_dim, is_mlp=args.is_mlp)
+    else:
+        projector = ProjectionHead(input_dim=feature_extractor.feature_dim, output_dim=args.projection_dim, is_mlp=args.is_mlp)
     projector.to(device)
     projector = DDP(projector, device_ids=[0])
 
     # Create Distributed Samplers and DataLoaders
-    train_dataset = ImageTextDataset(args.train_json_file, args.data_dir, start_index=args.train_start_index, end_index=args.train_end_index, 
-                                        transform=train_transform, transform2=clip_preprocess)
-    train_sampler = DistributedSampler(train_dataset, num_replicas=world_size, rank=rank)
-    train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=args.batch_size, sampler=train_sampler)
+    if args.use_precomputed_features:
+        train_dataset = ChunkedDataset(os.path.join(args.feats_dir, 'train_grouped', args.feature_extractor_name),args.feature_extractor_name)
+        val_dataset = ChunkedDataset(os.path.join(args.feats_dir, 'test_grouped',args.feature_extractor_name), args.feature_extractor_name)
+    
+    else:
+        train_dataset = ImageTextDataset(args.train_json_file, args.data_dir, start_index=args.train_start_index, end_index=args.train_end_index, 
+                                            transform=train_transform, transform2=clip_preprocess)
+        val_dataset = ImageTextDataset(args.val_json_file, args.data_dir, start_index=args.val_start_index, end_index=args.val_end_index, 
+                                            transform=test_transform, transform2=clip_preprocess)
 
-    val_dataset = ImageTextDataset(args.val_json_file, args.data_dir, start_index=args.val_start_index, end_index=args.val_end_index, 
-                                        transform=test_transform, transform2=clip_preprocess)
+    train_sampler = DistributedSampler(train_dataset, num_replicas=world_size, rank=rank)
+    train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=args.batch_size, sampler=train_sampler,shuffle=False)
 
     val_sampler = DistributedSampler(val_dataset, num_replicas=world_size, rank=rank, shuffle=False)
     val_loader = torch.utils.data.DataLoader(val_dataset, batch_size=args.batch_size, sampler=val_sampler)
@@ -327,15 +449,23 @@ def main(args):
     val_text_loss = float("inf")
 
     best_val_loss = float("inf")
+
     for epoch in range(start_epoch, args.num_epochs):
         train_sampler.set_epoch(epoch)
-        train_loss, train_image_loss, train_text_loss = train_one_epoch(train_loader, clip_model, feature_extractor, projector, 
-                                                                        criterion, optimizer, epoch, rank, device)
-        scheduler.step()
+        if not args.use_precomputed_features:
+            train_loss, train_image_loss, train_text_loss = train_one_epoch(train_loader, clip_model, feature_extractor, projector, 
+                                                                            criterion, optimizer, epoch, rank, device)
+        else:
+            train_loss, train_image_loss, train_text_loss = train_one_epoch_feature(train_loader, projector, 
+                                                                            optimizer, epoch, rank, device)
+        scheduler.step()    
         if epoch % args.val_freq == 0:
-            val_loss, val_image_loss, val_text_loss = validate(val_loader, clip_model, feature_extractor, projector, 
-                                                            criterion, epoch, rank, device)
-
+            if not args.use_precomputed_features:
+                val_loss, val_image_loss, val_text_loss = validate(val_loader, clip_model, feature_extractor, projector, 
+                                                                criterion, epoch, rank, device)
+            else:
+                val_loss, val_image_loss, val_text_loss = validate_feature(val_loader, projector, 
+                                                                epoch, rank, device)
         if rank == 0:
             print(f"{epoch}/{args.num_epochs}| LR: {scheduler.get_last_lr()}| Total Train Loss: {train_loss:.4f}, Train Image Loss: {train_image_loss:.4f}, Train Text Loss: {train_text_loss:.4f}, Total Val Loss: {val_loss:.4f}, Val Image Loss: {val_image_loss:.4f}, Val Text Loss: {val_text_loss:.4f}")
             
@@ -404,7 +534,11 @@ if __name__ == "__main__":
     parser.add_argument('--projection_dim', type=int, default=512, help='Dimension of the projected embeddings')
     parser.add_argument('--teacher_temp', type=float, default=0.5, help='Temperature for Dino loss')
     parser.add_argument('--student_temp', type=float, default=1, help='Temperature for Dino loss')
-    
+    # add use_precomputd_features
+    parser.add_argument('--use_precomputed_features', action='store_true', help='Use precomputed features')
+    # add feats_dir
+    parser.add_argument('--feats_dir', type=str, default='/p/gpfs1/KDML/feats', help='Path to the features directory')
+    parser.add_argument('--is_mlp', action='store_true', help='Use MLP projection head')
     args = parser.parse_args()
 
     main(args)
