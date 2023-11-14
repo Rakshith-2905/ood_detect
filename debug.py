@@ -76,6 +76,11 @@ def get_embeddings(val_loader,classifier,clip_model,clip_text_encodings,projecto
             proj_embeddings = projector(clip_image_embeddings) # (batch_size, projection_dim)
         else: # this is LIMBER
             proj_embeddings = projector(classifier_embeddings) # (batch_size, projection_dim)
+        clip_image_embeddings= F.normalize(clip_image_embeddings, dim=-1)
+        proj_embeddings= F.normalize(proj_embeddings, dim=-1)
+        classifier_embeddings= F.normalize(classifier_embeddings, dim=-1)
+        clip_text_encodings= F.normalize(clip_text_encodings, dim=-1)
+
 
         all_clip_text_embeddings.append(clip_text_encodings[labels])
         all_clip_embeddings.append(clip_image_embeddings.detach().cpu())
@@ -141,42 +146,49 @@ classifier, train_transform, test_transform = build_classifier(classifier_name, 
 classifier= classifier.to(device)
 classifier.eval()
 
-clip_embeddings={}
-proj_embeddings={}
-classifier_embeddings={}
-clip_text_embeddings={}
-for domain_name in domainnet_domains_projector.keys():
+# clip_embeddings={}
+# proj_embeddings={}
+# classifier_embeddings={}
+# clip_text_embeddings={}
+# for domain_name in domainnet_domains_projector.keys():
 
-    projector = ProjectionHead(input_dim=512, output_dim=512).to(device)
-    projector.load_state_dict(torch.load(domainnet_domains_projector[domain_name])['projector'])
-    projector.eval()
+#     projector = ProjectionHead(input_dim=512, output_dim=512).to(device)
+#     projector.load_state_dict(torch.load(domainnet_domains_projector[domain_name])['projector'])
+#     projector.eval()
 
 
-    train_dataset, val_dataset, class_names = get_dataset(dataset_name, domain_name,train_transform, test_transform, 
-                                                                data_dir=data_dir, clip_transform=preprocess)
+#     train_dataset, val_dataset, class_names = get_dataset(dataset_name, domain_name,train_transform, test_transform, 
+#                                                                 data_dir=data_dir, clip_transform=preprocess)
         
-    train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=32, shuffle=True, num_workers=8, pin_memory=True)
-    val_loader = torch.utils.data.DataLoader(val_dataset, batch_size=32, shuffle=False, num_workers=8, pin_memory=True)
-    all_clip_embeddings, all_proj_embeddings, all_classifier_embeddings,all_clip_text_embeddings = get_embeddings(val_loader,classifier,clip_model,text_encodings,projector,device)
+#     train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=32, shuffle=True, num_workers=8, pin_memory=True)
+#     val_loader = torch.utils.data.DataLoader(val_dataset, batch_size=32, shuffle=False, num_workers=8, pin_memory=True)
+#     all_clip_embeddings, all_proj_embeddings, all_classifier_embeddings,all_clip_text_embeddings = get_embeddings(val_loader,classifier,clip_model,text_encodings,projector,device)
 
 
 
     
-    clip_embeddings[domain_name]=all_clip_embeddings
+#     clip_embeddings[domain_name]=all_clip_embeddings
     
-    proj_embeddings[domain_name]=all_proj_embeddings
+#     proj_embeddings[domain_name]=all_proj_embeddings
     
-    classifier_embeddings[domain_name]=all_classifier_embeddings
-    clip_text_embeddings[domain_name]=all_clip_text_embeddings
-data={}
-with open("clip_image_text_image_all_domain_embeddings.pkl","wb") as f:
-    data["clip_embeddings"]=clip_embeddings
-    data["proj_embeddings"]=proj_embeddings
-    data["classifier_embeddings"]=classifier_embeddings
-    data["clip_text_embeddings"]=clip_text_embeddings
-    pickle.dump(data,f)
+#     classifier_embeddings[domain_name]=all_classifier_embeddings
+#     clip_text_embeddings[domain_name]=all_clip_text_embeddings
+# data={}
+# with open("clip_image_text_image_all_domain_normalized_embeddings.pkl","wb") as f:
+#     data["clip_embeddings"]=clip_embeddings
+#     data["proj_embeddings"]=proj_embeddings
+#     data["classifier_embeddings"]=classifier_embeddings
+#     data["clip_text_embeddings"]=clip_text_embeddings
+#     pickle.dump(data,f)
 
+with open("clip_image_text_image_all_domain_normalized_embeddings.pkl","rb") as f:
+    data=pickle.load(f)
+clip_embeddings=data["clip_embeddings"]
+proj_embeddings=data["proj_embeddings"]
+classifier_embeddings=data["classifier_embeddings"]
+clip_text_embeddings=data["clip_text_embeddings"]
 
+text_encodings=F.normalize(text_encodings, dim=-1)
 
 def plot_umap_embeddings(list_tensors,include_lines_for_tensor3=False, labels=None,save_filename=None):
     # Convert PyTorch tensors to NumPy arrays
@@ -231,7 +243,7 @@ def plot_umap_embeddings(list_tensors,include_lines_for_tensor3=False, labels=No
 
 #list_tensor = [clip_embeddings['real'],*proj_embeddings.values(),clip_text_embeddings['real']]
 for domain in domainnet_domains_projector.keys():
-    list_tensor =[clip_embeddings[domain],proj_embeddings[domain],clip_text_embeddings[domain]] #[*proj_embeddings.values()]
+    list_tensor =[clip_embeddings[domain],proj_embeddings[domain],text_encodings ] #[*proj_embeddings.values()]
     #labels = ['CLIP image', *list(proj_embeddings.keys()), 'CLIP Text']
-    labels=  [f'CLIP {domain}', f'proj {domain}', f'CLIP Text']
-    plot_umap_embeddings(list_tensor,labels=labels,save_filename=f'umap_embeddings_proj_clip_{domain}.png')
+    labels=  [f'CLIP {domain}', f'Proj {domain}', f'CLIP Text']
+    plot_umap_embeddings(list_tensor,labels=labels,save_filename=f'umap_embeddings_normalized_clip_proj_text_{domain}.png')
