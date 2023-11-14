@@ -38,7 +38,7 @@ python test_projection.py --dataset domainnet --domain real --image_size 224 --b
 # 
 
 python train_projection_distill_cont.py \
-            --data_dir 'logs/classifier/resnet50_domainnet_real/features' \
+            --data_dir 'logs/classifier/resnet50_domainnet_real/features/real' \
             --domain_name 'real' \
             --dataset_name 'domainnet' \
             --train_on_testset  \
