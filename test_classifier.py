@@ -45,7 +45,7 @@ def evaluate(loader, model, criterion, device):
     avg_loss = total_loss / len(loader)
     return avg_loss, accuracy
 
-def save_features_and_labels(loader, model, device, save_dir, prefix="train"):
+def save_features_and_labels(loader, model, device, save_dir, prefix="train", domain="real"):
     """
     Saves outputs, features, and labels from the model for a given dataset.
 
@@ -57,7 +57,7 @@ def save_features_and_labels(loader, model, device, save_dir, prefix="train"):
     - prefix (str): Prefix for filenames, e.g., 'train' or 'test'.
     """
     # Initialize CLIP
-    clip_model, preprocess = clip.load("RN50", device=device)
+    clip_model, preprocess = clip.load("ViT-B/32", device=device)
 
     if prefix == "train":
         base_geometry_transform = transforms.Compose([
@@ -76,7 +76,7 @@ def save_features_and_labels(loader, model, device, save_dir, prefix="train"):
 
         ])
 
-    dataset = DomainNetDataset(root_dir='data/domainnet_v1.0', domain='real', split=prefix, transform=None)
+    dataset = DomainNetDataset(root_dir='data/domainnet_v1.0', domain=domain, split=prefix, transform=None)
 
     all_outputs = []
     all_features = []
@@ -120,11 +120,11 @@ def save_features_and_labels(loader, model, device, save_dir, prefix="train"):
     print(f"Features shape: {all_features.shape}")
     print(f"Labels shape: {all_labels.shape}")
 
-    save_dir = os.path.join(save_dir, 'features')
+    save_dir = os.path.join(save_dir, 'features', domain)
     # Save the results
     if not os.path.exists(save_dir):
         os.makedirs(save_dir)
-    torch.save(CLIP_features, os.path.join(save_dir, f"{prefix}_CLIP_features.pth"))
+    torch.save(CLIP_features, os.path.join(save_dir, f"{prefix}_ViTB32_CLIP_features.pth"))
     torch.save(all_outputs, os.path.join(save_dir, f"{prefix}_outputs.pth"))
     torch.save(all_features, os.path.join(save_dir, f"{prefix}_features.pth"))
     torch.save(all_labels, os.path.join(save_dir, f"{prefix}_labels.pth"))
@@ -151,8 +151,8 @@ def main(args):
     if not os.path.exists(save_dir):
         assert False, f"Directory {save_dir} does not exist"
 
-    save_features_and_labels(loaders_dict['real']['train'], model, device, save_dir, prefix="train")
-    save_features_and_labels(loaders_dict['real']['test'], model, device, save_dir, prefix="test")
+    # save_features_and_labels(loaders_dict['real']['train'], model, device, save_dir, prefix="train")
+    save_features_and_labels(loaders_dict[args.domain]['test'], model, device, save_dir, prefix="test", domain=args.domain)
     assert False
     # Loss function
     criterion = nn.CrossEntropyLoss()

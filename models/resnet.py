@@ -165,6 +165,23 @@ class CustomResNet(nn.Module):
             'resnet152': resnet152
         }
 
+        self.train_transform = transforms.Compose([
+                        transforms.RandomResizedCrop(224),
+                        transforms.RandomHorizontalFlip(),
+                        transforms.ToTensor(),
+                        transforms.Normalize(mean=[0.485, 0.456, 0.406],
+                                            std=[0.229, 0.224, 0.225])                
+                    ])
+        
+        self.test_transform = transforms.Compose([
+                        transforms.Resize(256),
+                        transforms.CenterCrop(224),
+                        transforms.ToTensor(),
+                        transforms.Normalize(mean=[0.485, 0.456, 0.406],
+                                            std=[0.229, 0.224, 0.225])                
+                    ])
+
+
         # Check if the provided model_name is valid
         if model_name not in resnets:
             raise ValueError(f"Invalid model_name. Expected one of {list(resnets.keys())}, but got {model_name}")

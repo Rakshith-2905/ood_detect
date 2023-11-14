@@ -33,6 +33,35 @@ python test_projection.py --dataset domainnet --domain real --image_size 224 --b
                             --resnet_dim 2048 --projection_dim 1024  \
                             --prompt_embeddings_pth "prompts/CLIP_RN50_text_embeddings.pth" --similarity_mode "cosine"
 
+################################ Contrastive PLUMBER #########################################
+
+# 
+
+python train_projection_distill_cont.py \
+            --data_dir 'logs/classifier/resnet50_domainnet_real/features' \
+            --domain_name 'real' \
+            --dataset_name 'domainnet' \
+            --train_on_testset  \
+            --use_saved_features \
+            --num_classes 345 \
+            --batch_size 32 \
+            --seed 42 \
+            --classifier_name 'resnet50' \
+            --classifier_checkpoint_path 'logs/classifier/resnet50_domainnet_real/best_checkpoint.pth' \
+            --clip_model_name 'ViT-B/32' \
+            --prompt_path 'data/domainnet_v1.0/CLIP_ViT-B-32_text_encodings.pt' \
+            --num_epochs 100 --optimizer 'sgd' --learning_rate 0.1 \
+            --val_freq 1 \
+            --save_dir 'logs/classifier/resnet50_domainnet_real/plumber/' \
+            --prefix 'domain_real_lr_0.1' \
+            --proj_clip \
+            --projection_dim 512 \
+            --teacher_temp 0.5 \
+            --student_temp 1 \
+            --num_gpus 1 \
+            --num_nodes 1 \
+
+
 
 # GRAD CAM MASKING
 
