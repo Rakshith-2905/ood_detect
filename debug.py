@@ -120,7 +120,7 @@ checkpoint_path = f"{data_dir}/best_checkpoint.pth"
 PROJ_CLIP = True
 dataset_name="domainnet"
 domain_name="clipart"
-domainnet_domains_projector= {"real":'/usr/workspace/KDML/ood_detect/checkpoints/painting_test_projector/best_projector_weights.pth',\
+domainnet_domains_projector= {"real":'/usr/workspace/KDML/ood_detect/checkpoints/real_test_projector/best_projector_weights.pth',\
                               "sketch": "/usr/workspace/KDML/ood_detect/resnet50_domainnet_real/plumber/resnet50domain_{sketch}_lr_0.1_is_mlp_False/projector_weights_final.pth",\
                              "painting": "/usr/workspace/KDML/ood_detect/checkpoints/painting_test_projector/best_projector_weights.pth",\
                              "clipart": "/usr/workspace/KDML/ood_detect/checkpoints/clipart_test_projector/best_projector_weights.pth"
@@ -222,6 +222,8 @@ def plot_umap_embeddings(list_tensors,include_lines_for_tensor3=False, labels=No
 
 # plot_umap_embeddings(all_clip_embeddings,  all_proj_embeddings,text_encodings.detach().cpu(),labels=['CLIP image', 'Projected image', 'CLIP Text'],save_filename='umap_embeddings.png')
 
-list_tensor = [clip_embeddings['real'],*proj_embeddings.values(),clip_text_embeddings['real']]
-labels = ['CLIP image', *list(proj_embeddings.keys()), 'CLIP Text']
+#list_tensor = [clip_embeddings['real'],*proj_embeddings.values(),clip_text_embeddings['real']]
+list_tensor = [*proj_embeddings.values()]
+#labels = ['CLIP image', *list(proj_embeddings.keys()), 'CLIP Text']
+labels=  [*list(proj_embeddings.keys())]
 plot_umap_embeddings(list_tensor,labels=labels,save_filename='umap_embeddings.png')
