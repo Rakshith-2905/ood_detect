@@ -469,7 +469,10 @@ def main(args):
     # TODO: For any new datasets ensure this is handeled properly
     if args.train_on_testset:
         train_loader = val_loader
+        fabric.print("Training on test set")
 
+    fabric.print(f"Number of training examples: {len(train_loader.dataset)}")
+    fabric.print(f"Number of validation examples: {len(val_loader.dataset)}")
     # Get the text encodings for the class names
     try:
         text_encodings= torch.load(args.prompt_path)
@@ -546,7 +549,7 @@ def main(args):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Train ResNet on WILDS Dataset')
 
-    parser.add_argument('--data_dir', type=str, default='/p/gpfs1/KDML/imagenet-features', help='Path to the data directory')
+    parser.add_argument('--data_dir', type=str, default='/usr/workspace/KDML/DomainNet', help='Path to the data directory')
     parser.add_argument('--domain_name', type=str, default='clipart', help='Domain to use for training')
     parser.add_argument('--dataset_name', type=str, default='imagenet', help='Name of the dataset')
     parser.add_argument('--num_classes', type=int, default=345, help='Number of classes in the dataset')
