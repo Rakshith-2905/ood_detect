@@ -154,19 +154,22 @@ def train_one_epoch(train_loader, clip_model, classifier, projector, text_encodi
     pbar = progbar_wrapper(
         train_loader, total=len(train_loader), desc=f"Training Epoch {epoch+1}"
     )
-    for images_batch, labels in pbar:
+    for images_batch, labels, images_clip_batch in pbar:
 
         images_batch = fabric.to_device(images_batch)
+        images_clip_batch = fabric.to_device(images_clip_batch)
         labels = fabric.to_device(labels)
 
         optimizer.zero_grad()
         
-        # TODO: We cant use the same images for CLIP 
         classifier_logits, classifier_embeddings = classifier(images_batch) # (batch_size, embedding_dim)
 
-        clip_image_embeddings = clip_model.encode_image(images_batch) # (batch_size, embedding_dim)
-        # Project the classifier embeddings
-        proj_embeddings = projector(clip_image_embeddings) # (batch_size, projection_dim)
+        clip_image_embeddings = clip_model.encode_image(images_clip_batch) # (batch_size, embedding_dim)
+
+        if args.proj_clip: # this is PLUMBER
+            proj_embeddings = projector(clip_image_embeddings) # (batch_size, projection_dim)
+        else: # this is LIMBER
+            proj_embeddings = projector(classifier_embeddings) # (batch_size, projection_dim)
 
         normalized_proj_embeddings = F.normalize(proj_embeddings, dim=-1)
         normalized_text_encodings = F.normalize(text_encodings, dim=-1)# (num_classes, projection_dim)
@@ -178,7 +181,7 @@ def train_one_epoch(train_loader, clip_model, classifier, projector, text_encodi
 
         loss_image = criterion(logits_projection, classifier_logits)
         loss_text = criterion(logits_projection.t(), classifier_logits.t())
-        loss = (loss_image + loss_text)/2
+        loss = (loss_image + loss_text)/2 # TODO: optimal value of alpha
         
         fabric.backward(loss)
 
@@ -201,12 +204,12 @@ def train_one_epoch(train_loader, clip_model, classifier, projector, text_encodi
 
         # pbar.set_postfix({"Batch Loss": batch_loss, "Base model Acc": batch_base_model_acc, "CLIP Acc": batch_clip_acc})
     
-    total_loss = fabric.all_gather(total_loss).sum() / len(train_loader)
-    total_image_loss = fabric.all_gather(total_image_loss).sum() / len(train_loader)
-    total_text_loss = fabric.all_gather(total_text_loss).sum() / len(train_loader)
+    total_loss = fabric.all_gather(total_loss).mean() / len(train_loader)
+    total_image_loss = fabric.all_gather(total_image_loss).mean() / len(train_loader)
+    total_text_loss = fabric.all_gather(total_text_loss).mean() / len(train_loader)
     
-    total_base_model_acc = fabric.all_gather(total_base_model_acc).sum() / len(train_loader)
-    total_clip_acc = fabric.all_gather(total_clip_acc).sum() / len(train_loader)
+    total_base_model_acc = fabric.all_gather(total_base_model_acc).mean() / len(train_loader)
+    total_clip_acc = fabric.all_gather(total_clip_acc).mean() / len(train_loader)
 
     return total_loss, total_base_model_acc, total_clip_acc, total_image_loss, total_text_loss
 
@@ -228,17 +231,20 @@ def validate(val_loader, clip_model, classifier, projector, text_encodings, crit
     pbar = progbar_wrapper(
         val_loader, total=len(val_loader), desc=f"Validating Epoch {epoch+1}"
     )
-    for images_batch, labels in pbar:
+    for images_batch, labels, images_clip_batch in pbar:
 
         images_batch = fabric.to_device(images_batch)
+        images_clip_batch = fabric.to_device(images_clip_batch)
         labels = fabric.to_device(labels)
         
         classifier_logits, classifier_embeddings = classifier(images_batch) # (batch_size, embedding_dim)
 
-        # TODO: We cant use the same images for CLIP 
-        clip_image_embeddings = clip_model.encode_image(images_batch) # (batch_size, embedding_dim)
-        # Project the classifier embeddings
-        proj_embeddings = projector(clip_image_embeddings) # (batch_size, projection_dim)
+        clip_image_embeddings = clip_model.encode_image(images_clip_batch) # (batch_size, embedding_dim)
+
+        if args.proj_clip: # this is PLUMBER
+            proj_embeddings = projector(clip_image_embeddings) # (batch_size, projection_dim)
+        else: # this is LIMBER
+            proj_embeddings = projector(classifier_embeddings) # (batch_size, projection_dim)
 
         normalized_proj_embeddings = F.normalize(proj_embeddings, dim=-1)
         normalized_text_encodings = F.normalize(text_encodings, dim=-1)# (num_classes, projection_dim)
@@ -250,8 +256,8 @@ def validate(val_loader, clip_model, classifier, projector, text_encodings, crit
 
         loss_image = criterion(logits_projection, classifier_logits)
         loss_text = criterion(logits_projection.t(), classifier_logits.t())
-        loss = (loss_image + loss_text)/2
-        
+        loss = (loss_image + loss_text)/2 # TODO: optimal value of alpha
+
         probs_from_classifier = F.softmax(classifier_logits, dim=-1)
         probs_from_proj = F.softmax(logits_projection, dim=-1)
 
@@ -269,13 +275,12 @@ def validate(val_loader, clip_model, classifier, projector, text_encodings, crit
 
         # pbar.set_postfix({"Batch Loss": batch_loss, "Base model Acc": batch_base_model_acc, "CLIP Acc": batch_clip_acc})
     
-    total_loss = fabric.all_gather(total_loss).sum() / len(val_loader)
-    total_image_loss = fabric.all_gather(total_image_loss).sum() / len(val_loader)
-    total_text_loss = fabric.all_gather(total_text_loss).sum() / len(val_loader)
+    total_loss = fabric.all_gather(total_loss).mean() / len(val_loader)
+    total_image_loss = fabric.all_gather(total_image_loss).mean() / len(val_loader)
+    total_text_loss = fabric.all_gather(total_text_loss).mean() / len(val_loader)
     
-    total_base_model_acc = fabric.all_gather(total_base_model_acc).sum() / len(val_loader)
-    total_clip_acc = fabric.all_gather(total_clip_acc).sum() / len(val_loader)
-
+    total_base_model_acc = fabric.all_gather(total_base_model_acc).mean() / len(val_loader)
+    total_clip_acc = fabric.all_gather(total_clip_acc).mean() / len(val_loader)
 
     return total_loss, total_base_model_acc, total_clip_acc, total_image_loss, total_text_loss
 
@@ -442,6 +447,10 @@ def main(args):
 
     train_loader, val_loader = fabric.setup_dataloaders(train_loader, val_loader)
 
+    # TODO: For any new datasets ensure this is handeled properly
+    if args.train_on_testset:
+        train_loader = val_loader
+
     # Get the text encodings for the class names
     if args.prompt_path: 
         text_encodings= torch.load(args.prompt_path)
@@ -492,8 +501,6 @@ def main(args):
                 val_loss, val_base_acc, val_clip_acc, val_loss_img, val_loss_txt = validate(val_loader, clip_model, classifier, projector, text_encodings, criterion, epoch)
         scheduler.step()
         
-            
-
         fabric.print(f"Epoch {epoch}/{args.num_epochs}| Train Loss: {train_loss:.4f}, Train Base Model Accuracy: {train_base_acc:.4f}, Train CLIP Accuracy: {train_clip_acc:.4f}, Val Loss: {val_loss:.4f}, Val Base Model Accuracy: {val_base_acc:.4f}, Val CLIP Accuracy: {val_clip_acc:.4f}")
 
         losses_dict = {"train_loss": train_loss, "train_loss_img": train_loss_img, "train_loss_txt": train_loss_txt,
@@ -522,6 +529,7 @@ if __name__ == "__main__":
     parser.add_argument('--data_dir', type=str, default='/p/gpfs1/KDML/imagenet-features', help='Path to the data directory')
     parser.add_argument('--train_domain', type=str, default='clipart', help='Domain to use for training')
     parser.add_argument('--dataset_name', type=str, default='imagenet', help='Name of the dataset')
+    parser.add_argument('--train_on_testset', action='store_true', help='Whether to train on the test set or not')
     parser.add_argument('--use_saved_features',action = 'store_true', help='Whether to use saved features or not')
     parser.add_argument('--batch_size', type=int, default=32, help='Batch size for the dataloader')
     parser.add_argument('--seed', type=int, default=42, help='Seed for reproducibility')
