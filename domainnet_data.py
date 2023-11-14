@@ -5,25 +5,23 @@ import os
 from PIL import Image
 from torchvision import transforms
 
+
 class DomainNetDataset(Dataset):
-    def __init__(self, root_dir, domain, split='train', transform=None):
+    def __init__(self, root_dir, domain, split='train', transform=None, transform2=None):
         self.root_dir = root_dir
         self.domain = domain # domain name
         self.split = split   # 'train' or 'test'
         self.transform = transform
+        self.transform2 = transform2
         
         # Load file list
         file_list = os.path.join(root_dir, f'text_files/{domain}_{split}.txt') 
         with open(file_list) as f:
             self.file_paths = [line.strip() for line in f] 
         self.targets = [int(path.split()[1]) for path in self.file_paths]
-
-        self.class_names = [path.split()[0].split('/')[1] for path in self.file_paths]
-        self.class_names = list(set(self.class_names))
-        self.class_names.sort()
-
         # only keep unique labels
         self.targets =np.array(list(set(self.targets)))
+        self.class_names = [line.strip() for line in open(os.path.join(root_dir, 'class_names.txt'))]
 
         self.num_classes = len(self.targets)
         print(f"Number of classes in {domain} {split} set: {self.num_classes}")
@@ -35,13 +33,16 @@ class DomainNetDataset(Dataset):
         img_path, label = self.file_paths[idx].split() 
         image = Image.open(os.path.join(self.root_dir, img_path)).convert('RGB')
 
-        if self.transform:
-            image = self.transform(image)
-        
         # File contains image path and label
         label = int(label) 
+
+        if self.transform:
+            image1 = self.transform(image)
+        if self.transform2:
+            image2 = self.transform2(image)
+            return image1, label, image2
         
-        return image, label
+        return image1, label
 
     def undo_transformation(self, images):
         # Undo the transformation on the inputs

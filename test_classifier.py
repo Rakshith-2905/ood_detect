@@ -151,8 +151,8 @@ def main(args):
     if not os.path.exists(save_dir):
         assert False, f"Directory {save_dir} does not exist"
 
-    save_features_and_labels(loaders_dict['real']['train'], model, device, save_dir, prefix="train")
-    save_features_and_labels(loaders_dict['real']['test'], model, device, save_dir, prefix="test")
+    # save_features_and_labels(loaders_dict['real']['train'], model, device, save_dir, prefix="train")
+    save_features_and_labels(loaders_dict['painting']['test'], model, device, save_dir, prefix="painting/test")
     assert False
     # Loss function
     criterion = nn.CrossEntropyLoss()
