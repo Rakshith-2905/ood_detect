@@ -101,3 +101,5 @@ prompts/text_embeddings.pth
 ./bash_files/*
 *.sh
 *.ckpt
+*.pkl
+*.txt
