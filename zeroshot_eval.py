@@ -107,9 +107,10 @@ def build_feature_extractor(feature_extractor_name, feature_extractor_checkpoint
     
     return feature_extractor, train_transform, test_transform
 
-def load_projector(projector_checkpoint_path, feature_dim, proj_dim, device="cpu"):
+def load_projector(projector_checkpoint_path, feature_dim, proj_dim, device="cpu",is_mlp=False):
     """ Load the projector model """
-    projector = ProjectionHead(feature_dim, proj_dim).to(device)
+    print('is_mlp',is_mlp)
+    projector = ProjectionHead(feature_dim, proj_dim,is_mlp=is_mlp).to(device)
     projector.load_state_dict(torch.load(projector_checkpoint_path, map_location=device)['projector_state'])
     return projector
     
@@ -210,8 +211,8 @@ def main(args):
     device = "cuda" if torch.cuda.is_available() else "cpu"
     logging.info(f"Using device: {device}")
 
-    #supported_datasets = ["cifar10", "cifar100",  "gtsrb", "svhn", "dtd", "oxfordpets",  "food101", "eurosat", "ucf101", "stanfordcars", "flowers102"]
-    supported_datasets = ["cifar100"]
+    supported_datasets = ["cifar10", "cifar100",  "gtsrb", "svhn", "dtd", "oxfordpets",  "food101", "eurosat", "ucf101", "stanfordcars", "flowers102"]
+    #supported_datasets = ["cifar100"]
     datasets_to_evaluate = supported_datasets if args.dataset_name == 'all' else [args.dataset_name]
 
     cifar100_corruptions = [
@@ -238,7 +239,8 @@ def main(args):
 
     feature_extractor, _, transform = build_feature_extractor(args.feature_extractor_name, args.feature_extractor_checkpoint_path, device)
     if args.feature_extractor_name != 'clip':
-        projector = load_projector(args.projector_checkpoint_path, feature_extractor.feature_dim, args.proj_dim, device)
+        
+        projector = load_projector(args.projector_checkpoint_path, feature_extractor.feature_dim, args.proj_dim, device,is_mlp=True)
         model = (feature_extractor, projector)
     else:
         model = feature_extractor
@@ -272,16 +274,16 @@ if __name__ == "__main__":
     parser.add_argument('--data_path', type=str, default='./data')
     parser.add_argument('--batch_size', type=int, default=32)
     parser.add_argument('--text_encoding_path', type=str, required=False)
-    parser.add_argument('--feature_extractor_name', type=str, default='clip')  #dino_vits16
+    parser.add_argument('--feature_extractor_name', type=str, default='dino_vits16')  #dino_vits16
     parser.add_argument('--feature_extractor_checkpoint_path', type=str)    
     parser.add_argument('--clip_model_name', type=str, default='ViT-B/32')
 
-    parser.add_argument('--projector_checkpoint_path', type=str,default="/p/gpfs1/KDML/ckpts_13M_vivek/dino_vits16full_13M_lr_1e-2_step_lr/projector_weights_epoch_27.pth")
+    parser.add_argument('--projector_checkpoint_path', type=str,default="/p/gpfs1/KDML/ckpts_13M_features/dino_vits16MLP_full_13M_lr_1e-1/projector_weights_epoch_5.pth")
     parser.add_argument('--proj_dim', type=int, default=512)
     args = parser.parse_args()
 
     print(f"Arguments: {args}")
-    #args.data_path =os.path.join("/usr/workspace/thopalli/ICLR2024/rich_datasets", "datasets")
-    args.data_path = os.path.join("/usr/workspace/viv41siv/ICASSP2024/ILM_VP_CLIP/datasets")
+    args.data_path =os.path.join("/usr/workspace/thopalli/ICLR2024/rich_datasets", "datasets")
+    #args.data_path = os.path.join("/usr/workspace/viv41siv/ICASSP2024/ILM_VP_CLIP/datasets")
     args.dataset_name= 'all'
     main(args)
