@@ -151,7 +151,7 @@ def main(args):
     if not os.path.exists(save_dir):
         assert False, f"Directory {save_dir} does not exist"
 
-    save_features_and_labels(loaders_dict[args.domain]['train'], model, device, save_dir, prefix="train" domain=args.domain)
+    save_features_and_labels(loaders_dict[args.domain]['train'], model, device, save_dir, prefix="train", domain=args.domain)
     save_features_and_labels(loaders_dict[args.domain]['test'], model, device, save_dir, prefix="test", domain=args.domain)
     assert False
     # Loss function
