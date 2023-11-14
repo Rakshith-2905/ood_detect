@@ -1,5 +1,8 @@
 import os
 import matplotlib.pyplot as plt
+import random
+random.seed(0)
+
 
 def plot_class_stats(data_dir='data/domainnet_v1.0'):
     """
@@ -61,5 +64,36 @@ def plot_class_stats(data_dir='data/domainnet_v1.0'):
         plt.close()
         print(f"Saved bar plot for {domain} domain at: {plot_path}")
 
-# Call the function
-plot_class_stats()
+
+def select_probe_data(test_file, probe_file):
+    # Read the test data
+    with open(test_file, 'r') as file:
+        lines = file.readlines()
+
+    # Organize data by class
+    class_data = {}
+    for line in lines:
+        path, class_id = line.strip().split()
+        if class_id not in class_data:
+            class_data[class_id] = []
+        class_data[class_id].append(line)
+
+    # Select 10% from each class
+    probe_data = []
+    for class_id, items in class_data.items():
+        ten_percent_count = max(1, len(items) // 10) # Ensure at least one item if class has less than 10 items
+        probe_data.extend(random.sample(items, ten_percent_count))
+
+    # Write probe data to a new file
+    with open(probe_file, 'w') as file:
+        file.writelines(probe_data)
+
+domains = ['clipart', 'infograph', 'painting', 'quickdraw', 'real', 'sketch']
+data_dir = 'data/domainnet_v1.0/text_files'
+for domain in domains:
+    test_file = f"{data_dir}/{domain}_test.txt"
+    probe_file = f"{data_dir}/{domain}_probe.txt"
+    select_probe_data(test_file, probe_file)
+
+# # Call the function
+# plot_class_stats()

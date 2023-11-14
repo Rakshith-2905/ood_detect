@@ -33,7 +33,7 @@ from utils_proj import SimpleDINOLoss, compute_accuracy, compute_similarities, p
 from prompts.FLM import generate_label_mapping_by_frequency, label_mapping_base
 from models.resnet import CustomClassifier, CustomResNet
 import umap
-
+import pickle
 to_pil = ToPILImage()
 
 def get_dataset(data_name, domain_name,train_transforms, test_transforms, clip_transform, data_dir='../data'):
@@ -55,10 +55,10 @@ def get_dataset(data_name, domain_name,train_transforms, test_transforms, clip_t
 @torch.no_grad()
 def get_embeddings(val_loader,classifier,clip_model,clip_text_encodings,projector,device):
     all_clip_embeddings = []
-
     all_classifier_embeddings = []
     all_proj_embeddings = []
     all_clip_text_embeddings = []
+
     clip_text_encodings=clip_text_encodings.to(device)
 
     for i,(images_batch, labels, images_clip_batch) in enumerate(val_loader):
@@ -120,7 +120,7 @@ checkpoint_path = f"{data_dir}/best_checkpoint.pth"
 PROJ_CLIP = True
 dataset_name="domainnet"
 domain_name="clipart"
-domainnet_domains_projector= {"real":'/usr/workspace/KDML/ood_detect/checkpoints/painting_test_projector/best_projector_weights.pth',\
+domainnet_domains_projector= {"real":'/usr/workspace/KDML/ood_detect/checkpoints/real_test_projector/best_projector_weights.pth',\
                               "sketch": "/usr/workspace/KDML/ood_detect/resnet50_domainnet_real/plumber/resnet50domain_{sketch}_lr_0.1_is_mlp_False/projector_weights_final.pth",\
                              "painting": "/usr/workspace/KDML/ood_detect/checkpoints/painting_test_projector/best_projector_weights.pth",\
                              "clipart": "/usr/workspace/KDML/ood_detect/checkpoints/clipart_test_projector/best_projector_weights.pth"
@@ -168,6 +168,13 @@ for domain_name in domainnet_domains_projector.keys():
     
     classifier_embeddings[domain_name]=all_classifier_embeddings
     clip_text_embeddings[domain_name]=all_clip_text_embeddings
+data={}
+with open("clip_image_text_image_all_domain_embeddings.pkl","wb") as f:
+    data["clip_embeddings"]=clip_embeddings
+    data["proj_embeddings"]=proj_embeddings
+    data["classifier_embeddings"]=classifier_embeddings
+    data["clip_text_embeddings"]=clip_text_embeddings
+    pickle.dump(data,f)
 
 
 
@@ -222,6 +229,9 @@ def plot_umap_embeddings(list_tensors,include_lines_for_tensor3=False, labels=No
 
 # plot_umap_embeddings(all_clip_embeddings,  all_proj_embeddings,text_encodings.detach().cpu(),labels=['CLIP image', 'Projected image', 'CLIP Text'],save_filename='umap_embeddings.png')
 
-list_tensor = [clip_embeddings['real'],*proj_embeddings.values(),clip_text_embeddings['real']]
-labels = ['CLIP image', *list(proj_embeddings.keys()), 'CLIP Text']
-plot_umap_embeddings(list_tensor,labels=labels,save_filename='umap_embeddings.png')
+#list_tensor = [clip_embeddings['real'],*proj_embeddings.values(),clip_text_embeddings['real']]
+for domain in domainnet_domains_projector.keys():
+    list_tensor =[clip_embeddings[domain],proj_embeddings[domain],clip_text_embeddings[domain]] #[*proj_embeddings.values()]
+    #labels = ['CLIP image', *list(proj_embeddings.keys()), 'CLIP Text']
+    labels=  [f'CLIP {domain}', f'proj {domain}', f'CLIP Text']
+    plot_umap_embeddings(list_tensor,labels=labels,save_filename=f'umap_embeddings_proj_clip_{domain}.png')
