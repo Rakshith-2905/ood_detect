@@ -13,17 +13,18 @@ from PIL import Image
 import math
 
 class ProjectionHead(nn.Module):
-    def __init__(self, input_dim, output_dim):
+    def __init__(self, input_dim, output_dim,is_mlp=False):
         super().__init__()
         self.input_dim = input_dim
         self.output_dim = output_dim
-
-        self.linear = nn.Linear(input_dim, output_dim)
-
-        # self.linear = nn.Sequential(
-        #     nn.Linear(input_dim, 1024),
-        #     nn.Linear(1024, output_dim),
-        # )
+        if is_mlp:
+            self.linear = nn.Sequential(
+                nn.Linear(input_dim, 1024),
+                nn.ReLU(),
+                nn.Linear(1024, output_dim),
+            )
+        else:
+            self.linear = nn.Linear(input_dim, output_dim)
 
     def forward(self, x):
         x = self.linear(x)
