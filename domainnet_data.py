@@ -40,7 +40,7 @@ class DomainNetDataset(Dataset):
             image = self.transform(image)
         if self.transform2:
             image2 = self.transform2(image2)
-            return image1, label, image2
+            return image, label, image2
         
         return image, label
 
