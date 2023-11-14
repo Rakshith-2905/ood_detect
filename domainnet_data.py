@@ -40,7 +40,7 @@ class DomainNetDataset(Dataset):
             image = self.transform(image)
         if self.transform2:
             image2 = self.transform2(image2)
-            return image1, label, image2
+            return image, label, image2
         
         return image, label
 
@@ -54,12 +54,12 @@ class DomainNetDataset(Dataset):
 def get_data_from_saved_files(save_dir, batch_size=32, train_shuffle=True, return_dataset=False):
 
     train_outputs = torch.load(os.path.join(save_dir, "train_outputs.pth"))
-    train_CLIP_features = torch.load(os.path.join(save_dir, "train_CLIP_features.pth"))
+    train_CLIP_features = torch.load(os.path.join(save_dir, "train_ViTB32_CLIP_features.pth"))
     train_features = torch.load(os.path.join(save_dir, "train_features.pth"))
     train_labels = torch.load(os.path.join(save_dir, "train_labels.pth"))
 
     test_outputs = torch.load(os.path.join(save_dir, "test_outputs.pth"))
-    test_CLIP_features = torch.load(os.path.join(save_dir, "test_CLIP_features.pth"))
+    test_CLIP_features = torch.load(os.path.join(save_dir, "test_ViTB32_CLIP_features.pth"))
     test_features = torch.load(os.path.join(save_dir, "test_features.pth"))
     test_labels = torch.load(os.path.join(save_dir, "test_labels.pth"))
 

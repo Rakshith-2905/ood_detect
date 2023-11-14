@@ -147,11 +147,11 @@ def main(args):
     
 
     # Save results
-    save_dir = f"logs/classifier/{args.resnet_model}_{args.dataset}_{args.domain}"
+    save_dir = f"logs/classifier/{args.resnet_model}_{args.dataset}_real"
     if not os.path.exists(save_dir):
         assert False, f"Directory {save_dir} does not exist"
 
-    # save_features_and_labels(loaders_dict['real']['train'], model, device, save_dir, prefix="train")
+    save_features_and_labels(loaders_dict[args.domain]['train'], model, device, save_dir, prefix="train" domain=args.domain)
     save_features_and_labels(loaders_dict[args.domain]['test'], model, device, save_dir, prefix="test", domain=args.domain)
     assert False
     # Loss function
