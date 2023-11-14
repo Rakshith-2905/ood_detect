@@ -17,6 +17,11 @@ class DomainNetDataset(Dataset):
         with open(file_list) as f:
             self.file_paths = [line.strip() for line in f] 
         self.targets = [int(path.split()[1]) for path in self.file_paths]
+
+        self.class_names = [path.split()[0].split('/')[1] for path in self.file_paths]
+        self.class_names = list(set(self.class_names))
+        self.class_names.sort()
+
         # only keep unique labels
         self.targets =np.array(list(set(self.targets)))
 
@@ -45,7 +50,8 @@ class DomainNetDataset(Dataset):
             std=[1/0.229, 1/0.224, 1/0.225]
         )
 
-def get_data_from_saved_files(save_dir, batch_size, train_shuffle=True):
+def get_data_from_saved_files(save_dir, batch_size=32, train_shuffle=True, return_dataset=False):
+
     train_outputs = torch.load(os.path.join(save_dir, "train_outputs.pth"))
     train_CLIP_features = torch.load(os.path.join(save_dir, "train_CLIP_features.pth"))
     train_features = torch.load(os.path.join(save_dir, "train_features.pth"))
@@ -59,6 +65,14 @@ def get_data_from_saved_files(save_dir, batch_size, train_shuffle=True):
     # Create TensorDatasets
     train_dataset = TensorDataset(train_outputs, train_features, train_labels, train_CLIP_features)
     test_dataset = TensorDataset(test_outputs, test_features, test_labels, test_CLIP_features)
+
+    # load class names from data/domainnet_v1.0/class_names.txt
+
+    with open('./data/domainnet_v1.0/class_names.txt') as f:
+        class_names = [line.strip() for line in f]
+
+    if return_dataset:
+        return train_dataset, test_dataset, class_names
 
     # Create DataLoaders
     train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=train_shuffle)
@@ -109,6 +123,8 @@ if __name__=="__main__":
 
     real_train = DomainNetDataset(root_dir='data/domainnet_v1.0', domain='real', split='train', transform=transform_train)
     print(len(real_train))
+    print(real_train.class_names)
+    assert False
     loader = torch.utils.data.DataLoader(real_train, batch_size=4, shuffle=True, num_workers=2)
     for i, data in enumerate(loader):
         print(data[0].shape)
