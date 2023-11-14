@@ -32,17 +32,17 @@ class DomainNetDataset(Dataset):
     def __getitem__(self, idx):
         img_path, label = self.file_paths[idx].split() 
         image = Image.open(os.path.join(self.root_dir, img_path)).convert('RGB')
-
+        image2 = image.copy()
         # File contains image path and label
         label = int(label) 
 
         if self.transform:
-            image1 = self.transform(image)
+            image = self.transform(image)
         if self.transform2:
-            image2 = self.transform2(image)
+            image2 = self.transform2(image2)
             return image1, label, image2
         
-        return image1, label
+        return image, label
 
     def undo_transformation(self, images):
         # Undo the transformation on the inputs
