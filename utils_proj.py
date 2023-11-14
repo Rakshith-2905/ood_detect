@@ -5,7 +5,7 @@ import torch.nn.functional as F
 from matplotlib import pyplot as plt
 from sklearn.metrics import confusion_matrix
 import seaborn as sns
-#import umap
+import umap
 
 import numpy as np
 import os
@@ -161,22 +161,26 @@ def plot_umap_embeddings(tensor1, tensor2, tensor3=None, include_lines_for_tenso
     # Plot the embeddings
     fig, ax = plt.subplots(figsize=(12, 10))
     colors = ['red', 'blue', 'green']
+    alphas=[0.1,0.1,1.0]
+    marker_sizes=[10,10,40]
+    marker_shapes=['o','o','*']
+
     for i, reduced_tensor in enumerate(reduced_tensors):
-        ax.scatter(reduced_tensor[:, 0], reduced_tensor[:, 1], color=colors[i], label=labels[i])
+        ax.scatter(reduced_tensor[:, 0], reduced_tensor[:, 1], color=colors[i], label=labels[i],alpha=alphas[i], s=marker_sizes[i], marker=marker_shapes[i])
 
     # Draw lines between corresponding points for the first two tensors
-    for i in range(len(tensor1_np)):
-        points = np.vstack((reduced_tensors[0][i], reduced_tensors[1][i]))
-        ax.plot(points[:, 0], points[:, 1], 'grey', alpha=0.5)
+    # for i in range(len(tensor1_np)):
+    #     points = np.vstack((reduced_tensors[0][i], reduced_tensors[1][i]))
+    #     ax.plot(points[:, 0], points[:, 1], 'grey', alpha=0.5)
 
-    # Optionally draw lines for the third tensor
-    if tensor3 is not None and include_lines_for_tensor3 and len(tensor1_np) == len(tensor3_np):
-        for i in range(len(tensor1_np)):
-            points = np.vstack((reduced_tensors[0][i], reduced_tensors[2][i]))
-            ax.plot(points[:, 0], points[:, 1], 'purple', alpha=0.5)
+    # # Optionally draw lines for the third tensor
+    # if tensor3 is not None and include_lines_for_tensor3 and len(tensor1_np) == len(tensor3_np):
+    #     for i in range(len(tensor1_np)):
+    #         points = np.vstack((reduced_tensors[0][i], reduced_tensors[2][i]))
+    #         ax.plot(points[:, 0], points[:, 1], 'purple', alpha=0.5)
 
     # Customize the plot with legends
     ax.legend()
     ax.set_title('UMAP projection of the tensor embeddings', fontsize=18)
 
-    plt.show()
+    plt.savefig('umap_embeddings.png')
