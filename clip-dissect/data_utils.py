@@ -14,6 +14,8 @@ from models.projector import ProjectionHead
 import clip
 from collections import OrderedDict
 
+torch.manual_seed(0)
+
 DATASET_ROOTS = {"imagenet_val": "YOUR_PATH/ImageNet_val/",
                 "broden": "data/broden1_224/images/"}
 
@@ -99,6 +101,7 @@ def get_target_model( target_name, device, domain=None):
             ('projector', projector)
         ])).to(device)
 
+        
     elif target_name == "CLIP_RN50":
         clip_model, _ = clip.load("RN50", device=device)
         target_model = clip_model.visual
@@ -137,7 +140,7 @@ def get_data(dataset_name, preprocess=None, domain=None):
                                                      datasets.ImageFolder(DATASET_ROOTS["broden"], preprocess)])
     elif dataset_name == 'custom_domainnet':
 
-        if domain = "spc"
+        if domain == "spc":
             domains_interest = ['clipart', 'painting', 'sketch']
             combined_data = []
             for domain in domains_interest:
@@ -145,7 +148,11 @@ def get_data(dataset_name, preprocess=None, domain=None):
                 combined_data.append(data)
             data = ConcatDataset(combined_data)
         else:
-            data = DomainNetDataset(root_dir='data/domainnet_v1.0', domain=domain, split='test', transform=preprocess)
+            data = DomainNetDataset(root_dir='data/domainnet_v1.0', domain=domain, split='probe', transform=preprocess)
+
+        if len(data) > 20000:
+            # Randomly subsample 20000 images from the dataset
+            data = torch.utils.data.Subset(data, torch.randperm(len(data))[:20000])
         
     return data
 
