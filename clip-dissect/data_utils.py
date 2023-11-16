@@ -11,6 +11,8 @@ from domainnet_data import DomainNetDataset, get_domainnet_loaders
 from models.resnet import CustomClassifier, CustomResNet
 from models.projector import ProjectionHead
 
+from simple_classifier import SimpleCNN, CIFAR10TwoTransforms
+
 import clip
 from collections import OrderedDict
 
@@ -91,8 +93,9 @@ def get_target_model( target_name, device, domain=None):
         if domain == 'spc':
             projector_checkpoint_path = f'logs/classifier/domainnet/plumber/resnet50domain_SPC_lr_0.1_is_mlp_False/best_projector_weights.pth'
         else:    
+            # projector_checkpoint_path = f'logs/classifier/imagenet/domainnet/plumber/vit_b_16domain_{domain}_try_lr_0.1_is_mlp_False/projector_weights_final.pth'
             projector_checkpoint_path = f'logs/classifier/domainnet/plumber/resnet50domain_{domain}_lr_0.1_is_mlp_False/best_projector_weights.pth'
-
+            projector_checkpoint_path = f'logs/classifier/cifar10/plumber/SimpleCNNscale_1_epoch1_real_lr_0.1_is_mlp_False/projector_weights_30.pth'
         projector = ProjectionHead(input_dim=512, output_dim=512, is_mlp=False).to(device)
         projector.load_state_dict(torch.load(projector_checkpoint_path)["projector"])
         
@@ -153,7 +156,10 @@ def get_data(dataset_name, preprocess=None, domain=None):
         if len(data) > 20000:
             # Randomly subsample 20000 images from the dataset
             data = torch.utils.data.Subset(data, torch.randperm(len(data))[:20000])
-        
+    elif dataset_name == 'custom_cifar10':
+        data = CIFAR10TwoTransforms(root=f'./data/cifar10', train=False, transform1=preprocess)
+
+        class_names = ['airplane', 'automobile', 'bird']
     return data
 
 def get_places_id_to_broden_label():

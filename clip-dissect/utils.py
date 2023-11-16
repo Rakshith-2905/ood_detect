@@ -64,7 +64,6 @@ def save_target_activations(target_model, dataset, save_name, target_layers = ["
         elif target_layer == "proj":
             pass
         else:
-            # If I have [int] in my layer name (e.g. layer4[0]) then I need to use getattr
             command = "target_model.feature_extractor.{}.register_forward_hook(get_activation(all_features[target_layer], pool_mode))".format(target_layer)
         hooks[target_layer] = eval(command)
         print(f"Saving activations from {command}")

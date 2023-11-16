@@ -13,7 +13,7 @@ import torch.nn.functional as F
 import torchvision.transforms as trn
 import torchvision.datasets as dset
 from torch.utils.data import Dataset, DataLoader, TensorDataset, ConcatDataset
-
+from torch.utils.data.dataset import Subset
 
 from torchmetrics.classification import Accuracy
 from torch.optim.lr_scheduler import CosineAnnealingLR
@@ -37,6 +37,7 @@ from domainnet_data import DomainNetDataset, get_data_from_saved_files
 
 from models.resnet import CustomClassifier, CustomResNet
 from models.projector import ProjectionHead
+from simple_classifier import SimpleCNN, CIFAR10TwoTransforms
 from YFCC_feature_extract import ImageTextDataset
 from utils_proj import SimpleDINOLoss, compute_accuracy, compute_similarities, plot_grad_flow
 
@@ -53,6 +54,22 @@ def get_dataset(data_name, train_transforms, test_transforms, clip_transform, da
         val_dataset = DomainNetDataset(root_dir=data_dir, domain=args.domain_name, \
                                         split='test', transform=test_transforms, transform2=clip_transform)
         class_names = train_dataset.class_names
+
+    elif data_name == 'cifar10':
+        # train_dataset = dset.CIFAR10(root=f'{data_dir}/cifar10', train=True, download=True, transform=train_transforms)
+        # val_dataset = dset.CIFAR10(root=f'{data_dir}/cifar10', train=False, download=True, transform=test_transforms)
+        # class_names = train_dataset.classes
+
+        # # Selecting classes 0, 1, and 2
+        # train_indices = [i for i, (_, y) in enumerate(train_dataset) if y in [0, 1, 2]]
+        # test_indices = [i for i, (_, y) in enumerate(val_dataset) if y in [0, 1, 2]]
+
+        # train_dataset = Subset(train_dataset, train_indices)
+        # val_dataset = Subset(val_dataset, test_indices)
+        train_dataset = CIFAR10TwoTransforms(root=f'{data_dir}/cifar10', train=True, transform1=train_transforms, transform2=clip_transform)
+        val_dataset = CIFAR10TwoTransforms(root=f'{data_dir}/cifar10', train=False, transform1=test_transforms, transform2=clip_transform)
+
+        class_names = ['airplane', 'automobile', 'bird']
 
     return train_dataset, val_dataset, class_names
 
@@ -106,6 +123,9 @@ def get_save_dir(args):
     save_dir = os.path.join(args.save_dir, args.classifier_name)
 
     save_dir += f"{args.prefix}"
+    save_dir += f"_bs{args.batch_size}"
+    save_dir += f"_teT_{args.teacher_temp}_sT_{args.student_temp}"
+    save_dir += f"_imgweight_{args.weight_img_loss}_txtweight_{args.weight_txt_loss}"
     save_dir += f"_is_mlp_{args.is_mlp}"
     
     # save_dir += f"_{datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}"
@@ -180,7 +200,8 @@ def train_one_epoch(train_loader, clip_model, classifier, projector, text_encodi
 
         loss_image = criterion(logits_projection, classifier_logits)
         loss_text = criterion(logits_projection.t(), classifier_logits.t())
-        loss = (loss_image + loss_text)/2 # TODO: optimal value of alpha
+        # loss = (loss_image + loss_text)/2 # TODO: optimal value of alpha
+        loss = loss_image*args.weight_img_loss + loss_text*args.weight_txt_loss
         
         fabric.backward(loss)
 
@@ -256,7 +277,8 @@ def validate(val_loader, clip_model, classifier, projector, text_encodings, crit
 
         loss_image = criterion(logits_projection, classifier_logits)
         loss_text = criterion(logits_projection.t(), classifier_logits.t())
-        loss = (loss_image + loss_text)/2 # TODO: optimal value of alpha
+        # loss = (loss_image + loss_text)/2 # TODO: optimal value of alpha
+        loss = loss_image*args.weight_img_loss + loss_text*args.weight_txt_loss
 
         probs_from_classifier = F.softmax(classifier_logits, dim=-1)
         probs_from_proj = F.softmax(logits_projection, dim=-1)
@@ -324,7 +346,8 @@ def train_one_epoch_feat(train_loader, clip_model, classifier, projector, text_e
 
         loss_image = criterion(logits_projection, classifier_logits)
         loss_text = criterion(logits_projection.t(), classifier_logits.t())
-        loss = (loss_image + loss_text)/2 # TODO: optimal value of alpha
+        # loss = (loss_image + loss_text)/2 # TODO: optimal value of alpha
+        loss = loss_image*args.weight_img_loss + loss_text*args.weight_txt_loss
 
         
         fabric.backward(loss)
@@ -398,7 +421,8 @@ def validate_feat(val_loader, clip_model, classifier, projector, text_encodings,
 
         loss_image = criterion(logits_projection, classifier_logits)
         loss_text = criterion(logits_projection.t(), classifier_logits.t())
-        loss = (loss_image + loss_text)/2 # TODO: optimal value of alpha
+        # loss = (loss_image + loss_text)/2 # TODO: optimal value of alpha
+        loss = loss_image*args.weight_img_loss + loss_text*args.weight_txt_loss
 
         probs_from_classifier = F.softmax(classifier_logits, dim=-1)
         probs_from_proj = F.softmax(logits_projection, dim=-1)
@@ -432,9 +456,14 @@ def build_classifier(classifier_name, num_classes, pretrained=False, checkpoint_
         classifier = CustomClassifier(args.classifier_name, use_pretrained=pretrained)
     elif classifier_name in ['resnet18', 'resnet50']:
         classifier = CustomResNet(args.classifier_name, num_classes=num_classes, use_pretrained=pretrained)
+    elif classifier_name == 'SimpleCNN':
+        classifier = SimpleCNN()
 
     if checkpoint_path:
-        classifier.load_state_dict(torch.load(checkpoint_path)['model_state_dict'])
+        if classifier_name == 'SimpleCNN':
+            classifier.load_state_dict(torch.load(checkpoint_path))
+        else:
+            classifier.load_state_dict(torch.load(checkpoint_path)['model_state_dict'])
 
     train_transform = classifier.train_transform
     test_transform = classifier.test_transform
@@ -592,6 +621,8 @@ if __name__ == "__main__":
     parser.add_argument('--teacher_temp', type=float, default=0.5, help='Temperature for Dino loss')
     parser.add_argument('--student_temp', type=float, default=1, help='Temperature for Dino loss')
     parser.add_argument('--resume_checkpoint_path', type=str, help='Path to checkpoint to resume training from')
+    parser.add_argument('--weight_img_loss', type=float, default=0.5, help='Weight for image loss')
+    parser.add_argument('--weight_txt_loss', type=float, default=0.5, help='Weight for text loss')
 
     parser.add_argument('--num_gpus', type=int, default=4, help='Number of gpus for DDP per node')
     parser.add_argument('--num_nodes', type=int, default=1, help='Number of nodes for DDP')
@@ -617,7 +648,7 @@ if __name__ == "__main__":
             f.write(f"{arg}: {value}\n")
 
     tb_logger = TensorBoardLogger(args.save_dir)
-    csv_logger = CSVLogger(args.save_dir)
+    csv_logger = CSVLogger(args.save_dir, flush_logs_every_n_steps=1)
 
     fabric = L.Fabric(accelerator="cuda",num_nodes=args.num_nodes, devices=args.num_gpus, strategy="auto", loggers=[tb_logger, csv_logger])
    
