@@ -21,6 +21,7 @@ import numpy as np
 import random
 import pickle
 import matplotlib.pyplot as plt
+import itertools
 
 from sklearn.metrics import confusion_matrix
 
@@ -217,23 +218,24 @@ def get_CLIP_text_encodings(clip_model, texts, save_path=None, device='cuda'):
     torch.save(text_encodings,save_path )
     return text_encodings
 
-def plot_entropy(args, save_dir):
+def plot_entropy(args, save_dir, classifier_entropy, proj_entropy, CLIP_entropy, 
+                 entropy_classifier, entropy_proj, entropy_CLIP):
 
     fig, axs = plt.subplots(1, 3, figsize=(12, 12))
     axs=np.asarray(axs).reshape(1,3)
         
-    axs[0].stem(range(args.num_classes), classifier_entropy[domain_name], basefmt='b', linefmt='r-', markerfmt='ro')
-    axs[1].stem(range(args.num_classes), proj_entropy[domain_name], basefmt='b', linefmt='r-', markerfmt='ro')
-    axs[2].stem(range(args.num_classes), CLIP_entropy[domain_name], basefmt='b', linefmt='r-', markerfmt='ro')
+    axs[0].stem(range(args.num_classes), classifier_entropy[args.domain_name], basefmt='b', linefmt='r-', markerfmt='ro')
+    axs[1].stem(range(args.num_classes), proj_entropy[args.domain_name], basefmt='b', linefmt='r-', markerfmt='ro')
+    axs[2].stem(range(args.num_classes), CLIP_entropy[args.domain_name], basefmt='b', linefmt='r-', markerfmt='ro')
     plt.tight_layout()
     plt.savefig(f"{save_dir}_classwise_entropy.png")
     plt.close()
 
     fig, axs = plt.subplots(1, 3, figsize=(12, 12))
     
-    axs[0].hist( entropy_classifier[domain_name] )
-    axs[1].hist( entropy_proj[domain_name] )
-    axs[2].hist( entropy_CLIP[domain_name])
+    axs[0].hist( entropy_classifier[args.domain_name] )
+    axs[1].hist( entropy_proj[args.domain_name] )
+    axs[2].hist( entropy_CLIP[args.domain_name])
     plt.tight_layout()
     plt.savefig(f"{save_dir}_entropy_hist.png")
 
@@ -264,7 +266,7 @@ def main(args):
     text_encodings = get_CLIP_text_encodings(clip_model, class_names, args.prompt_path, device=device)
     print(f"Saved CLIP {args.clip_model_name} text encodings to {args.prompt_path}")
 
-    classifier_prob_list, proj_prob_list, CLIP_prob_list, label_list, confusion_matrix_classifier, confusion_matrix_proj, confusion_matrix_CLIP =  get_entropy(val_loader, classifier, clip_model, text_encodings, projector,
+    classifier_prob_list, proj_prob_list, CLIP_prob_list, label_list, confusion_matrix_classifier, confusion_matrix_proj, confusion_matrix_CLIP =  get_entropy_confusion(val_loader, classifier, clip_model, text_encodings, projector,
                                                                                    args.proj_clip, args.teacher_temp, device)
     print(f"CLIP_prob_list: {CLIP_prob_list.shape}", f"proj_prob_list: {proj_prob_list.shape}, classifier_prob_list: {classifier_prob_list.shape}")
         
@@ -313,7 +315,8 @@ def main(args):
         data["CLIP_entropy"] = CLIP_entropy[args.domain_name]
         pickle.dump(data, f)
 
-    plot_entropy(args, save_dir)
+    plot_entropy(args, save_dir, classifier_entropy, proj_entropy, 
+                 CLIP_entropy, entropy_classifier, entropy_proj, entropy_CLIP)
 
 #Checklist
 # Did you change the dataset name?
