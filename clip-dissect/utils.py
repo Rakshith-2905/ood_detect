@@ -37,10 +37,11 @@ def get_save_names(clip_name, target_name, target_layer, d_probe, concept_set, p
     target_save_name = "{}/{}_{}_{}{}.pt".format(save_dir, d_probe, target_name, target_layer,
                                              PM_SUFFIX[pool_mode])
     clip_save_name = "{}/{}_{}.pt".format(save_dir, d_probe, clip_name.replace('/', ''))
+    plumber_save_name = "{}/{}_{}.pt".format(save_dir, d_probe, "plumber")
     concept_set_name = (concept_set.split("/")[-1]).split(".")[0]
     text_save_name = "{}/{}_{}.pt".format(save_dir, concept_set_name, clip_name.replace('/', ''))
     
-    return target_save_name, clip_save_name, text_save_name
+    return target_save_name, clip_save_name, text_save_name, plumber_save_name
 
 def save_target_activations(target_model, dataset, save_name, target_layers = ["layer4"], batch_size = 1000,
                             device = "cuda", pool_mode='avg'):
@@ -58,21 +59,33 @@ def save_target_activations(target_model, dataset, save_name, target_layers = ["
     all_features = {target_layer:[] for target_layer in target_layers}
     hooks = {}
     for target_layer in target_layers:
-        command = "target_model.projector.register_forward_hook(get_activation(all_features[target_layer], pool_mode))".format(target_layer)
+        if target_layer == "projector":
+            command = "target_model.projector.register_forward_hook(get_activation(all_features[target_layer], pool_mode))".format(target_layer)
+        elif target_layer == "proj":
+            pass
+        else:
+            command = "target_model.feature_extractor.{}.register_forward_hook(get_activation(all_features[target_layer], pool_mode))".format(target_layer)
         hooks[target_layer] = eval(command)
-
-    from torch.utils.data import DataLoader as DL
+        print(f"Saving activations from {command}")
+        
     with torch.no_grad():
-
-        if isinstance(dataset, DL):
+        clip_outputs = []
+        if isinstance(dataset, DataLoader):
             for images, labels in tqdm(dataset):
                 features = target_model(images.to(device))
+                if "proj" in target_layers:
+                    clip_outputs.append(features)
         else:
             for images, labels in tqdm(DataLoader(dataset, batch_size, num_workers=8, pin_memory=True)):
                 features = target_model(images.to(device))
+                if "proj" in target_layers:
+                    clip_outputs.append(features)
     
     for target_layer in target_layers:
-        torch.save(torch.cat(all_features[target_layer]), save_names[target_layer])
+        if target_layer == "proj":
+            torch.save(torch.cat(clip_outputs), save_names[target_layer])
+        else:
+            torch.save(torch.cat(all_features[target_layer]), save_names[target_layer])
         hooks[target_layer].remove()
     #free memory
     del all_features
@@ -91,9 +104,8 @@ def save_clip_image_features(model, dataset, save_name, batch_size=1000 , device
     if not os.path.exists(save_dir):
         os.makedirs(save_dir)
 
-    from torch.utils.data import DataLoader as DL
     with torch.no_grad():
-        if isinstance(dataset, DL):
+        if isinstance(dataset, DataLoader):
             for images, labels in tqdm(dataset):
                 features = model.encode_image(images.to(device))
                 all_features.append(features)
@@ -101,6 +113,37 @@ def save_clip_image_features(model, dataset, save_name, batch_size=1000 , device
         else:
             for images, labels in tqdm(DataLoader(dataset, batch_size, num_workers=8, pin_memory=True)):
                 features = model.encode_image(images.to(device))
+                all_features.append(features)
+                all_labels.append(labels.cpu())
+    
+    torch.save(torch.cat(all_features), save_name)
+    torch.save(torch.cat(all_labels), save_name.replace(".pt", "_labels.pt"))
+    #free memory
+    del all_features
+    torch.cuda.empty_cache()
+    return
+
+def save_plumber_image_features(model, dataset, save_name, batch_size=1000 , device = "cuda"):
+    _make_save_dir(save_name)
+    all_features = []
+    all_labels = []
+    
+    if os.path.exists(save_name):
+        return
+    
+    save_dir = save_name[:save_name.rfind("/")]
+    if not os.path.exists(save_dir):
+        os.makedirs(save_dir)
+
+    with torch.no_grad():
+        if isinstance(dataset, DataLoader):
+            for images, labels in tqdm(dataset):
+                features = model(images.to(device))
+                all_features.append(features)
+                all_labels.append(labels.cpu())
+        else:
+            for images, labels in tqdm(DataLoader(dataset, batch_size, num_workers=8, pin_memory=True)):
+                features = model(images.to(device))
                 all_features.append(features)
                 all_labels.append(labels.cpu())
     
@@ -155,43 +198,54 @@ def save_activations(clip_name, target_name, target_layers, d_probe,
     save_names = get_save_names(clip_name = clip_name, target_name = target_name,
                                 target_layer = '{}', d_probe = d_probe, concept_set = concept_set,
                                 pool_mode=pool_mode, save_dir = save_dir)
-    target_save_name, clip_save_name, text_save_name = save_names
+    target_save_name, clip_save_name, text_save_name, plumber_save_name = save_names
+
     save_clip_text_features(clip_model, text, text_save_name, batch_size)
     save_clip_image_features(clip_model, data_c, clip_save_name, batch_size, device)
+    save_plumber_image_features(target_model, data_t, plumber_save_name, batch_size, device)
     save_target_activations(target_model, data_t, target_save_name, target_layers,
                             batch_size, device, pool_mode)
     return
     
-def get_similarity_from_activations(target_save_name, clip_save_name, text_save_name, similarity_fn, 
-                                   return_target_feats=True, device="cuda"):
+def get_similarity_from_activations(target_save_name, clip_save_name, text_save_name, plumber_save_name, similarity_fn, 
+                                   return_target_feats=True, device="cuda", target_name=None):
     
     image_features = torch.load(clip_save_name, map_location='cpu').float()
     text_features = torch.load(text_save_name, map_location='cpu').float()
     labels = torch.load(clip_save_name.replace(".pt", "_labels.pt"), map_location='cpu').float()
+    plumber_image_features = torch.load(plumber_save_name, map_location='cpu').float()
+
     with torch.no_grad():
         image_features /= image_features.norm(dim=-1, keepdim=True)
+        plumber_image_features /= plumber_image_features.norm(dim=-1, keepdim=True)
         text_features /= text_features.norm(dim=-1, keepdim=True)
-        clip_feats = (image_features @ text_features.T)
-    del image_features, text_features
+
+        clip_similarity_matrix = 100*(image_features @ text_features.T)
+        plumber_similarity_matrix = 100*(plumber_image_features @ text_features.T)
+
+    del image_features, text_features, plumber_image_features
     torch.cuda.empty_cache()
     
-    print(f"CLIP Image-Text similarity matrix shape: {clip_feats.shape}")
+    print(f"CLIP Image-Text similarity matrix shape: {clip_similarity_matrix.shape}") # (num_images, num_concepts)
+    print(f"Plumber Image-Text similarity matrix shape: {plumber_similarity_matrix.shape}") # (num_images, num_concepts)
 
-    target_feats = torch.load(target_save_name, map_location='cpu').float()
-    print(f"Target feature matrix shape: {target_feats.shape}")
+    target_activations = torch.load(target_save_name, map_location='cpu').float() # (num_images, num_target_activations)
+    print(f"Target feature matrix shape: {target_activations.shape}")
 
-    similarity = similarity_fn(clip_feats, target_feats, device=device)
-    print(f"Target Activation-Concept Similarity matrix shape: {similarity.shape}")
-    del clip_feats
+    clip_similarity = similarity_fn(clip_similarity_matrix, target_activations, device=device) # (num_target_activations, num_concepts)
+    print(f"Target Activation-Concept Similarity matrix (CLIP) shape: {clip_similarity.shape}")
+
+    plumber_similarity = similarity_fn(plumber_similarity_matrix, target_activations, device=device) # (num_target_activations, num_concepts)
+    print(f"Target Activation-Concept Similarity matrix (CLIP) shape: {plumber_similarity.shape}") 
+
     torch.cuda.empty_cache()
 
     if return_target_feats:
-        return similarity, target_feats
+        return clip_similarity, plumber_similarity, target_activations, clip_similarity_matrix
     else:
-        del target_feats 
+        del target_activations 
         torch.cuda.empty_cache()
-        return similarity
-
+        return clip_similarity
 
 def get_cos_similarity(preds, gt, clip_model, mpnet_model, device="cuda", batch_size=200):
     """
