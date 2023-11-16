@@ -1,60 +1,39 @@
-# %%
+import os
+import sys
+import time
 import torch
 import torch.nn.functional as F
-import torch.nn as nn
-import torchvision
-from torchvision import transforms
-from torchvision.transforms.functional import normalize, resize, to_pil_image
-from torchvision.transforms import ToPILImage
-import torchvision.utils as vutils
 
-# from torchcam.methods import LayerCAM, SmoothGradCAMpp
-# from torchcam.utils import overlay_mask
-
-import clip
+import torchvision.transforms as trn
+import torchvision.datasets as dset
+from torch.utils.data import Dataset, DataLoader, TensorDataset, ConcatDataset
+from torch.utils.data.dataset import Subset
 
 import argparse
-import os
-import glob
-import matplotlib.pyplot as plt
-
-import numpy as np
-import matplotlib.pyplot as plt
-from sklearn.manifold import TSNE
-from PIL import Image
-
-
 from tqdm import tqdm
-from itertools import cycle
+from functools import partial
+from datetime import datetime
 
-from models.resnet import CustomResNet
-from models.projector import ProjectionHead
-from domainnet_data import DomainNetDataset, get_domainnet_loaders, get_data_from_saved_files
-from cifar10_data import cifar10_dataset
-from utils_proj import SimpleDINOLoss, compute_accuracy, compute_similarities, plot_grad_flow, plot_confusion_matrix
-from prompts.FLM import generate_label_mapping_by_frequency, label_mapping_base
-from models.resnet import CustomClassifier, CustomResNet
-import umap
+import clip
+import csv
+from tqdm import tqdm
+import numpy as np
+import random
 import pickle
-# %%
-def get_dataset(data_name, domain_name,train_transforms, test_transforms, clip_transform, data_dir='../data'):
+import matplotlib.pyplot as plt
 
-    if data_name == 'imagenet':
-        train_dataset = dset.ImageFolder(root=f'{data_dir}/imagenet_train_examples', transform=train_transforms)
-        val_dataset = dset.ImageFolder(root=f'{data_dir}/imagenet_val_examples', transform=test_transforms)
-        class_names = train_dataset.classes
+from sklearn.metrics import confusion_matrix
 
-    elif data_name == 'domainnet':
-        train_dataset = DomainNetDataset(root_dir=data_dir, domain=domain_name, \
-                                        split='train', transform=train_transforms, transform2=clip_transform)
-        val_dataset = DomainNetDataset(root_dir=data_dir, domain=domain_name, \
-                                        split='test', transform=test_transforms, transform2=clip_transform)
-        class_names = train_dataset.class_names
+from domainnet_data import DomainNetDataset, get_data_from_saved_files
 
-    return train_dataset, val_dataset, class_names
+from models.resnet import CustomClassifier, CustomResNet
+from models.projector import ProjectionHead
+from simple_classifier import SimpleCNN, CIFAR10TwoTransforms
+from YFCC_feature_extract import ImageTextDataset
+from utils_proj import SimpleDINOLoss, compute_accuracy, compute_similarities, plot_grad_flow
+from train_projection_distill_cont import build_classifier
 
 
-# %%
 def class_level_entropies(entropy_, label_list, num_classes):
     class_entropies = {}
     for class_idx in range(num_classes):
@@ -78,25 +57,20 @@ def entropy(prob):
     """
     return -1 * np.sum(prob * np.log(prob + 1e-15), axis=-1)
 
-
 @torch.no_grad()
-def get_entropy(val_loader,classifier,clip_model,clip_text_encodings,projector,PROJ_CLIP,Teacher_Temp, device):
-    all_clip_embeddings = []
+def get_entropy_confusion(val_loader,classifier,clip_model,clip_text_encodings,projector,PROJ_CLIP,Teacher_Temp, device):
 
-    all_classifier_embeddings = []
-    all_proj_embeddings = []
-    all_clip_text_embeddings = []
-    l = []
-
+    all_labels = []
     classifier_prob_list, proj_prob_list, CLIP_prob_list = [], [], []
     clip_text_encodings=clip_text_encodings.to(device)
+
 
     for i,(images_batch, labels, images_clip_batch) in enumerate(val_loader):
         print(f"batch: {i}")
         images_batch = images_batch.to(device)
         images_clip_batch = images_clip_batch.to(device)    
         labels = labels.to(device)
-        l.append(labels.cpu())
+        all_labels.append(labels.cpu())
         
         classifier_logits, classifier_embeddings = classifier(images_batch, return_features=True) # (batch_size, embedding_dim)
 
@@ -128,34 +102,219 @@ def get_entropy(val_loader,classifier,clip_model,clip_text_encodings,projector,P
         proj_prob_list.append(probs_from_proj)
         CLIP_prob_list.append(probs_from_CLIP)
         
-
     classifier_prob_list = torch.cat(classifier_prob_list, dim=0)
     proj_prob_list = torch.cat(proj_prob_list, dim=0)
     CLIP_prob_list = torch.cat(CLIP_prob_list, dim=0)
-    l= torch.cat(l, dim=0)
-    return classifier_prob_list, proj_prob_list, CLIP_prob_list, l
+    all_labels = torch.cat(all_labels, dim=0)
 
-def build_classifier(classifier_name, num_classes, pretrained=False, checkpoint_path=None):
+    # Compute Confusion Matrix
+    _, predicted_classifier = torch.max(classifier_prob_list, 1)
+    _, predicted_proj = torch.max(proj_prob_list, 1)
+    _, predicted_CLIP = torch.max(CLIP_prob_list, 1)
 
-    if classifier_name in ['vit_b_16', 'swin_b']:
-        classifier = CustomClassifier(classifier_name, use_pretrained=pretrained)
-    elif classifier_name in ['resnet18', 'resnet50']:
-        classifier = CustomResNet(classifier_name, num_classes=num_classes, use_pretrained=pretrained)
+    confusion_matrix_classifier = confusion_matrix(all_labels.cpu().numpy().ravel(), predicted_classifier.cpu().numpy().ravel())
+    confusion_matrix_proj = confusion_matrix(all_labels.cpu().numpy().ravel(), predicted_proj.cpu().numpy().ravel())
+    confusion_matrix_CLIP = confusion_matrix(all_labels.cpu().numpy().ravel(), predicted_CLIP.cpu().numpy().ravel())
 
-    if checkpoint_path:
-        classifier.load_state_dict(torch.load(checkpoint_path)['model_state_dict'])
+    return classifier_prob_list, proj_prob_list, CLIP_prob_list, all_labels, confusion_matrix_classifier, confusion_matrix_proj, confusion_matrix_CLIP
 
-    train_transform = classifier.train_transform
-    test_transform = classifier.test_transform
+def plot_confusion_matrix(cm, classes, normalize=False, title='Confusion matrix', cmap=plt.cm.Blues, save_dir=None):
+    """
+    This function prints and plots the confusion matrix.
+    Normalization can be applied by setting `normalize=True`.
+    """
+    if normalize:
+            cm = cm.astype('float') / cm.sum(axis=1)[:, np.newaxis]
+            print("Normalized confusion matrix")
+    else:
+            print('Confusion matrix, without normalization')
 
-    return classifier, train_transform, test_transform
+    plt.figure(figsize=(12,12))
+    plt.imshow(cm, interpolation='nearest', cmap=cmap)
+    plt.title(title)
+    plt.colorbar()
+    tick_marks = np.arange(len(classes))
+
+    plt.xticks(tick_marks, classes, rotation=90)
+    plt.yticks(tick_marks, classes)
+
+    fmt = '.2f' if normalize else 'd'
+    thresh = cm.max() / 2.
+
+    for i, j in itertools.product(range(cm.shape[0]), range(cm.shape[1])):
+            plt.text(j, i, format(cm[i, j], fmt),
+                            horizontalalignment="center",
+                            color="white" if cm[i, j] > thresh else "black")
+
+    plt.ylabel('True label')
+    plt.xlabel('Predicted label')
+
+    if save_dir:
+        plt.savefig(save_dir)
+    plt.close()
+
+def get_dataset(data_name, domain_name, train_transforms, test_transforms, clip_transform, data_dir='../data'):
+
+    if data_name == 'imagenet':
+        train_dataset = dset.ImageFolder(root=f'{data_dir}/imagenet_train_examples', transform=train_transforms)
+        val_dataset = dset.ImageFolder(root=f'{data_dir}/imagenet_val_examples', transform=test_transforms)
+        class_names = train_dataset.classes
+
+    elif data_name == 'domainnet':
+        train_dataset = DomainNetDataset(root_dir=data_dir, domain=domain_name, \
+                                        split='train', transform=train_transforms, transform2=clip_transform)
+        val_dataset = DomainNetDataset(root_dir=data_dir, domain=domain_name, \
+                                        split='test', transform=test_transforms, transform2=clip_transform)
+        class_names = train_dataset.class_names
+
+    elif data_name == 'cifar10':
+        # train_dataset = dset.CIFAR10(root=f'{data_dir}/cifar10', train=True, download=True, transform=train_transforms)
+        # val_dataset = dset.CIFAR10(root=f'{data_dir}/cifar10', train=False, download=True, transform=test_transforms)
+        # class_names = train_dataset.classes
+
+        # # Selecting classes 0, 1, and 2
+        # train_indices = [i for i, (_, y) in enumerate(train_dataset) if y in [0, 1, 2]]
+        # test_indices = [i for i, (_, y) in enumerate(val_dataset) if y in [0, 1, 2]]
+
+        # train_dataset = Subset(train_dataset, train_indices)
+        # val_dataset = Subset(val_dataset, test_indices)
+        train_dataset = CIFAR10TwoTransforms(root=f'{data_dir}/cifar10', train=True, transform1=train_transforms, transform2=clip_transform)
+        val_dataset = CIFAR10TwoTransforms(root=f'{data_dir}/cifar10', train=False, transform1=test_transforms, transform2=clip_transform)
+
+        class_names = ['airplane', 'automobile', 'bird']
+
+    return train_dataset, val_dataset, class_names
+
+def get_save_dir(args):
+    
+    # If resume_checkpoint_path is provided, then use the save_dir from that checkpoint
+    if args.resume_checkpoint_path:
+        save_dir = os.path.dirname(args.resume_checkpoint_path)
+        return save_dir
+
+    save_dir = os.path.join(args.save_dir, args.classifier_name)
+
+    save_dir += f"{args.prefix}"
+    save_dir += f"_bs{args.batch_size}"
+    save_dir += f"_teT_{args.teacher_temp}_sT_{args.student_temp}"
+    save_dir += f"_imgweight_{args.weight_img_loss}_txtweight_{args.weight_txt_loss}"
+    save_dir += f"_is_mlp_{args.is_mlp}"
+    
+    # save_dir += f"_{datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}"
+
+    return save_dir
+
+@torch.no_grad()
+def get_CLIP_text_encodings(clip_model, texts, save_path=None, device='cuda'):
+
+    os.makedirs(os.path.dirname(save_path), exist_ok=True)
+    # append "This is a photo of a" to the beginning of each class name
+    texts = [f"This is a photo of a {text}" for text in texts]
+    with torch.no_grad():
+        text_tokens = clip.tokenize(texts).to(device)
+        text_encodings = clip_model.encode_text(text_tokens).float()
+    # text_encoding_save_path = os.path.join(os.getcwd(), "imagenet_classes_text_encodings.pt")
+    torch.save(text_encodings,save_path )
+    return text_encodings
+
+def plot_entropy(args, save_dir):
+
+    fig, axs = plt.subplots(1, 3, figsize=(12, 12))
+    axs=np.asarray(axs).reshape(1,3)
+        
+    axs[0].stem(range(args.num_classes), classifier_entropy[domain_name], basefmt='b', linefmt='r-', markerfmt='ro')
+    axs[1].stem(range(args.num_classes), proj_entropy[domain_name], basefmt='b', linefmt='r-', markerfmt='ro')
+    axs[2].stem(range(args.num_classes), CLIP_entropy[domain_name], basefmt='b', linefmt='r-', markerfmt='ro')
+    plt.tight_layout()
+    plt.savefig(f"{save_dir}_classwise_entropy.png")
+    plt.close()
+
+    fig, axs = plt.subplots(1, 3, figsize=(12, 12))
+    
+    axs[0].hist( entropy_classifier[domain_name] )
+    axs[1].hist( entropy_proj[domain_name] )
+    axs[2].hist( entropy_CLIP[domain_name])
+    plt.tight_layout()
+    plt.savefig(f"{save_dir}_entropy_hist.png")
 
 
+def main(args):
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    # Load the CLIP model
+    clip_model, clip_transform = clip.load(args.clip_model_name)
 
-# %%
-device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    classifier, train_transform, test_transform = build_classifier(args.classifier_name, num_classes=args.num_classes, 
+                                                                    pretrained=args.use_imagenet_pretrained, 
+                                                                    checkpoint_path=args.classifier_checkpoint_path)
+    if args.proj_clip:
+        projector = ProjectionHead(input_dim=args.projection_dim, output_dim=args.projection_dim,is_mlp=args.is_mlp)
+    else:
+        projector = ProjectionHead(input_dim=classifier.feature_dim, output_dim=args.projection_dim,is_mlp=args.is_mlp)
+    
 
-# %%
+    # Create the data loader and wrap them with Fabric
+    train_dataset, val_dataset, class_names = get_dataset(args.dataset_name, train_transform, test_transform,
+                                                                data_dir=args.data_dir, clip_transform=clip_transform)
+  
+                
+    # train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=128, shuffle=True, num_workers=8, pin_memory=True)
+    val_loader = torch.utils.data.DataLoader(val_dataset, batch_size=128, shuffle=False, num_workers=8, pin_memory=True)
+
+
+    text_encodings = get_CLIP_text_encodings(clip_model, class_names, args.prompt_path, device=device)
+    print(f"Saved CLIP {args.clip_model_name} text encodings to {args.prompt_path}")
+
+    classifier_prob_list, proj_prob_list, CLIP_prob_list, label_list, confusion_matrix_classifier, confusion_matrix_proj, confusion_matrix_CLIP =  get_entropy(val_loader, classifier, clip_model, text_encodings, projector,
+                                                                                   args.proj_clip, args.teacher_temp, device)
+    print(f"CLIP_prob_list: {CLIP_prob_list.shape}", f"proj_prob_list: {proj_prob_list.shape}, classifier_prob_list: {classifier_prob_list.shape}")
+        
+    plot_confusion_matrix(confusion_matrix_classifier, class_names, 
+                          normalize=False, title='Confusion matrix for classifier', save_dir=f"{save_dir}/confusion_matrix_classifier.png")
+    plot_confusion_matrix(confusion_matrix_proj, class_names,
+                            normalize=False, title='Confusion matrix for proj', save_dir=f"{save_dir}/confusion_matrix_proj.png")
+    plot_confusion_matrix(confusion_matrix_CLIP, class_names,
+                            normalize=False, title='Confusion matrix for CLIP', save_dir=f"{save_dir}/confusion_matrix_CLIP.png")
+
+    classifier_entropy={}
+    proj_entropy={}
+    CLIP_entropy={}
+
+    entropy_classifier={}
+    entropy_proj={}
+    entropy_CLIP={}
+
+    entropy_classifier[args.domain_name] = entropy(classifier_prob_list.cpu().data.numpy())
+    entropy_proj[args.domain_name] = entropy(proj_prob_list.cpu().data.numpy())
+    entropy_CLIP[args.domain_name] = entropy(CLIP_prob_list.cpu().data.numpy())
+
+
+    label_list=label_list.cpu().numpy()
+
+    classifier_entropy[args.domain_name] = class_level_entropies(entropy_classifier[args.domain_name], label_list,args.num_classes)
+    proj_entropy[args.domain_name] = class_level_entropies(entropy_proj[args.domain_name], label_list,args.num_classes)
+    CLIP_entropy[args.domain_name] = class_level_entropies(entropy_CLIP[args.domain_name], label_list,args.num_classes)
+
+    save_dir = get_save_dir(args)
+
+    with open(os.path.join(save_dir,'entropies.pkl'), "wb") as f:   
+        data={}
+        data["classifier_prob_list"]=classifier_prob_list
+        data["proj_prob_list"]=proj_prob_list
+        data["CLIP_prob_list"]=CLIP_prob_list
+        data["label_list"]=label_list
+
+        data["entropy_classifier"]=entropy_classifier[args.domain_name]
+        data["entropy_proj"]=entropy_proj[args.domain_name]
+        data["entropy_CLIP"]=entropy_CLIP[args.domain_name]
+        #classifier_prob_list, proj_prob_list, CLIP_prob_list, label_list
+    
+        data["classifier_entropy"] = classifier_entropy[args.domain_name]
+        data["proj_entropy"] = proj_entropy[args.domain_name]
+        data["CLIP_entropy"] = CLIP_entropy[args.domain_name]
+        pickle.dump(data, f)
+
+    plot_entropy(args, save_dir)
+
 #Checklist
 # Did you change the dataset name?
 # Did you change the domain name?
@@ -164,189 +323,39 @@ device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 # Did you change the projector weights path?
 # did you change num_classes?
 
-data_dir = f"/usr/workspace/KDML/DomainNet"
-
-classifier_name= "resnet50"
-num_classes = 345
-
-projector_weights_path= '/usr/workspace/KDML/ood_detect/checkpoints/painting_test_projector/best_projector_weights.pth'
-#projector_weights_path = "/usr/workspace/KDML/ood_detect/resnet50_domainnet_real/plumber/resnet50domain_{sketch}_lr_0.1_is_mlp_False/projector_weights_final.pth"
-checkpoint_path = f"{data_dir}/best_checkpoint.pth"
-PROJ_CLIP = True
-dataset_name="domainnet"
-domain_name="clipart"
-
-if dataset_name=="domainnet":
-    prompt_embeddings_pth = "/usr/workspace/KDML/DomainNet/CLIP_ViT-B-32_text_encodings.pt"
-elif dataset_name=="imagenet":
-    prompt_embeddings_pth = "/usr/workspace/KDML/ood_detect/CLIP_ViT-B-32_text_encodings_imagenet.pt"
-
-# domainnet_domains_projector= {"real":'/usr/workspace/KDML/ood_detect/checkpoints/real_test_projector/best_projector_weights.pth',\
-#                                "sketch": "/usr/workspace/KDML/ood_detect/resnet50_domainnet_real/plumber/resnet50domain_{sketch}_lr_0.1_is_mlp_False/projector_weights_final.pth",\
-#                             #   "painting": "/usr/workspace/KDML/ood_detect/checkpoints/painting_test_projector/best_projector_weights.pth",\
-#                             #   "clipart": "/usr/workspace/KDML/ood_detect/checkpoints/clipart_test_projector/best_projector_weights.pth",\
-#                              #"spc": "/usr/workspace/KDML/ood_detect/checkpoints/SPC_test_projector/best_projector_weights.pth",
-# }   
-#    
-TEACHER_TEMP=2
-# domainnet_domains_projector={"real": "/usr/workspace/KDML/ood_detect/checkpoints/teacher_scalling/resnet50scale_100_teT_1_domain_real_lr_0.1_is_mlp_False/best_projector_weights.pth",
-#                              "sketch":"/usr/workspace/KDML/ood_detect/checkpoints/teacher_scalling/resnet50scale_100_teT_1_domain_sketch_lr_0.1_is_mlp_False/best_projector_weights.pth"}
-
-# domainnet_domains_projector={"real":"/usr/workspace/KDML/ood_detect/checkpoints/imagenet/vit_b_16_domainnet_real_is_mlp_false.pth",\
-#                             "sketch":"/usr/workspace/KDML/ood_detect/checkpoints/imagenet/vit_b_16_domainnet_sketch_is_mlp_false.pth",\
-# }
-# domainnet_domains_projector={"real": f"/usr/workspace/KDML/ood_detect/checkpoints/batch_size_256/resnet50scale_100_teT_{TEACHER_TEMP}_domain_real_lr_0.1_bs256_is_mlp_False/best_projector_weights.pth",
-#                              "sketch": f"/usr/workspace/KDML/ood_detect/checkpoints/batch_size_256/resnet50scale_100_teT_{TEACHER_TEMP}_domain_sketch_lr_0.1_bs256_is_mlp_False/best_projector_weights.pth"\
-#                              }
-
-domainnet_domains_projector={"real":f"/usr/workspace/KDML/ood_detect/checkpoints/batch_size_256/all_checkpoints/resnet50scale_100_teT_{TEACHER_TEMP}_domain_real_lr_0.1_bs256_imgweight_0.3_txtweight_0.7_is_mlp_False/best_projector_weights.pth",\
-                            "sketch": f"/usr/workspace/KDML/ood_detect/checkpoints/batch_size_256/resnet50scale_100_teT_{TEACHER_TEMP}_domain_sketch_lr_0.1_bs256_is_mlp_False/best_projector_weights.pth"}
-# Load class names from a text file
-with open(os.path.join(data_dir, 'class_names.txt'), 'r') as f:
-    class_names = [line.strip() for line in f.readlines()]
-    
 ####################
 
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description='Train ResNet on WILDS Dataset')
+
+    parser.add_argument('--data_dir', type=str, default='/usr/workspace/KDML/DomainNet', help='Path to the data directory')
+    parser.add_argument('--domain_name', type=str, default='clipart', help='Domain to use for training')
+    parser.add_argument('--dataset_name', type=str, default='imagenet', help='Name of the dataset')
+    parser.add_argument('--num_classes', type=int, default=345, help='Number of classes in the dataset')
+    parser.add_argument('--train_on_testset', action='store_true', help='Whether to train on the test set or not')
+    parser.add_argument('--use_saved_features',action = 'store_true', help='Whether to use saved features or not')
+    parser.add_argument('--batch_size', type=int, default=32, help='Batch size for the dataloader')
+    parser.add_argument('--seed', type=int, default=42, help='Seed for reproducibility')
     
+    parser.add_argument('--classifier_name', required=True,  help='Name of the classifier to use sam_vit_h, mae_vit_large_patch16, dino_vits16, resnet50, resnet50_adv_l2_0.1, resnet50_adv_l2_0.5, resnet50x1_bitm, resnetv2_101x1_bit.goog_in21k, deeplabv3_resnet50, deeplabv3_resnet101, fcn_resnet50, fcn_resnet101')
+    parser.add_argument('--classifier_checkpoint_path', type=str, help='Path to checkpoint to load the classifier from')
+    parser.add_argument('--use_imagenet_pretrained', action='store_true', help='Whether to use imagenet pretrained weights or not')
+    parser.add_argument('--clip_model_name', default='ViT-B/32', help='Name of the CLIP model to use.')
+    parser.add_argument('--prompt_path', type=str, help='Path to the prompt file')
 
-text_encodings = torch.load(prompt_embeddings_pth)
+    parser.add_argument('--num_epochs', type=int, default=100, help='Number of training epochs')
+    parser.add_argument('--optimizer', type=str, choices=['adam','adamw', 'sgd'], default='adamw', help='Type of optimizer to use')
+    parser.add_argument('--learning_rate', type=float, default=1e-3, help='Learning rate for the optimizer')
+    parser.add_argument('--val_freq', type=int, default=1, help='Validation frequency')
+    parser.add_argument('--save_dir', type=str, default='checkpoints', help='Directory to save the results')
+    parser.add_argument('--prefix', type=str, default='', help='prefix to add to the save directory')
 
-clip_model, preprocess = clip.load("ViT-B/32", device=device)
-clip_model.eval()
-
-clip_model.eval()
-if classifier_name=="resnet50":
-    classifier, train_transform, test_transform = build_classifier(classifier_name, num_classes, pretrained=False, checkpoint_path=checkpoint_path)
-else:
-    classifier, train_transform, test_transform = build_classifier(classifier_name, num_classes, pretrained=True, checkpoint_path=None)
-classifier= classifier.to(device)
-classifier.eval()
-
-classifier_entropy={}
-proj_entropy={}
-CLIP_entropy={}
-
-entropy_classifier={}
-entropy_proj={}
-entropy_CLIP={}
-
-for domain_name in domainnet_domains_projector.keys():
-
-    projector = ProjectionHead(input_dim=512, output_dim=512).to(device)
-    projector.load_state_dict(torch.load(domainnet_domains_projector[domain_name])['projector'])
-    projector.eval()
-
-    if domain_name=="spc":
-       
-        datasets_all=[]
-        for d_name in ["sketch","clipart","painting"]:
-
-            train_dataset, val_dataset, class_names = get_dataset(dataset_name, d_name,train_transform, test_transform, 
-                                                                        data_dir=data_dir, clip_transform=preprocess)
-            datasets_all.append(val_dataset)
-        
-        val_dataset=torch.utils.data.ConcatDataset(datasets_all)
-            
-
-    else:
-
-        train_dataset, val_dataset, class_names = get_dataset(dataset_name, domain_name,train_transform, test_transform, 
-                                                                    data_dir=data_dir, clip_transform=preprocess)
-        
-
-            
-    train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=128, shuffle=True, num_workers=8, pin_memory=True)
-    val_loader = torch.utils.data.DataLoader(val_dataset, batch_size=128, shuffle=False, num_workers=8, pin_memory=True)
-    classifier_prob_list, proj_prob_list, CLIP_prob_list, label_list = get_entropy(val_loader,classifier,clip_model,text_encodings,projector,PROJ_CLIP,TEACHER_TEMP,device)
-    print(f"CLIP_prob_list: {CLIP_prob_list.shape}", f"proj_prob_list: {proj_prob_list.shape}, classifier_prob_list: {classifier_prob_list.shape}")
-    
-    entropy_classifier[domain_name] = entropy(classifier_prob_list.cpu().data.numpy())
-    entropy_proj[domain_name] = entropy(proj_prob_list.cpu().data.numpy())
-    entropy_CLIP[domain_name] = entropy(CLIP_prob_list.cpu().data.numpy())
-
-
-    label_list=label_list.cpu().numpy()
-
-    classifier_entropy[domain_name] = class_level_entropies(entropy_classifier[domain_name], label_list,num_classes)
-    proj_entropy[domain_name] = class_level_entropies(entropy_proj[domain_name], label_list,num_classes)
-    CLIP_entropy[domain_name] = class_level_entropies(entropy_CLIP[domain_name], label_list,num_classes)
-
-   
-
-    with open(f"entropy_plots/entropy_data/{domain_name}_{TEACHER_TEMP}_RS_batch_size_{256}_0.3_0.7.pkl", "wb") as f:   
-        data={}
-        data["classifier_prob_list"]=classifier_prob_list
-        data["proj_prob_list"]=proj_prob_list
-        data["CLIP_prob_list"]=CLIP_prob_list
-        data["label_list"]=label_list
-
-
-        data["entropy_classifier"]=entropy_classifier[domain_name]
-        data["entropy_proj"]=entropy_proj[domain_name]
-        data["entropy_CLIP"]=entropy_CLIP[domain_name]
-        #classifier_prob_list, proj_prob_list, CLIP_prob_list, label_list
-       
-        data["classifier_entropy"] = classifier_entropy[domain_name]
-        data["proj_entropy"] = proj_entropy[domain_name]
-        data["CLIP_entropy"] = CLIP_entropy[domain_name]
-        pickle.dump(data, f)
-# classifier_entropy={}
-# proj_entropy={}
-# CLIP_entropy={}
-# entropy_classifier_domain={}
-# entropy_proj_domain={}
-# entropy_CLIP_domain={}
-# for domain_name in domainnet_domains_projector.keys():
-   
-#     with open(f"entropy_plots/entropy_data/{domain_name}_{TEACHER_TEMP}_RS_batch_size_{256}_0.3_0.7.pkl", "rb") as f:
-#         data= pickle.load(f)
-
-#     entropy_classifier=data["entropy_classifier"]
-#     entropy_proj=data["entropy_proj"]
-#     entropy_CLIP=data["entropy_CLIP"]
-#     classifier_prob_list=data["classifier_prob_list"]
-#     proj_prob_list=data["proj_prob_list"]
-#     CLIP_prob_list=data["CLIP_prob_list"]
-#     label_list=data["label_list"]
-#     label_list=torch.cat(label_list, dim=0).cpu().numpy()
-
-#     entropy_classifier_domain[domain_name]=entropy_classifier
-#     entropy_proj_domain[domain_name]=entropy_proj
-#     entropy_CLIP_domain[domain_name]=entropy_CLIP
-
-
-#     classifier_entropy[domain_name] = class_level_entropies(entropy_classifier, label_list,345)
-#     proj_entropy[domain_name] = class_level_entropies(entropy_proj, label_list,345)
-#     CLIP_entropy[domain_name] = class_level_entropies(entropy_CLIP, label_list,345)
-#     print(domain_name)
-
-# %%
-# Create a 4x4 grid of subplots
-fig, axs = plt.subplots(len(domainnet_domains_projector.keys()), 3, figsize=(12, 12))
-
-if len(domainnet_domains_projector.keys())==1:
-    axs=np.asarray(axs).reshape(1,3)
-#Populate each subplot with a stem plot
-
-for i, domain_name in enumerate(domainnet_domains_projector.keys()):
-    
-    axs[i, 0].stem(range(num_classes), classifier_entropy[domain_name], basefmt='b', linefmt='r-', markerfmt='ro')
-    axs[i, 1].stem(range(num_classes), proj_entropy[domain_name], basefmt='b', linefmt='r-', markerfmt='ro')
-    axs[i, 2].stem(range(num_classes), CLIP_entropy[domain_name], basefmt='b', linefmt='r-', markerfmt='ro')
-plt.savefig(f"entropy_{TEACHER_TEMP}_correct_RS_bs{256}_0.3_0.7.png")
-plt.close()
-fig, axs = plt.subplots(len(domainnet_domains_projector.keys()), 3, figsize=(12, 12))
-for i, domain_name in enumerate(domainnet_domains_projector.keys()):
-    
-    axs[i, 0].hist( entropy_classifier[domain_name] )
-    axs[i, 1].hist( entropy_proj[domain_name] )
-    axs[i, 2].hist( entropy_CLIP[domain_name])
-
-
-# Adjust layout for better spacing
-plt.tight_layout()
-
-# Show the plot
-plt.savefig(f"entropy_hist_{TEACHER_TEMP}_correct_RS_bs_{256}_0.3_0.7.png")
-
-
+    parser.add_argument('--proj_clip', action='store_true', help='Whether to project the clip embeddings or the classifier embeddings')
+    parser.add_argument('--projection_dim', type=int, default=512, help='Dimension of the projected embeddings')
+    parser.add_argument('--is_mlp', action='store_true', help='Whether to use MLP projection head or not')
+    parser.add_argument('--teacher_temp', type=float, default=0.5, help='Temperature for Dino loss')
+    parser.add_argument('--student_temp', type=float, default=1, help='Temperature for Dino loss')
+    parser.add_argument('--resume_checkpoint_path', type=str, help='Path to checkpoint to resume training from')
+    parser.add_argument('--weight_img_loss', type=float, default=0.5, help='Weight for image loss')
+    parser.add_argument('--weight_txt_loss', type=float, default=0.5, help='Weight for text loss')

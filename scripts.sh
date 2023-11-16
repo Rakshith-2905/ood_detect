@@ -82,10 +82,10 @@ python train_projection_distill_cont.py \
             --prefix 'scale_100_epoch20_real_lr_0.1' \
             --proj_clip \
             --projection_dim 512 \
-            --teacher_temp 1 \
+            --teacher_temp 0.5 \
             --student_temp 1 \
-            --weight_img_loss 0.5 \
-            --weight_txt_loss 0.5 \
+            --weight_img_loss 0.0 \
+            --weight_txt_loss 1.0 \
             --num_gpus 1 \
             --num_nodes 1
 
