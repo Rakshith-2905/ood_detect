@@ -18,7 +18,7 @@ def get_all_domainnet_loaders(batch_size=32):
     domains = ["clipart", "infograph", "painting", "quickdraw", "real", "sketch"] 
     loaders_dict = {}
     for domain in domains:
-        loaders_dict[domain], class_names = get_domainnet_loaders(domain, batch_size=batch_size)
+        loaders_dict[domain], class_names = get_domainnet_loaders(data_dir="/usr/workspace/KDML/DomainNet",domain_name=domain, batch_size=batch_size)
     return loaders_dict, class_names
 
 def evaluate(loader, model, criterion, device):
@@ -76,7 +76,7 @@ def save_features_and_labels(loader, model, device, save_dir, prefix="train", do
 
         ])
 
-    dataset = DomainNetDataset(root_dir='data/domainnet_v1.0', domain=domain, split=prefix, transform=None)
+    dataset = DomainNetDataset(root_dir='/usr/workspace/KDML/DomainNet', domain=domain, split=prefix, transform=None)
 
     all_outputs = []
     all_features = []
@@ -142,12 +142,14 @@ def main(args):
     model.load_state_dict(checkpoint['model_state_dict'])
     epoch = checkpoint['epoch']
     print(f"Loaded model from epoch {epoch}")
+
     model.to(device)
     model.eval()
     
 
     # Save results
     save_dir = f"logs/classifier/{args.resnet_model}_{args.dataset}_real"
+    os.makedirs(save_dir, exist_ok=True)
     if not os.path.exists(save_dir):
         assert False, f"Directory {save_dir} does not exist"
 

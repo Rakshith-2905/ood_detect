@@ -30,6 +30,7 @@ from itertools import cycle
 from models.resnet import CustomResNet
 from models.projector import ProjectionHead
 from domainnet_data import DomainNetDataset, get_domainnet_loaders, get_data_from_saved_files
+from cifar10_data import cifar10_dataset
 from utils_proj import SimpleDINOLoss, compute_accuracy, compute_similarities, plot_grad_flow, plot_confusion_matrix
 from prompts.FLM import generate_label_mapping_by_frequency, label_mapping_base
 from models.resnet import CustomClassifier, CustomResNet
@@ -198,8 +199,8 @@ TEACHER_TEMP=2
 #                              "sketch": f"/usr/workspace/KDML/ood_detect/checkpoints/batch_size_256/resnet50scale_100_teT_{TEACHER_TEMP}_domain_sketch_lr_0.1_bs256_is_mlp_False/best_projector_weights.pth"\
 #                              }
 
-domainnet_domains_projector={"real":f"/usr/workspace/KDML/ood_detect/checkpoints/batch_size_256/all_checkpoints/resnet50scale_100_teT_{TEACHER_TEMP}_domain_real_lr_0.1_bs256_imgweight_0.3_txtweight_0.7_is_mlp_False/best_projector_weights.pth"}
-
+domainnet_domains_projector={"real":f"/usr/workspace/KDML/ood_detect/checkpoints/batch_size_256/all_checkpoints/resnet50scale_100_teT_{TEACHER_TEMP}_domain_real_lr_0.1_bs256_imgweight_0.3_txtweight_0.7_is_mlp_False/best_projector_weights.pth",\
+                            "sketch": f"/usr/workspace/KDML/ood_detect/checkpoints/batch_size_256/resnet50scale_100_teT_{TEACHER_TEMP}_domain_sketch_lr_0.1_bs256_is_mlp_False/best_projector_weights.pth"}
 # Load class names from a text file
 with open(os.path.join(data_dir, 'class_names.txt'), 'r') as f:
     class_names = [line.strip() for line in f.readlines()]
@@ -296,34 +297,37 @@ for domain_name in domainnet_domains_projector.keys():
 # entropy_proj_domain={}
 # entropy_CLIP_domain={}
 # for domain_name in domainnet_domains_projector.keys():
-#     if domain_name!="real":
-#         with open(f"entropy_data/{domain_name}.pkl", "rb") as f:
-#             data= pickle.load(f)
+   
+#     with open(f"entropy_plots/entropy_data/{domain_name}_{TEACHER_TEMP}_RS_batch_size_{256}_0.3_0.7.pkl", "rb") as f:
+#         data= pickle.load(f)
 
-#         entropy_classifier=data["entropy_classifier"]
-#         entropy_proj=data["entropy_proj"]
-#         entropy_CLIP=data["entropy_CLIP"]
-#         classifier_prob_list=data["classifier_prob_list"]
-#         proj_prob_list=data["proj_prob_list"]
-#         CLIP_prob_list=data["CLIP_prob_list"]
-#         label_list=data["label_list"]
-#         label_list=torch.cat(label_list, dim=0).cpu().numpy()
+#     entropy_classifier=data["entropy_classifier"]
+#     entropy_proj=data["entropy_proj"]
+#     entropy_CLIP=data["entropy_CLIP"]
+#     classifier_prob_list=data["classifier_prob_list"]
+#     proj_prob_list=data["proj_prob_list"]
+#     CLIP_prob_list=data["CLIP_prob_list"]
+#     label_list=data["label_list"]
+#     label_list=torch.cat(label_list, dim=0).cpu().numpy()
 
-#         entropy_classifier_domain[domain_name]=entropy_classifier
-#         entropy_proj_domain[domain_name]=entropy_proj
-#         entropy_CLIP_domain[domain_name]=entropy_CLIP
+#     entropy_classifier_domain[domain_name]=entropy_classifier
+#     entropy_proj_domain[domain_name]=entropy_proj
+#     entropy_CLIP_domain[domain_name]=entropy_CLIP
 
 
-#         classifier_entropy[domain_name] = class_level_entropies(entropy_classifier, label_list,345)
-#         proj_entropy[domain_name] = class_level_entropies(entropy_proj, label_list,345)
-#         CLIP_entropy[domain_name] = class_level_entropies(entropy_CLIP, label_list,345)
-#         print(domain_name)
+#     classifier_entropy[domain_name] = class_level_entropies(entropy_classifier, label_list,345)
+#     proj_entropy[domain_name] = class_level_entropies(entropy_proj, label_list,345)
+#     CLIP_entropy[domain_name] = class_level_entropies(entropy_CLIP, label_list,345)
+#     print(domain_name)
 
 # %%
 # Create a 4x4 grid of subplots
 fig, axs = plt.subplots(len(domainnet_domains_projector.keys()), 3, figsize=(12, 12))
 
+if len(domainnet_domains_projector.keys())==1:
+    axs=np.asarray(axs).reshape(1,3)
 #Populate each subplot with a stem plot
+
 for i, domain_name in enumerate(domainnet_domains_projector.keys()):
     
     axs[i, 0].stem(range(num_classes), classifier_entropy[domain_name], basefmt='b', linefmt='r-', markerfmt='ro')
