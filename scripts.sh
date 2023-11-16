@@ -91,6 +91,32 @@ python train_projection_distill_cont.py \
 
 
 
+python entropy_viz.py \
+        --data_dir './data/' \
+        --domain_name 'ID' \
+        --dataset_name 'cifar10' \
+        --train_on_testset  \
+        --num_classes 3 \
+        --batch_size 256 \
+        --seed 42 \
+        --classifier_name 'SimpleCNN' \
+        --classifier_checkpoint_path 'cifar10_logs/model_epoch_20.pth' \
+        --clip_model_name 'ViT-B/32' \
+        --prompt_path 'data/cifar10/CLIP_ViT-B-32_text_encodings.pt' \
+        --num_epochs 30 --optimizer 'sgd' --learning_rate 0.1 \
+        --val_freq 1 \
+        --save_dir 'logs/classifier/cifar10/plumber/' \
+        --prefix 'scale_100_epoch20_real_lr_0.1' \
+        --proj_clip \
+        --projection_dim 512 \
+        --teacher_temp 0.5 \
+        --student_temp 1 \
+        --weight_img_loss 0.0 \
+        --weight_txt_loss 1.0 
+
+
+
+
 
 python cam_masking.py --dataset domainnet --domain real --image_size 224 --batch_size 64 --seed 42  \
                             --resnet_model resnet50 --checkpoint_path 'logs/classifier/resnet50_domainnet_real/best_checkpoint.pth'  \

@@ -154,7 +154,7 @@ def plot_confusion_matrix(cm, classes, normalize=False, title='Confusion matrix'
         plt.savefig(save_dir)
     plt.close()
 
-def get_dataset(data_name, domain_name, train_transforms, test_transforms, clip_transform, data_dir='../data'):
+def get_dataset(data_name, train_transforms, test_transforms, clip_transform, data_dir='../data'):
 
     if data_name == 'imagenet':
         train_dataset = dset.ImageFolder(root=f'{data_dir}/imagenet_train_examples', transform=train_transforms)
@@ -162,9 +162,9 @@ def get_dataset(data_name, domain_name, train_transforms, test_transforms, clip_
         class_names = train_dataset.classes
 
     elif data_name == 'domainnet':
-        train_dataset = DomainNetDataset(root_dir=data_dir, domain=domain_name, \
+        train_dataset = DomainNetDataset(root_dir=data_dir, domain=args.domain_name, \
                                         split='train', transform=train_transforms, transform2=clip_transform)
-        val_dataset = DomainNetDataset(root_dir=data_dir, domain=domain_name, \
+        val_dataset = DomainNetDataset(root_dir=data_dir, domain=args.domain_name, \
                                         split='test', transform=test_transforms, transform2=clip_transform)
         class_names = train_dataset.class_names
 
@@ -224,9 +224,9 @@ def plot_entropy(args, save_dir, classifier_entropy, proj_entropy, CLIP_entropy,
     fig, axs = plt.subplots(1, 3, figsize=(12, 12))
     axs=np.asarray(axs).reshape(1,3)
         
-    axs[0].stem(range(args.num_classes), classifier_entropy[args.domain_name], basefmt='b', linefmt='r-', markerfmt='ro')
-    axs[1].stem(range(args.num_classes), proj_entropy[args.domain_name], basefmt='b', linefmt='r-', markerfmt='ro')
-    axs[2].stem(range(args.num_classes), CLIP_entropy[args.domain_name], basefmt='b', linefmt='r-', markerfmt='ro')
+    axs[0,0].stem(range(args.num_classes), classifier_entropy[args.domain_name], basefmt='b', linefmt='r-', markerfmt='ro')
+    axs[0,1].stem(range(args.num_classes), proj_entropy[args.domain_name], basefmt='b', linefmt='r-', markerfmt='ro')
+    axs[0,2].stem(range(args.num_classes), CLIP_entropy[args.domain_name], basefmt='b', linefmt='r-', markerfmt='ro')
     plt.tight_layout()
     plt.savefig(f"{save_dir}_classwise_entropy.png")
     plt.close()
@@ -239,11 +239,11 @@ def plot_entropy(args, save_dir, classifier_entropy, proj_entropy, CLIP_entropy,
     plt.tight_layout()
     plt.savefig(f"{save_dir}_entropy_hist.png")
 
-
 def main(args):
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     # Load the CLIP model
     clip_model, clip_transform = clip.load(args.clip_model_name)
+    clip_model = clip_model.to(device)
 
     classifier, train_transform, test_transform = build_classifier(args.classifier_name, num_classes=args.num_classes, 
                                                                     pretrained=args.use_imagenet_pretrained, 
@@ -253,6 +253,17 @@ def main(args):
     else:
         projector = ProjectionHead(input_dim=classifier.feature_dim, output_dim=args.projection_dim,is_mlp=args.is_mlp)
     
+    save_dir = get_save_dir(args)
+
+    # Load the checkpoint
+    checkpoint_path = os.path.join(save_dir, 'best_projector_weights.pth')
+    projector.load_state_dict(torch.load(checkpoint_path)['projector'])
+    print(f"Loaded checkpoint from {checkpoint_path}")
+
+    projector = projector.to(device)
+    projector.eval()
+    classifier = classifier.to(device)
+    classifier.eval()
 
     # Create the data loader and wrap them with Fabric
     train_dataset, val_dataset, class_names = get_dataset(args.dataset_name, train_transform, test_transform,
@@ -296,7 +307,6 @@ def main(args):
     proj_entropy[args.domain_name] = class_level_entropies(entropy_proj[args.domain_name], label_list,args.num_classes)
     CLIP_entropy[args.domain_name] = class_level_entropies(entropy_CLIP[args.domain_name], label_list,args.num_classes)
 
-    save_dir = get_save_dir(args)
 
     with open(os.path.join(save_dir,'entropies.pkl'), "wb") as f:   
         data={}
@@ -362,3 +372,6 @@ if __name__ == "__main__":
     parser.add_argument('--resume_checkpoint_path', type=str, help='Path to checkpoint to resume training from')
     parser.add_argument('--weight_img_loss', type=float, default=0.5, help='Weight for image loss')
     parser.add_argument('--weight_txt_loss', type=float, default=0.5, help='Weight for text loss')
+
+    args = parser.parse_args()
+    main(args)
