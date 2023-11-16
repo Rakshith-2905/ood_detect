@@ -228,7 +228,7 @@ def plot_entropy(args, save_dir, classifier_entropy, proj_entropy, CLIP_entropy,
     axs[0,1].stem(range(args.num_classes), proj_entropy[args.domain_name], basefmt='b', linefmt='r-', markerfmt='ro')
     axs[0,2].stem(range(args.num_classes), CLIP_entropy[args.domain_name], basefmt='b', linefmt='r-', markerfmt='ro')
     plt.tight_layout()
-    plt.savefig(f"{save_dir}_classwise_entropy.png")
+    plt.savefig(f"{save_dir}/classwise_entropy.png")
     plt.close()
 
     fig, axs = plt.subplots(1, 3, figsize=(12, 12))
@@ -237,7 +237,7 @@ def plot_entropy(args, save_dir, classifier_entropy, proj_entropy, CLIP_entropy,
     axs[1].hist( entropy_proj[args.domain_name] )
     axs[2].hist( entropy_CLIP[args.domain_name])
     plt.tight_layout()
-    plt.savefig(f"{save_dir}_entropy_hist.png")
+    plt.savefig(f"{save_dir}/entropy_hist.png")
 
 def main(args):
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
