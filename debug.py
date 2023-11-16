@@ -115,9 +115,9 @@ device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
 
 data_dir = f"/usr/workspace/KDML/DomainNet"
-prompt_embeddings_pth = "/usr/workspace/KDML/DomainNet/CLIP_ViT-B-32_text_encodings.pt"
-classifier_name= "resnet50"
-num_classes = 345
+prompt_embeddings_pth = "/usr/workspace/KDML/ood_detect/CLIP_ViT-B-32_text_encodings_imagenet.pt"# "/usr/workspace/KDML/DomainNet/CLIP_ViT-B-32_text_encodings.pt"
+classifier_name= "vit_b_16" #"resnet50"
+num_classes = 1000
 
 projector_weights_path= '/usr/workspace/KDML/ood_detect/checkpoints/painting_test_projector/best_projector_weights.pth'
 #projector_weights_path = "/usr/workspace/KDML/ood_detect/resnet50_domainnet_real/plumber/resnet50domain_{sketch}_lr_0.1_is_mlp_False/projector_weights_final.pth"
@@ -125,11 +125,17 @@ checkpoint_path = f"{data_dir}/best_checkpoint.pth"
 PROJ_CLIP = True
 dataset_name="domainnet"
 domain_name="clipart"
-domainnet_domains_projector= {"real":'/usr/workspace/KDML/ood_detect/checkpoints/real_test_projector/best_projector_weights.pth',\
-                              "sketch": "/usr/workspace/KDML/ood_detect/resnet50_domainnet_real/plumber/resnet50domain_{sketch}_lr_0.1_is_mlp_False/projector_weights_final.pth",\
-                             "painting": "/usr/workspace/KDML/ood_detect/checkpoints/painting_test_projector/best_projector_weights.pth",\
-                             "clipart": "/usr/workspace/KDML/ood_detect/checkpoints/clipart_test_projector/best_projector_weights.pth"
-}      
+#domainnet_domains_projector= #{#"real":'/usr/workspace/KDML/ood_detect/checkpoints/real_test_projector/best_projector_weights.pth',\
+                              #"sketch": "/usr/workspace/KDML/ood_detect/resnet50_domainnet_real/plumber/resnet50domain_{sketch}_lr_0.1_is_mlp_False/projector_weights_final.pth",\
+                             #"painting": "/usr/workspace/KDML/ood_detect/checkpoints/painting_test_projector/best_projector_weights.pth",\
+                             #"clipart": "/usr/workspace/KDML/ood_detect/checkpoints/clipart_test_projector/best_projector_weights.pth",        
+                             #"spc": "/usr/workspace/KDML/ood_detect/checkpoints/SPC_test_projector/best_projector_weights.pth"}
+# domainnet_domains_projector= {"real":'/usr/workspace/KDML/ood_detect/checkpoints/resnet50scale_1_domain_real_lr_0.1_is_mlp_False/best_projector_weights.pth',\
+#                                 "sketch": "/usr/workspace/KDML/ood_detect/checkpoints/resnet50scale_1_domain_sketch_lr_0.1_is_mlp_False/best_projector_weights.pth",\
+# }
+domainnet_domains_projector={"real":"/usr/workspace/KDML/ood_detect/checkpoints/imagenet/vit_b_16_domainnet_real_is_mlp_false.pth",\
+                            "sketch":"/usr/workspace/KDML/ood_detect/checkpoints/imagenet/vit_b_16_domainnet_sketch_is_mlp_false.pth",\
+}
 # Load class names from a text file
 with open(os.path.join(data_dir, 'class_names.txt'), 'r') as f:
     class_names = [line.strip() for line in f.readlines()]
@@ -141,52 +147,67 @@ text_encodings = torch.load(prompt_embeddings_pth)
 
 clip_model, preprocess = clip.load("ViT-B/32", device=device)
 clip_model.eval()
-
-classifier, train_transform, test_transform = build_classifier(classifier_name, num_classes, pretrained=False, checkpoint_path=checkpoint_path)
+if classifier_name=="resnet50":
+    classifier, train_transform, test_transform = build_classifier(classifier_name, num_classes, pretrained=False, checkpoint_path=checkpoint_path)
+else:
+    classifier, train_transform, test_transform = build_classifier(classifier_name, num_classes, pretrained=True, checkpoint_path=None)
 classifier= classifier.to(device)
 classifier.eval()
 
-# clip_embeddings={}
-# proj_embeddings={}
-# classifier_embeddings={}
-# clip_text_embeddings={}
-# for domain_name in domainnet_domains_projector.keys():
+clip_embeddings={}
+proj_embeddings={}
+classifier_embeddings={}
+clip_text_embeddings={}
+for domain_name in domainnet_domains_projector.keys():
 
-#     projector = ProjectionHead(input_dim=512, output_dim=512).to(device)
-#     projector.load_state_dict(torch.load(domainnet_domains_projector[domain_name])['projector'])
-#     projector.eval()
+    projector = ProjectionHead(input_dim=512, output_dim=512).to(device)
+    projector.load_state_dict(torch.load(domainnet_domains_projector[domain_name])['projector'])
+    projector.eval()
 
+    
+    if domain_name=="spc":
+        datasets_all=[]
+        for d_name in ["sketch","clipart","painting"]:
 
-#     train_dataset, val_dataset, class_names = get_dataset(dataset_name, domain_name,train_transform, test_transform, 
-#                                                                 data_dir=data_dir, clip_transform=preprocess)
+            train_dataset, val_dataset, class_names = get_dataset(dataset_name, d_name,train_transform, test_transform, 
+                                                                        data_dir=data_dir, clip_transform=preprocess)
+            datasets_all.append(val_dataset)
         
-#     train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=32, shuffle=True, num_workers=8, pin_memory=True)
-#     val_loader = torch.utils.data.DataLoader(val_dataset, batch_size=32, shuffle=False, num_workers=8, pin_memory=True)
-#     all_clip_embeddings, all_proj_embeddings, all_classifier_embeddings,all_clip_text_embeddings = get_embeddings(val_loader,classifier,clip_model,text_encodings,projector,device)
+        val_dataset=torch.utils.data.ConcatDataset(datasets_all)
+            
 
 
+    else:
+        train_dataset, val_dataset, class_names = get_dataset(dataset_name, domain_name,train_transform, test_transform, 
+                                                                        data_dir=data_dir, clip_transform=preprocess)
 
+
+    train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=32, shuffle=True, num_workers=8, pin_memory=True)
+    val_loader = torch.utils.data.DataLoader(val_dataset, batch_size=32, shuffle=True, num_workers=8, pin_memory=True)
+    all_clip_embeddings, all_proj_embeddings, all_classifier_embeddings,all_clip_text_embeddings = get_embeddings(val_loader,classifier,clip_model,text_encodings,projector,device)
+
+
+    clip_embeddings[domain_name]=all_clip_embeddings
     
-#     clip_embeddings[domain_name]=all_clip_embeddings
+    proj_embeddings[domain_name]=all_proj_embeddings
     
-#     proj_embeddings[domain_name]=all_proj_embeddings
-    
-#     classifier_embeddings[domain_name]=all_classifier_embeddings
-#     clip_text_embeddings[domain_name]=all_clip_text_embeddings
-# data={}
-# with open("clip_image_text_image_all_domain_normalized_embeddings.pkl","wb") as f:
-#     data["clip_embeddings"]=clip_embeddings
-#     data["proj_embeddings"]=proj_embeddings
-#     data["classifier_embeddings"]=classifier_embeddings
-#     data["clip_text_embeddings"]=clip_text_embeddings
-#     pickle.dump(data,f)
+    classifier_embeddings[domain_name]=all_classifier_embeddings
+    clip_text_embeddings[domain_name]=all_clip_text_embeddings
 
-with open("clip_image_text_image_all_domain_normalized_embeddings.pkl","rb") as f:
-    data=pickle.load(f)
-clip_embeddings=data["clip_embeddings"]
-proj_embeddings=data["proj_embeddings"]
-classifier_embeddings=data["classifier_embeddings"]
-clip_text_embeddings=data["clip_text_embeddings"]
+data={}
+with open("clip_image_text_image_all_domain_normalized_embeddings_weight_imagenet_domainnet.pkl","wb") as f:
+    data["clip_embeddings"]=clip_embeddings
+    data["proj_embeddings"]=proj_embeddings
+    data["classifier_embeddings"]=classifier_embeddings
+    data["clip_text_embeddings"]=clip_text_embeddings
+    pickle.dump(data,f)
+
+# with open("clip_image_text_image_all_domain_normalized_embeddings.pkl","rb") as f:
+#     data=pickle.load(f)
+# clip_embeddings=data["clip_embeddings"]
+# proj_embeddings=data["proj_embeddings"]
+# classifier_embeddings=data["classifier_embeddings"]
+# clip_text_embeddings=data["clip_text_embeddings"]
 
 text_encodings=F.normalize(text_encodings, dim=-1)
 
@@ -246,4 +267,4 @@ for domain in domainnet_domains_projector.keys():
     list_tensor =[clip_embeddings[domain],proj_embeddings[domain],text_encodings ] #[*proj_embeddings.values()]
     #labels = ['CLIP image', *list(proj_embeddings.keys()), 'CLIP Text']
     labels=  [f'CLIP {domain}', f'Proj {domain}', f'CLIP Text']
-    plot_umap_embeddings(list_tensor,labels=labels,save_filename=f'umap_embeddings_normalized_clip_proj_text_{domain}.png')
+    plot_umap_embeddings(list_tensor,labels=labels,save_filename=f'imagenet_umap_embeddings_normalized_clip_proj_text_with_{domain}.png')
