@@ -114,7 +114,7 @@ def get_entropy_confusion(val_loader,classifier,clip_model,clip_text_encodings,p
     _, predicted_CLIP = torch.max(CLIP_prob_list, 1)
 
     confusion_matrix_classifier = confusion_matrix(all_labels.cpu().numpy().ravel(), predicted_classifier.cpu().numpy().ravel())
-    confusion_matrix_proj = confusion_matrix(all_labels.cpu().numpy().ravel(), predicted_proj.cpu().numpy().ravel())
+    confusion_matrix_proj = confusion_matrix(predicted_classifier.cpu().numpy().ravel(), predicted_proj.cpu().numpy().ravel())
     confusion_matrix_CLIP = confusion_matrix(all_labels.cpu().numpy().ravel(), predicted_CLIP.cpu().numpy().ravel())
 
     return classifier_prob_list, proj_prob_list, CLIP_prob_list, all_labels, confusion_matrix_classifier, confusion_matrix_proj, confusion_matrix_CLIP
@@ -228,7 +228,7 @@ def plot_entropy(args, save_dir, classifier_entropy, proj_entropy, CLIP_entropy,
     axs[0,1].stem(range(args.num_classes), proj_entropy[args.domain_name], basefmt='b', linefmt='r-', markerfmt='ro')
     axs[0,2].stem(range(args.num_classes), CLIP_entropy[args.domain_name], basefmt='b', linefmt='r-', markerfmt='ro')
     plt.tight_layout()
-    plt.savefig(f"{save_dir}/classwise_entropy.png")
+    plt.savefig(f"{save_dir}/classwise_entropy_epo_{args.num_epochs}.png")
     plt.close()
 
     fig, axs = plt.subplots(1, 3, figsize=(12, 12))
@@ -237,7 +237,7 @@ def plot_entropy(args, save_dir, classifier_entropy, proj_entropy, CLIP_entropy,
     axs[1].hist( entropy_proj[args.domain_name] )
     axs[2].hist( entropy_CLIP[args.domain_name])
     plt.tight_layout()
-    plt.savefig(f"{save_dir}/entropy_hist.png")
+    plt.savefig(f"{save_dir}/entropy_hist_epo_{args.num_epochs}.png")
 
 def main(args):
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -256,7 +256,7 @@ def main(args):
     save_dir = get_save_dir(args)
 
     # Load the checkpoint
-    checkpoint_path = os.path.join(save_dir, 'best_projector_weights.pth')
+    checkpoint_path = os.path.join(save_dir, f'projector_weights_{args.num_epochs}.pth')
     projector.load_state_dict(torch.load(checkpoint_path)['projector'])
     print(f"Loaded checkpoint from {checkpoint_path}")
 
@@ -282,11 +282,11 @@ def main(args):
     print(f"CLIP_prob_list: {CLIP_prob_list.shape}", f"proj_prob_list: {proj_prob_list.shape}, classifier_prob_list: {classifier_prob_list.shape}")
         
     plot_confusion_matrix(confusion_matrix_classifier, class_names, 
-                          normalize=False, title='Confusion matrix for classifier', save_dir=f"{save_dir}/confusion_matrix_classifier.png")
+                          normalize=False, title='Confusion matrix for classifier', save_dir=f"{save_dir}/confusion_matrix_classifier_{args.num_epochs}.png")
     plot_confusion_matrix(confusion_matrix_proj, class_names,
-                            normalize=False, title='Confusion matrix for proj', save_dir=f"{save_dir}/confusion_matrix_proj.png")
+                            normalize=False, title='Confusion matrix for proj', save_dir=f"{save_dir}/confusion_matrix_proj_{args.num_epochs}.png")
     plot_confusion_matrix(confusion_matrix_CLIP, class_names,
-                            normalize=False, title='Confusion matrix for CLIP', save_dir=f"{save_dir}/confusion_matrix_CLIP.png")
+                            normalize=False, title='Confusion matrix for CLIP', save_dir=f"{save_dir}/confusion_matrix_CLIP_{args.num_epochs}.png")
 
     classifier_entropy={}
     proj_entropy={}
@@ -372,6 +372,9 @@ if __name__ == "__main__":
     parser.add_argument('--resume_checkpoint_path', type=str, help='Path to checkpoint to resume training from')
     parser.add_argument('--weight_img_loss', type=float, default=0.5, help='Weight for image loss')
     parser.add_argument('--weight_txt_loss', type=float, default=0.5, help='Weight for text loss')
+
+    parser.add_argument('--num_gpus', type=int, default=4, help='Number of gpus for DDP per node')
+    parser.add_argument('--num_nodes', type=int, default=1, help='Number of nodes for DDP')
 
     args = parser.parse_args()
     main(args)
