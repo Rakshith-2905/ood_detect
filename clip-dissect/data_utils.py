@@ -5,6 +5,9 @@ from torchvision import datasets, transforms, models
 from torch import nn
 from torch.nn import functional as F
 from torch.utils.data import DataLoader, ConcatDataset
+from torchvision import datasets
+import torchvision.datasets as dset
+
 import sys
 sys.path.insert(0, '../')
 from domainnet_data import DomainNetDataset, get_domainnet_loaders
@@ -12,6 +15,7 @@ from models.resnet import CustomClassifier, CustomResNet
 from models.projector import ProjectionHead
 
 from simple_classifier import SimpleCNN, CIFAR10TwoTransforms
+from train_projection_distill_cont import build_classifier
 
 import clip
 from collections import OrderedDict
@@ -21,27 +25,39 @@ torch.manual_seed(0)
 DATASET_ROOTS = {"imagenet_val": "YOUR_PATH/ImageNet_val/",
                 "broden": "data/broden1_224/images/"}
 
-
-def build_classifier(classifier_name, num_classes, pretrained=False, checkpoint_path=None):
-
-    if classifier_name in ['vit_b_16', 'swin_b']:
-        classifier = CustomClassifier(classifier_name, use_pretrained=pretrained)
-    elif classifier_name in ['resnet18', 'resnet50']:
-        classifier = CustomResNet(classifier_name, num_classes=num_classes, use_pretrained=pretrained)
-
-    if checkpoint_path:
-        classifier.load_state_dict(torch.load(checkpoint_path)['model_state_dict'])
-
-    train_transform = classifier.train_transform
-    test_transform = classifier.test_transform
-
-    return classifier, train_transform, test_transform
-
 def convert_models_to_fp32(model):
     for p in model.parameters():
         p.data = p.data.float()
         if p.grad:
             p.grad.data = p.grad.data.float()
+
+def get_dataset(data_name, train_transforms, test_transforms, clip_transform, data_dir='../data', domain_name=None):
+
+    if data_name == 'imagenet':
+        train_dataset = dset.ImageFolder(root=f'{data_dir}/imagenet_train_examples', transform=train_transforms)
+        val_dataset = dset.ImageFolder(root=f'{data_dir}/imagenet_val_examples', transform=test_transforms)
+        class_names = train_dataset.classes
+
+    elif data_name == 'domainnet':
+        train_dataset = DomainNetDataset(root_dir=data_dir, domain=domain_name, \
+                                        split='train', transform=train_transforms, transform2=clip_transform)
+        val_dataset = DomainNetDataset(root_dir=data_dir, domain=domain_name, \
+                                        split='test', transform=test_transforms, transform2=clip_transform)
+        class_names = train_dataset.class_names
+
+    elif data_name == 'cifar10':
+        train_dataset = CIFAR10TwoTransforms(root=f'{data_dir}/cifar10', train=True, transform1=train_transforms, transform2=clip_transform, selected_classes= [0,1,2])
+        val_dataset = CIFAR10TwoTransforms(root=f'{data_dir}/cifar10', train=False, transform1=test_transforms, transform2=clip_transform, selected_classes= [0,1,2])
+
+        class_names = ['airplane', 'automobile', 'bird']
+    elif data_name =="cifar10_full":
+        
+        train_dataset = CIFAR10TwoTransforms(root=f'{data_dir}/cifar10', train=True, transform1=train_transforms, transform2=clip_transform,selected_classes= None)
+        val_dataset = CIFAR10TwoTransforms(root=f'{data_dir}/cifar10', train=False, transform1=test_transforms, transform2=clip_transform,selected_classes= None)
+        class_names= train_dataset.class_names
+
+
+    return train_dataset, val_dataset, class_names
 
 @torch.no_grad()
 def get_CLIP_text_encodings(clip_model, texts, save_path=None):
@@ -56,7 +72,7 @@ def get_CLIP_text_encodings(clip_model, texts, save_path=None):
     torch.save(text_encodings,save_path )
     return text_encodings
 
-def get_target_model( target_name, device, domain=None):
+def get_target_model( target_name, device, domain=None, projector_checkpoint_path=None):
     """
     returns target model in eval mode and its preprocess function
     target_name: supported options - {resnet18_places, resnet18, resnet34, resnet50, resnet101, resnet152}
@@ -64,38 +80,11 @@ def get_target_model( target_name, device, domain=None):
                  
     To Dissect a different model implement its loading and preprocessing function here
     """
-    if target_name == 'resnet18_places': 
-        target_model = models.resnet18(num_classes=365).to(device)
-        state_dict = torch.load('data/resnet18_places365.pth.tar')['state_dict']
-        new_state_dict = {}
-        for key in state_dict:
-            if key.startswith('module.'):
-                new_state_dict[key[7:]] = state_dict[key]
-        target_model.load_state_dict(new_state_dict)
-        target_model.eval()
-        preprocess = get_resnet_imagenet_preprocess()
-    # elif "vit_b" in target_name:
-    #     target_name_cap = target_name.replace("vit_b", "ViT_B")
-    #     weights = eval("models.{}_Weights.IMAGENET1K_V1".format(target_name_cap))
-    #     preprocess = weights.transforms()
-    #     target_model = eval("models.{}(weights=weights).to(device)".format(target_name))
-    # elif "resnet" in target_name:
-    #     target_name_cap = target_name.replace("resnet", "ResNet")
-    #     weights = eval("models.{}_Weights.IMAGENET1K_V1".format(target_name_cap))
-    #     preprocess = weights.transforms()
-    #     target_model = eval("models.{}(weights=weights).to(device)".format(target_name))
-
-    elif target_name == "plumber":
+    if target_name == "plumber":
 
         clip_model, preprocess = clip.load("ViT-B/32", device=device)
         convert_models_to_fp32(clip_model)
-
-        if domain == 'spc':
-            projector_checkpoint_path = f'logs/classifier/domainnet/plumber/resnet50domain_SPC_lr_0.1_is_mlp_False/best_projector_weights.pth'
-        else:    
-            # projector_checkpoint_path = f'logs/classifier/imagenet/domainnet/plumber/vit_b_16domain_{domain}_try_lr_0.1_is_mlp_False/projector_weights_final.pth'
-            projector_checkpoint_path = f'logs/classifier/domainnet/plumber/resnet50domain_{domain}_lr_0.1_is_mlp_False/best_projector_weights.pth'
-            projector_checkpoint_path = f'logs/classifier/cifar10/plumber/SimpleCNNscale_1_epoch1_real_lr_0.1_is_mlp_False/projector_weights_30.pth'
+        
         projector = ProjectionHead(input_dim=512, output_dim=512, is_mlp=False).to(device)
         projector.load_state_dict(torch.load(projector_checkpoint_path)["projector"])
         
@@ -103,7 +92,6 @@ def get_target_model( target_name, device, domain=None):
             ('feature_extractor', clip_model.visual),
             ('projector', projector)
         ])).to(device)
-
         
     elif target_name == "CLIP_RN50":
         clip_model, _ = clip.load("RN50", device=device)
@@ -126,7 +114,7 @@ def get_resnet_imagenet_preprocess():
                    transforms.ToTensor(), transforms.Normalize(mean=target_mean, std=target_std)])
     return preprocess
 
-def get_data(dataset_name, preprocess=None, domain=None):
+def get_data(dataset_name, preprocess=None, domain=None, data_dir='./data'):
     if dataset_name == "cifar100_train":
         data = datasets.CIFAR100(root=os.path.expanduser("~/.cache"), download=True, train=True,
                                    transform=preprocess)
@@ -141,6 +129,7 @@ def get_data(dataset_name, preprocess=None, domain=None):
     elif dataset_name == "imagenet_broden":
         data = torch.utils.data.ConcatDataset([datasets.ImageFolder(DATASET_ROOTS["imagenet_val"], preprocess), 
                                                      datasets.ImageFolder(DATASET_ROOTS["broden"], preprocess)])
+    
     elif dataset_name == 'custom_domainnet':
 
         if domain == "spc":
@@ -156,10 +145,20 @@ def get_data(dataset_name, preprocess=None, domain=None):
         if len(data) > 20000:
             # Randomly subsample 20000 images from the dataset
             data = torch.utils.data.Subset(data, torch.randperm(len(data))[:20000])
+    
     elif dataset_name == 'custom_cifar10':
         data = CIFAR10TwoTransforms(root=f'./data/cifar10', train=False, transform1=preprocess)
 
         class_names = ['airplane', 'automobile', 'bird']
+    
+    elif dataset_name in ['cifar10', 'custom_imagenet', 'custom_domainnet', 'custom_cifar10']:
+    
+        # data_name = dataset_name.split('_')[1]
+
+        train_dataset, val_dataset, class_names =  get_dataset(dataset_name, train_transforms=preprocess, test_transforms=preprocess, 
+                                                               clip_transform=None,data_dir=data_dir, domain_name=domain)
+        data = val_dataset
+
     return data
 
 def get_places_id_to_broden_label():
