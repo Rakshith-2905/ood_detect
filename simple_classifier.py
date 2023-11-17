@@ -8,15 +8,18 @@ from torch.utils.data import Subset
 from sklearn.model_selection import train_test_split
 import torchvision.datasets as dset
 from torch.utils.data import Dataset
-
+import ssl
+ssl._create_default_https_context = ssl._create_unverified_context
 
 class CIFAR10TwoTransforms(Dataset):
-    def __init__(self, root, train, transform1, transform2, selected_classes=[0,1,2]):
+    def __init__(self, root, train, transform1, transform2, selected_classes=None):
         self.original_dataset = dset.CIFAR10(root=root, train=train, download=True, transform=None)
         self.transform1 = transform1
         self.transform2 = transform2
+
         self.selected_classes = selected_classes
-    
+        if self.selected_classes is None:
+            self.selected_classes = [0,1,2,3,4,5,6,7,8,9]
         # Filtering indices for selected classes
         self.filtered_indices = [i for i, (_, y) in enumerate(self.original_dataset) if y in self.selected_classes]
         self.class_names = [self.original_dataset.classes[i] for i in self.selected_classes]
@@ -38,14 +41,14 @@ class CIFAR10TwoTransforms(Dataset):
 
 # Neural Network Definition
 class SimpleCNN(nn.Module):
-    def __init__(self):
+    def __init__(self,num_classes=10):
         super(SimpleCNN, self).__init__()
         self.conv1 = nn.Conv2d(3, 32, 5)
         self.pool = nn.MaxPool2d(2, 2)
         self.conv2 = nn.Conv2d(32, 64, 5)
         self.fc1 = nn.Linear(64 * 5 * 5, 120)
         self.fc2 = nn.Linear(120, 84)
-        self.fc3 = nn.Linear(84, 3)
+        self.fc3 = nn.Linear(84, num_classes)
 
         self.train_transform = transforms.Compose([transforms.ToTensor(), transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))])
         self.test_transform = transforms.Compose([transforms.ToTensor(), transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))])
@@ -78,8 +81,8 @@ def calculate_accuracy(loader, model, device='cpu'):
 
 def train(model, trainloader, testloader, epochs=10, device='cpu'):
     criterion = nn.CrossEntropyLoss()
-    optimizer = optim.SGD(model.parameters(), lr=0.001, momentum=0.9)
-
+    #optimizer = optim.SGD(model.parameters(), lr=0.001, momentum=0.9)
+    optimizer = optim.Adam(model.parameters(), lr=1e-4)
     # Training Loop
     for epoch in range(epochs):
         running_loss = 0.0
@@ -98,13 +101,13 @@ def train(model, trainloader, testloader, epochs=10, device='cpu'):
         print(f'Epoch {epoch + 1}, Loss: {running_loss / len(trainloader)}, Train accuracy: {train_accuracy}%, Test accuracy: {test_accuracy}%')
 
         # Save Model
-        torch.save(model.state_dict(), f'cifar10_logs/model_epoch_{epoch+1}.pth')
+        torch.save(model.state_dict(), f'cifar10_full_logs/model_epoch_{epoch+1}.pth')
 
     print('Finished Training')
 
 def test(model, testloader, device='cpu'):
     # Load Model
-    model.load_state_dict(torch.load('cifar10_logs/model_epoch_10.pth'))
+    model.load_state_dict(torch.load('cifar10_full_logs/model_epoch_10.pth'))
 
     # Test Accuracy
     test_accuracy = calculate_accuracy(testloader, model, device=device)
@@ -126,9 +129,9 @@ if __name__ == '__main__':
 
     # trainset = Subset(full_trainset, train_indices)
     # testset = Subset(full_testset, test_indices)
-
-    trainset = CIFAR10TwoTransforms(root='./data', train=True, transform1=transform, transform2=None, selected_classes=[0,1,2])
-    testset = CIFAR10TwoTransforms(root='./data', train=False, transform1=transform, transform2=None, selected_classes=[0,1,2])
+    
+    trainset = CIFAR10TwoTransforms(root='./data', train=True, transform1=transform, transform2=None, selected_classes=None)
+    testset = CIFAR10TwoTransforms(root='./data', train=False, transform1=transform, transform2=None, selected_classes=None)
 
     # DataLoader
     trainloader = torch.utils.data.DataLoader(trainset, batch_size=32, shuffle=True, num_workers=2)
