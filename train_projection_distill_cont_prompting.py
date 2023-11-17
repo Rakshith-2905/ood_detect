@@ -424,11 +424,7 @@ def train_one_epoch_feat(train_loader, clip_model, classifier, projector, clip_p
         train_loader, total=len(train_loader), desc=f"Training Epoch {epoch+1}"
     )
     
-    for K in clip_prompted.ctx.parameters():
-        if K.requires_grad:
-            # norm of the parameter
-            print(K.shape, torch.norm(K).item())
-
+    
     for classifier_logits, classifier_embeddings, labels, clip_image_embeddings in pbar:
 
         classifier_logits = fabric.to_device(classifier_logits)
@@ -437,10 +433,10 @@ def train_one_epoch_feat(train_loader, clip_model, classifier, projector, clip_p
         clip_image_embeddings = fabric.to_device(clip_image_embeddings)
 
         text_encodings = clip_prompted(class_prompts)
-        fabric.print(f"text_encodings",text_encodings)
+        
         
         clip_image_embeddings = clip_image_embeddings.type_as(classifier_embeddings)
-        #optimizer.zero_grad()
+        optimizer.zero_grad()
         optimizer_ctx.zero_grad()
 
         if args.proj_clip:
@@ -454,7 +450,7 @@ def train_one_epoch_feat(train_loader, clip_model, classifier, projector, clip_p
 
         # make the text embeddings to the same data type as image embeddings
         normalized_text_encodings = normalized_text_encodings.type_as(normalized_proj_embeddings)
-        fabric.print(f"normalized_text_encodings:{normalized_text_encodings.shape}")
+        
         # T100 is the logits scale from CLIP
         logits_projection = 100*normalized_proj_embeddings @ normalized_text_encodings.t() # (batch_size, num_classes)
         # print(normalized_proj_embeddings.shape,normalized_text_encodings.shape, logits_projection.shape,classifier_logits.shape)
@@ -465,19 +461,14 @@ def train_one_epoch_feat(train_loader, clip_model, classifier, projector, clip_p
 
   
         fabric.backward(loss)
-        fabric.print("loss", loss.item())
-        for K in clip_prompted.ctx.parameters():
-            if K.requires_grad:
-                # norm of the parameter
-                print(K.shape, torch.norm(K).item())
         
-        #optimizer.step()
+        optimizer.step()
         optimizer_ctx.step()
-        fabric.print(f"after optimizer.step(): {clip_prompted.ctx.parameters()}")
+        
         
         
             
-        import pdb;pdb.set_trace()
+        
 
         probs_from_classifier = F.softmax(classifier_logits, dim=-1)
         probs_from_proj = F.softmax(logits_projection, dim=-1)
@@ -628,8 +619,6 @@ def main(args):
         projector = ProjectionHead(input_dim=classifier.feature_dim, output_dim=args.projection_dim,is_mlp=args.is_mlp)
     # initialize projector with identity mapping
     
-    projector.linear.weight=torch.nn.Parameter( torch.eye(projector.linear.weight.shape[0],projector.linear.weight.shape[1]))
-    projector.linear.bias= torch.nn.Parameter(torch.zeros(projector.linear.bias.shape[0]))
 
     if args.use_saved_features:
         # domains_interest = ['clipart', 'painting', 'sketch']
@@ -702,14 +691,14 @@ def main(args):
     
     
     # add clip_prompted to the optimizer
-    optimizer_ctx= torch.optim.AdamW(clip_prompted.ctx.parameters(), lr=args.learning_rate*10)
+    optimizer_ctx= torch.optim.SGD(clip_prompted.ctx.parameters(), lr=0.1)
     projector,optimizer = fabric.setup(projector, optimizer)
     clip_prompted,optimizer_ctx = fabric.setup(clip_prompted, optimizer_ctx)
 
     # Print the optimizer parameters names and their shae
 
     start_epoch = 0
-    state = {"projector": projector, "optimizer": optimizer, "epoch": start_epoch}
+    state = {"projector": projector, "optimizer": optimizer, "epoch": start_epoch, "clip_prompted":clip_prompted}
 
     if args.resume_checkpoint_path:
         fabric.load(args.resume_checkpoint_path, state)
