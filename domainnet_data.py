@@ -51,7 +51,7 @@ class DomainNetDataset(Dataset):
             std=[1/0.229, 1/0.224, 1/0.225]
         )
 
-def get_data_from_saved_files(save_dir, batch_size=32, train_shuffle=True, return_dataset=False):
+def get_data_from_saved_files(save_dir, batch_size=32, train_shuffle=True, return_dataset=False,dataset_name='domainnet'):
 
     train_outputs = torch.load(os.path.join(save_dir, "train_outputs.pth"))
     train_CLIP_features = torch.load(os.path.join(save_dir, "train_ViTB32_CLIP_features.pth"))
@@ -68,9 +68,11 @@ def get_data_from_saved_files(save_dir, batch_size=32, train_shuffle=True, retur
     test_dataset = TensorDataset(test_outputs, test_features, test_labels, test_CLIP_features)
 
     # load class names from data/domainnet_v1.0/class_names.txt
-
-    with open('./data/domainnet_v1.0/class_names.txt') as f:
-        class_names = [line.strip() for line in f]
+    if dataset_name=='domainnet':
+        with open('./data/domainnet_v1.0/class_names.txt') as f:
+            class_names = [line.strip() for line in f]
+    elif dataset_name=='cifar10_full':
+        class_names=['airplane', 'automobile', 'bird', 'cat', 'deer', 'dog', 'frog', 'horse', 'ship', 'truck']
 
     if return_dataset:
         return train_dataset, test_dataset, class_names
