@@ -40,6 +40,8 @@ from models.projector import ProjectionHead
 from simple_classifier import SimpleCNN, CIFAR10TwoTransforms
 from YFCC_feature_extract import ImageTextDataset
 from utils_proj import SimpleDINOLoss, compute_accuracy, compute_similarities, plot_grad_flow
+from resnet_cifar import ResNet18
+from torchvision import transforms
 
 def get_dataset(data_name, train_transforms, test_transforms, clip_transform, data_dir='../data'):
 
@@ -56,20 +58,16 @@ def get_dataset(data_name, train_transforms, test_transforms, clip_transform, da
         class_names = train_dataset.class_names
 
     elif data_name == 'cifar10':
-        # train_dataset = dset.CIFAR10(root=f'{data_dir}/cifar10', train=True, download=True, transform=train_transforms)
-        # val_dataset = dset.CIFAR10(root=f'{data_dir}/cifar10', train=False, download=True, transform=test_transforms)
-        # class_names = train_dataset.classes
-
-        # # Selecting classes 0, 1, and 2
-        # train_indices = [i for i, (_, y) in enumerate(train_dataset) if y in [0, 1, 2]]
-        # test_indices = [i for i, (_, y) in enumerate(val_dataset) if y in [0, 1, 2]]
-
-        # train_dataset = Subset(train_dataset, train_indices)
-        # val_dataset = Subset(val_dataset, test_indices)
         train_dataset = CIFAR10TwoTransforms(root=f'{data_dir}/cifar10', train=True, transform1=train_transforms, transform2=clip_transform)
         val_dataset = CIFAR10TwoTransforms(root=f'{data_dir}/cifar10', train=False, transform1=test_transforms, transform2=clip_transform)
 
         class_names = ['airplane', 'automobile', 'bird']
+    elif data_name =="cifar10_full":
+        
+        train_dataset = CIFAR10TwoTransforms(root=f'{data_dir}/cifar10', train=True, transform1=train_transforms, transform2=clip_transform,selected_classes= None)
+        val_dataset = CIFAR10TwoTransforms(root=f'{data_dir}/cifar10', train=False, transform1=test_transforms, transform2=clip_transform,selected_classes= None)
+        class_names= train_dataset.class_names
+
 
     return train_dataset, val_dataset, class_names
 
@@ -110,7 +108,8 @@ def get_dataset_from_file(data_name, data_dir='../data'):
             class_names = [line.strip() for line in f]
     elif data_name == 'domainnet':
         train_dataset, test_dataset, class_names = get_data_from_saved_files(data_dir, return_dataset=True)#TODO: check this
-
+    elif data_name == 'cifar10_full':
+        train_dataset, test_dataset, class_names = get_data_from_saved_files(data_dir, return_dataset=True,dataset_name="cifar10_full")
     return train_dataset, test_dataset, class_names
 
 def get_save_dir(args):
@@ -127,6 +126,7 @@ def get_save_dir(args):
     save_dir += f"_teT_{args.teacher_temp}_sT_{args.student_temp}"
     save_dir += f"_imgweight_{args.weight_img_loss}_txtweight_{args.weight_txt_loss}"
     save_dir += f"_is_mlp_{args.is_mlp}"
+    save_dir += f"_template_num_{args.template_num}"
     
     # save_dir += f"_{datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}"
 
@@ -343,7 +343,7 @@ def train_one_epoch_feat(train_loader, clip_model, classifier, projector, text_e
         normalized_text_encodings = normalized_text_encodings.type_as(normalized_proj_embeddings)
         # T100 is the logits scale from CLIP
         logits_projection = 100*normalized_proj_embeddings @ normalized_text_encodings.t() # (batch_size, num_classes)
-
+        # print(normalized_proj_embeddings.shape,normalized_text_encodings.shape, logits_projection.shape,classifier_logits.shape)
         loss_image = criterion(logits_projection, classifier_logits)
         loss_text = criterion(logits_projection.t(), classifier_logits.t())
         # loss = (loss_image + loss_text)/2 # TODO: optimal value of alpha
@@ -454,17 +454,33 @@ def build_classifier(classifier_name, num_classes, pretrained=False, checkpoint_
 
     if classifier_name in ['vit_b_16', 'swin_b']:
         classifier = CustomClassifier(args.classifier_name, use_pretrained=pretrained)
-    elif classifier_name in ['resnet18', 'resnet50']:
+    elif classifier_name in [ 'resnet50']:
         classifier = CustomResNet(args.classifier_name, num_classes=num_classes, use_pretrained=pretrained)
     elif classifier_name == 'SimpleCNN':
         classifier = SimpleCNN()
+    elif classifier_name == 'Resnet18_cifar_10':
+        classifier = ResNet18()
+        classifier.test_transform = transforms.Compose([
+            transforms.ToTensor(),
+            transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010)),
+        ])
+        classifier.train_transform = transforms.Compose([
+            transforms.ToTensor(),
+            transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010)),
+        ])
+
 
     if checkpoint_path:
         if classifier_name == 'SimpleCNN':
             classifier.load_state_dict(torch.load(checkpoint_path))
+        elif classifier_name == 'Resnet18_cifar_10':
+            classifier = torch.nn.DataParallel(classifier)
+
+            classifier.load_state_dict(torch.load(checkpoint_path)['model_state_dict'])
+            classifier = classifier.module
+            
         else:
             classifier.load_state_dict(torch.load(checkpoint_path)['model_state_dict'])
-
     train_transform = classifier.train_transform
     test_transform = classifier.test_transform
 
@@ -520,6 +536,7 @@ def main(args):
     # Get the text encodings for the class names
     try:
         text_encodings= torch.load(args.prompt_path)
+        text_encodings= text_encodings[args.template_num]
     except:
         text_encodings = get_CLIP_text_encodings(clip_model, class_names, args.prompt_path)
         fabric.print(f"Saved CLIP {args.clip_model_name} text encodings to {args.prompt_path}")
@@ -626,7 +643,7 @@ if __name__ == "__main__":
 
     parser.add_argument('--num_gpus', type=int, default=4, help='Number of gpus for DDP per node')
     parser.add_argument('--num_nodes', type=int, default=1, help='Number of nodes for DDP')
-
+    parser.add_argument('--template_num', type=int, default=0, help='CLIP text prompt number')
 
     args = parser.parse_args()
     device='cuda' if torch.cuda.is_available() else 'cpu'
