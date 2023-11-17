@@ -40,7 +40,7 @@ from models.projector import ProjectionHead
 from simple_classifier import SimpleCNN, CIFAR10TwoTransforms
 from YFCC_feature_extract import ImageTextDataset
 from utils_proj import SimpleDINOLoss, compute_accuracy, compute_similarities, plot_grad_flow
-from resnet_cifar import ResNet18
+from models.resnet_cifar import ResNet18
 from torchvision import transforms
 
 def get_dataset(data_name, train_transforms, test_transforms, clip_transform, data_dir='../data'):
