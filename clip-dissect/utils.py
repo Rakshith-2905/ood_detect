@@ -43,6 +43,44 @@ def get_save_names(clip_name, target_name, target_layer, d_probe, concept_set, p
     
     return target_save_name, clip_save_name, text_save_name, plumber_save_name
 
+def get_activation_from_image(image, target_model, target_layer, device="cuda", pool_mode='avg'):
+    """
+    image: A pre-transformed PIL image
+    target_model: The model from which to extract activations
+    target_layer: Layer from which to extract activations
+    device: Device to use for computation ('cuda' or 'cpu')
+    pool_mode: Pooling mode to use for feature extraction
+    """
+
+    # Function to register a hook on the target layer
+    def register_hook(all_features, pool_mode):
+        def hook(module, input, output):
+            if pool_mode == 'avg':
+                all_features.append(torch.mean(output, [2, 3]))  # Average pooling
+            elif pool_mode == 'max':
+                all_features.append(torch.max(output, [2, 3])[0])  # Max pooling
+            else:
+                all_features.append(output)  # No pooling
+        return hook
+
+    # Move image to the specified device
+    image = image.to(device)
+
+    # Initialize variables to store features
+    all_features = []
+    hook = getattr(target_model, target_layer).register_forward_hook(register_hook(all_features, pool_mode))
+
+    # Forward pass through the model
+    with torch.no_grad():
+        _ = target_model(image.unsqueeze(0))
+
+    # Remove the hook and return features
+    hook.remove()
+
+    if len(all_features) == 1:
+        return all_features[0]
+    return all_features
+
 def save_target_activations(target_model, dataset, save_name, target_layers = ["layer4"], batch_size = 1000,
                             device = "cuda", pool_mode='avg'):
     """
@@ -87,6 +125,44 @@ def save_target_activations(target_model, dataset, save_name, target_layers = ["
         else:
             torch.save(torch.cat(all_features[target_layer]), save_names[target_layer])
         hooks[target_layer].remove()
+    #free memory
+    del all_features
+    torch.cuda.empty_cache()
+    return
+
+def get_target_activations(image, text_encodings, target_model, target_layers = ["layer4"], device = "cuda", pool_mode='avg'):
+    """
+    save_name: save_file path, should include {} which will be formatted by layer names
+    """
+    
+    all_features = {target_layer:[] for target_layer in target_layers}
+    hooks = {}
+    for target_layer in target_layers:
+        if target_layer == "projector":
+            command = "target_model.projector.register_forward_hook(get_activation(all_features[target_layer], pool_mode))".format(target_layer)
+        elif target_layer == "proj":
+            pass
+        else:
+            command = "target_model.feature_extractor.{}.register_forward_hook(get_activation(all_features[target_layer], pool_mode))".format(target_layer)
+        hooks[target_layer] = eval(command)
+        print(f"Saving activations from {command}")
+    
+    with torch.no_grad():
+        clip_outputs = []
+        features = target_model(image)
+
+        normalized_features = features / features.norm(dim=-1, keepdim=True)
+        normalized_text_encodings = text_encodings / text_encodings.norm(dim=-1, keepdim=True)
+        logits = 100*(normalized_features @ normalized_text_encodings.T)
+
+        if "proj" in target_layers:
+            clip_outputs.append(features)
+    
+        hooks[target_layer].remove()
+
+    # Return the captured activations
+    return all_features[target_layers[0]], logits
+
     #free memory
     del all_features
     torch.cuda.empty_cache()
@@ -180,16 +256,21 @@ def get_clip_text_features(model, text, batch_size=1000):
     return text_features
 
 def save_activations(clip_name, target_name, target_layers, d_probe, 
-                     concept_set, batch_size, device, pool_mode, save_dir, domain=None):
+                     concept_set, batch_size, device, pool_mode, save_dir, domain=None, 
+                     projector_checkpoint_path=None, data_dir='./data'):
     
+
     clip_model, clip_preprocess = clip.load(clip_name, device=device)
-    target_model, target_preprocess = data_utils.get_target_model(target_name, device, domain=domain)
+    target_model, target_preprocess = data_utils.get_target_model(target_name, device, domain=domain, 
+                                                                  projector_checkpoint_path=projector_checkpoint_path)
+    
     #setup data
-    data_c = data_utils.get_data(d_probe, clip_preprocess, domain=domain)
-    data_t = data_utils.get_data(d_probe, target_preprocess, domain=domain)
+    data_c = data_utils.get_data(d_probe, clip_preprocess, domain=domain, data_dir=data_dir)
+    data_t = data_utils.get_data(d_probe, target_preprocess, domain=domain, data_dir=data_dir)
 
     with open(concept_set, 'r') as f: 
         words = (f.read()).split('\n')
+
     #ignore empty lines
     words = [i for i in words if i!=""]
     
@@ -205,7 +286,7 @@ def save_activations(clip_name, target_name, target_layers, d_probe,
     save_plumber_image_features(target_model, data_t, plumber_save_name, batch_size, device)
     save_target_activations(target_model, data_t, target_save_name, target_layers,
                             batch_size, device, pool_mode)
-    return
+    return target_model, target_preprocess
     
 def get_similarity_from_activations(target_save_name, clip_save_name, text_save_name, plumber_save_name, similarity_fn, 
                                    return_target_feats=True, device="cuda", target_name=None):

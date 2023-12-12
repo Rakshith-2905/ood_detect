@@ -4,9 +4,9 @@ import json
 
 # User-defined paths
 # CLASS_NAMES_PATH = '../data/domainnet_v1.0/class_names.txt'
-CLASS_NAMES_PATH = '../data/cifar-100-python/CIFAR_100_labels.json'
-TEMPLATES_PATH = 'prompt_templates.json'
-OUTPUT_EMBEDDINGS_PATH = 'CIFAR_100/CLIP_RN_50_text_embeddings.pth'
+CLASS_NAMES_PATH = "/usr/workspace/KDML/ood_detect/prompts/cifar10_classnames.json"#'../data/cifar-100-python/CIFAR_100_labels.json'
+TEMPLATES_PATH = 'prompt_templates_subsampled.json'
+OUTPUT_EMBEDDINGS_PATH = '/usr/workspace/KDML/ood_detect/data/cifar10_full/CiFAR10_CLIP_ViT-B_32_text_embeddings_ensemble.pt'
 debug = False
 
 ################# Computing text embeddings #################
@@ -27,7 +27,7 @@ ENSEMBLE_TEMPLATES = data["ENSEMBLE_TEMPLATES"]
 
 # Combine DEFAULT_TEMPLATE and ENSEMBLE_TEMPLATES for the sake of simplicity
 all_templates = [DEFAULT_TEMPLATE] + ENSEMBLE_TEMPLATES
-
+#all_templates = ENSEMBLE_TEMPLATES
 
 
 # Create combinations
@@ -35,7 +35,7 @@ combinations = [prompt.format(class_name) for class_name in class_names for prom
 
 # Load the CLIP model and compute embeddings
 device = "cuda" if torch.cuda.is_available() else "cpu"
-model, transform = clip.load("RN50", device=device)
+model, transform = clip.load("ViT-B/32", device=device)
 
 with torch.no_grad():
     all_text_features = []

@@ -108,8 +108,9 @@ class ResNet(nn.Module):
     
     
 def ResNet18(nc=3,num_classes=10):
-    return ResNet(BasicBlock, [2, 2, 2, 2],nc=nc,num_classes=num_classes)
-
+    model = ResNet(BasicBlock, [2, 2, 2, 2],nc=nc,num_classes=num_classes)
+    model.feature_dim=512
+    return model
 def ResNet34(nc=3,num_classes=10):
     return ResNet(BasicBlock, [3, 4, 6, 3],nc=nc,num_classes=num_classes)
 

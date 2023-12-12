@@ -1,5 +1,6 @@
 import os
 import sys
+import copy
 try:
     del os.environ['OMP_PLACES']
     del os.environ['OMP_PROC_BIND']
@@ -8,6 +9,7 @@ except:
 
 import time
 import torch
+import torch.nn as nn
 import torch.nn.functional as F
 
 import torchvision.transforms as trn
@@ -42,6 +44,102 @@ from YFCC_feature_extract import ImageTextDataset
 from utils_proj import SimpleDINOLoss, compute_accuracy, compute_similarities, plot_grad_flow
 from models.resnet_cifar import ResNet18
 from torchvision import transforms
+
+
+class PromptedCLIPTextEncoder(nn.Module):
+    def __init__(self, clip_model, n_ctx=16, num_classes=345, device='cpu'):
+        super().__init__()
+        
+        self.clip_model = clip_model
+        self.device = device
+
+        for param in self.clip_model.parameters():
+            param.requires_grad = False
+
+
+        dtype = self.clip_model.dtype
+        ctx_dim = self.clip_model.ln_final.weight.shape[0]
+        
+        ctx_init = " ".join(["X"] * n_ctx)
+        
+        # use given words to initialize context vectors
+        prompt = clip.tokenize(ctx_init).to(self.device)
+        with torch.no_grad():
+            embedding = self.clip_model.token_embedding(prompt).type(dtype)
+        ctx_vectors = embedding[0, 1 : 1 + n_ctx, :]
+
+        self.ctx = nn.ParameterList([nn.Parameter(torch.randn_like(ctx_vectors, dtype=dtype)) for i in range(num_classes)])
+
+        self.dtype = dtype
+        self.n_ctx = n_ctx
+
+        # No gradients for the clip model parameters
+        self.transformer = clip_model.transformer
+        self.positional_embedding = clip_model.positional_embedding
+        self.ln_final = clip_model.ln_final
+        self.text_projection = clip_model.text_projection
+        self.dtype = clip_model.dtype
+
+    def compute_prefix_sufix(self, phrases):
+        
+        prompt_dummy = " ".join(["X"] * self.n_ctx)
+
+        phrases = [phrase.replace("_", " ") for phrase in phrases]
+        prompts = [prompt_dummy + " " + name for name in phrases]
+        
+        # Tokenize the prompt with the dummy preffix added
+        self.tokenized_prompts = torch.cat([clip.tokenize(p) for p in prompts]).to(self.device)
+
+        # Embed the tokens
+        with torch.no_grad():
+            embedding = self.clip_model.token_embedding(self.tokenized_prompts).type(self.dtype)
+
+        # Split the prefix and suffix from the embeddings
+        # prefix is start of sentence[SOS]: suffix is the actual phrase with EOS
+        token_prefix = embedding[:, :1, :]  # (batch, 1, dim)
+        token_suffix = embedding[:, 1 + self.n_ctx :, :] # (batch, *, dim)
+
+        return token_prefix, token_suffix
+
+    def forward(self, phrases):
+
+        # Compute the prefix (SOS) and suffix (EOS) tokens for the phrases
+        prefix, suffix = self.compute_prefix_sufix(phrases)
+
+        prompted_phrases = []
+        for i in range(len(self.ctx)):
+            # Concatenate the prefix, context, and suffix to form the new prompt
+            prompts = torch.cat(
+                [
+                    prefix[i],  # (batch, 1, dim)
+                    self.ctx[i],     # (batch, n_ctx, ctx_dim)
+                    suffix[i],  # (batch, *, dim)
+                ],
+                dim=0,
+            )
+            prompted_phrases.append(prompts)
+        
+        # Concatenate the prompted phrases
+        prompted_phrases = torch.stack(prompted_phrases, dim=0)
+
+        # Compute the embeddings for the prompted phrases
+        text_encodings = self.encode_text(prompted_phrases, self.tokenized_prompts)
+        
+        return text_encodings
+
+    def encode_text(self, prompts, tokenized_prompts):
+
+        x = prompts + self.positional_embedding.type(self.dtype)
+        x = x.permute(1, 0, 2)  # NLD -> LND
+        x = self.transformer(x)
+        x = x.permute(1, 0, 2)  # LND -> NLD
+        x = self.ln_final(x).type(self.dtype)
+
+        # x.shape = [batch_size, n_ctx, transformer.width]
+        # take features from the eot embedding (eot_token is the highest number in each sequence)
+        x = x[torch.arange(x.shape[0]), tokenized_prompts.argmax(dim=-1)] @ self.text_projection
+
+        return x
 
 def get_dataset(data_name, train_transforms, test_transforms, clip_transform, data_dir='../data'):
 
@@ -158,7 +256,7 @@ def progbar_wrapper(iterable, total, **kwargs):
         return tqdm(iterable, total=total, **kwargs)
     return iterable
     
-def train_one_epoch(train_loader, clip_model, classifier, projector, text_encodings, criterion, optimizer, epoch):
+def train_one_epoch(train_loader, clip_model, classifier, projector, clip_prompted, class_prompts, criterion, optimizer, epoch):
     clip_model.eval()
     classifier.eval()
     projector.train()
@@ -172,13 +270,16 @@ def train_one_epoch(train_loader, clip_model, classifier, projector, text_encodi
     pbar = progbar_wrapper(
         train_loader, total=len(train_loader), desc=f"Training Epoch {epoch+1}"
     )
+    
     for images_batch, labels, images_clip_batch in pbar:
 
         images_batch = fabric.to_device(images_batch)
         images_clip_batch = fabric.to_device(images_clip_batch)
         labels = fabric.to_device(labels)
 
-        optimizer.zero_grad()
+        #optimizer.zero_grad()
+
+        text_encodings = clip_prompted(class_prompts)
         
         classifier_logits, classifier_embeddings = classifier(images_batch, return_features=True) # (batch_size, embedding_dim)
 
@@ -205,7 +306,7 @@ def train_one_epoch(train_loader, clip_model, classifier, projector, text_encodi
         
         fabric.backward(loss)
 
-        optimizer.step()
+        #optimizer.step()
 
         probs_from_classifier = F.softmax(classifier_logits, dim=-1)
         probs_from_proj = F.softmax(logits_projection, dim=-1)
@@ -234,7 +335,7 @@ def train_one_epoch(train_loader, clip_model, classifier, projector, text_encodi
     return total_loss, total_base_model_acc, total_clip_acc, total_image_loss, total_text_loss
 
 @torch.no_grad()
-def validate(val_loader, clip_model, classifier, projector, text_encodings, criterion, epoch):
+def validate(val_loader, clip_model, classifier, projector, clip_prompted, class_prompts, criterion, epoch):
     
     clip_model.eval()
     classifier.eval()
@@ -257,6 +358,8 @@ def validate(val_loader, clip_model, classifier, projector, text_encodings, crit
         images_clip_batch = fabric.to_device(images_clip_batch)
         labels = fabric.to_device(labels)
         
+        text_encodings = clip_prompted(class_prompts)
+
         classifier_logits, classifier_embeddings = classifier(images_batch, return_features=True) # (batch_size, embedding_dim)
 
         clip_image_embeddings = clip_model.encode_image(images_clip_batch) # (batch_size, embedding_dim)
@@ -306,7 +409,7 @@ def validate(val_loader, clip_model, classifier, projector, text_encodings, crit
 
     return total_loss, total_base_model_acc, total_clip_acc, total_image_loss, total_text_loss
 
-def train_one_epoch_feat(train_loader, clip_model, classifier, projector, text_encodings, criterion, optimizer, epoch):
+def train_one_epoch_feat(train_loader, clip_model, classifier, projector, clip_prompted, class_prompts, criterion, optimizer, optimizer_ctx,epoch):
     clip_model.eval()
     classifier.eval()
     projector.train()
@@ -320,6 +423,8 @@ def train_one_epoch_feat(train_loader, clip_model, classifier, projector, text_e
     pbar = progbar_wrapper(
         train_loader, total=len(train_loader), desc=f"Training Epoch {epoch+1}"
     )
+    
+    
     for classifier_logits, classifier_embeddings, labels, clip_image_embeddings in pbar:
 
         classifier_logits = fabric.to_device(classifier_logits)
@@ -327,8 +432,12 @@ def train_one_epoch_feat(train_loader, clip_model, classifier, projector, text_e
         labels = fabric.to_device(labels)
         clip_image_embeddings = fabric.to_device(clip_image_embeddings)
 
+        text_encodings = clip_prompted(class_prompts)
+        
+        
         clip_image_embeddings = clip_image_embeddings.type_as(classifier_embeddings)
-        optimizer.zero_grad()
+        #optimizer.zero_grad()
+        optimizer_ctx.zero_grad()
 
         if args.proj_clip:
             # Project the CLIP embeddings
@@ -341,6 +450,7 @@ def train_one_epoch_feat(train_loader, clip_model, classifier, projector, text_e
 
         # make the text embeddings to the same data type as image embeddings
         normalized_text_encodings = normalized_text_encodings.type_as(normalized_proj_embeddings)
+        
         # T100 is the logits scale from CLIP
         logits_projection = 100*normalized_proj_embeddings @ normalized_text_encodings.t() # (batch_size, num_classes)
         # print(normalized_proj_embeddings.shape,normalized_text_encodings.shape, logits_projection.shape,classifier_logits.shape)
@@ -349,10 +459,16 @@ def train_one_epoch_feat(train_loader, clip_model, classifier, projector, text_e
         # loss = (loss_image + loss_text)/2 # TODO: optimal value of alpha
         loss = loss_image*args.weight_img_loss + loss_text*args.weight_txt_loss
 
-        
+  
         fabric.backward(loss)
-
-        optimizer.step()
+        
+        #optimizer.step()
+        optimizer_ctx.step()
+        
+        
+        
+            
+        
 
         probs_from_classifier = F.softmax(classifier_logits, dim=-1)
         probs_from_proj = F.softmax(logits_projection, dim=-1)
@@ -381,7 +497,7 @@ def train_one_epoch_feat(train_loader, clip_model, classifier, projector, text_e
     return total_loss, total_base_model_acc, total_clip_acc, total_image_loss, total_text_loss
     
 @torch.no_grad()
-def validate_feat(val_loader, clip_model, classifier, projector, text_encodings, criterion, epoch):
+def validate_feat(val_loader, clip_model, classifier, projector, clip_prompted, class_prompts, criterion, epoch):
     
     clip_model.eval()
     classifier.eval()
@@ -410,6 +526,9 @@ def validate_feat(val_loader, clip_model, classifier, projector, text_encodings,
             proj_embeddings = projector(clip_image_embeddings) # (batch_size, projection_dim) 
         else:
             proj_embeddings = projector(classifier_embeddings)
+
+        text_encodings = clip_prompted(class_prompts)
+
 
         normalized_proj_embeddings = F.normalize(proj_embeddings, dim=-1)
         normalized_text_encodings = F.normalize(text_encodings, dim=-1)# (num_classes, projection_dim)
@@ -498,7 +617,9 @@ def main(args):
         projector = ProjectionHead(input_dim=args.projection_dim, output_dim=args.projection_dim,is_mlp=args.is_mlp)
     else:
         projector = ProjectionHead(input_dim=classifier.feature_dim, output_dim=args.projection_dim,is_mlp=args.is_mlp)
+    # initialize projector with identity mapping
     
+
     if args.use_saved_features:
         # domains_interest = ['clipart', 'painting', 'sketch']
 
@@ -541,6 +662,12 @@ def main(args):
         text_encodings = get_CLIP_text_encodings(clip_model, class_names, args.prompt_path)
         fabric.print(f"Saved CLIP {args.clip_model_name} text encodings to {args.prompt_path}")
 
+    clip_prompted = PromptedCLIPTextEncoder(clip_model, n_ctx=16, num_classes=len(class_names), device=fabric.device)
+    clip_prompted = fabric.to_device(clip_prompted)
+
+    
+    class_prompts = [f"This is a photo of a {class_name}" for class_name in class_names]
+
     # Create the optimizer and scheduler
     if args.optimizer == 'adam':
         optimizer = torch.optim.Adam(projector.parameters(), lr=args.learning_rate)
@@ -560,10 +687,20 @@ def main(args):
 
     # Wrap the feature extractor and optimizer with Fabric
    
-    projector, optimizer = fabric.setup(projector, optimizer)
+    projector.linear.weight = torch.nn.Parameter(torch.eye(projector.linear.weight.shape[0],projector.linear.weight.shape[1]))
+    projector.linear.bias = torch.nn.Parameter(torch.zeros(projector.linear.bias.shape[0]))
+
     
+    
+    # add clip_prompted to the optimizer
+    optimizer_ctx= torch.optim.SGD([p for p in clip_prompted.parameters() if p.requires_grad], lr=0.1)
+    projector,optimizer = fabric.setup(projector, optimizer)
+    clip_prompted,optimizer_ctx = fabric.setup(clip_prompted, optimizer_ctx)
+
+    # Print the optimizer parameters names and their shae
+
     start_epoch = 0
-    state = {"projector": projector, "optimizer": optimizer, "epoch": start_epoch}
+    state = {"projector": projector, "optimizer": optimizer, "epoch": start_epoch, "clip_prompted":clip_prompted}
 
     if args.resume_checkpoint_path:
         fabric.load(args.resume_checkpoint_path, state)
@@ -576,13 +713,13 @@ def main(args):
     best_val_loss = float("inf")
     for epoch in range(start_epoch, args.num_epochs):
         if args.use_saved_features:
-            train_loss,  train_base_acc, train_clip_acc, train_loss_img, train_loss_txt = train_one_epoch_feat(train_loader, clip_model, classifier, projector, text_encodings, criterion, optimizer, epoch)
+            train_loss,  train_base_acc, train_clip_acc, train_loss_img, train_loss_txt = train_one_epoch_feat(train_loader, clip_model, classifier, projector, clip_prompted, class_prompts, criterion, optimizer,optimizer_ctx, epoch)
             if epoch % args.val_freq == 0:
-                val_loss, val_base_acc, val_clip_acc, val_loss_img, val_loss_txt = validate_feat(val_loader, clip_model, classifier, projector, text_encodings, criterion, epoch)
+                val_loss, val_base_acc, val_clip_acc, val_loss_img, val_loss_txt = validate_feat(val_loader, clip_model, classifier, projector, clip_prompted, class_prompts, criterion, epoch)
         else:    
-            train_loss,  train_base_acc, train_clip_acc, train_loss_img, train_loss_txt = train_one_epoch(train_loader, clip_model, classifier, projector, text_encodings, criterion, optimizer, epoch)
+            train_loss,  train_base_acc, train_clip_acc, train_loss_img, train_loss_txt = train_one_epoch(train_loader, clip_model, classifier, projector, clip_prompted, class_prompts, criterion, optimizer,optimizer_ctx, epoch)
             if epoch % args.val_freq == 0:
-                val_loss, val_base_acc, val_clip_acc, val_loss_img, val_loss_txt = validate(val_loader, clip_model, classifier, projector, text_encodings, criterion, epoch)
+                val_loss, val_base_acc, val_clip_acc, val_loss_img, val_loss_txt = validate(val_loader, clip_model, classifier, projector, clip_prompted, class_prompts, criterion, epoch)
         scheduler.step()
         
         fabric.print(f"Epoch {epoch}/{args.num_epochs}| Train Loss: {train_loss:.4f}, Train Base Model Accuracy: {train_base_acc:.4f}, Train CLIP Accuracy: {train_clip_acc:.4f}, Val Loss: {val_loss:.4f}, Val Base Model Accuracy: {val_base_acc:.4f}, Val CLIP Accuracy: {val_clip_acc:.4f}")

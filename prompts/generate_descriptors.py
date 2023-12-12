@@ -5,7 +5,7 @@ import json
 from tqdm import tqdm
 
 # Initialize the OpenAI API with your secret key
-openai.api_key = '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'
+openai.api_key = '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'
 
 def get_descriptors_for_category(category_name):
     # prompt = f"Q: List out the visual features that can describe a {category_name}. Think about its appearance, structure, and surrounding environmental elements."\
@@ -26,12 +26,25 @@ def get_descriptors_for_category(category_name):
     features = [line.strip('- ').strip() for line in response.choices[0].text.split('\n') if line.startswith('-')]
     return features
 
-def save_descriptors_to_file(data, filename="descriptors_2.json"):
+def save_descriptors_to_file(data, filename="descriptors_cifar10.json"):
     with open(filename, 'w') as f:
         json.dump(data, f, indent=4)  # The indent parameter makes the JSON easy to read
 
 if __name__ == "__main__":
-    categories = [os.path.basename(path) for path in glob.glob('data/domainnet_v1.0/real/*')]
+    # categories = [os.path.basename(path) for path in glob.glob('data/domainnet_v1.0/real/*')]
+
+    categories = [
+                "Airplane",
+                "Automobile",
+                "Bird",
+                "Cat",
+                "Deer",
+                "Dog",
+                "Frog",
+                "Horse",
+                "Ship",
+                "Truck"
+                ]
     categories = sorted(categories, key=lambda x: x.lower())    
     num_iterations = 10  # Number of unique descriptor sets per category
     all_descriptors = {}

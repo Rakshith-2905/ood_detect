@@ -32,8 +32,7 @@ from models.projector import ProjectionHead
 from simple_classifier import SimpleCNN, CIFAR10TwoTransforms
 from YFCC_feature_extract import ImageTextDataset
 from utils_proj import SimpleDINOLoss, compute_accuracy, compute_similarities, plot_grad_flow
-from train_projection_distill_cont import build_classifier
-
+from train_projection_distill_cont import build_classifier, get_dataset
 
 def class_level_entropies(entropy_, label_list, num_classes):
     class_entropies = {}
@@ -154,37 +153,6 @@ def plot_confusion_matrix(cm, classes, normalize=False, title='Confusion matrix'
         plt.savefig(save_dir)
     plt.close()
 
-def get_dataset(data_name, train_transforms, test_transforms, clip_transform, data_dir='../data'):
-
-    if data_name == 'imagenet':
-        train_dataset = dset.ImageFolder(root=f'{data_dir}/imagenet_train_examples', transform=train_transforms)
-        val_dataset = dset.ImageFolder(root=f'{data_dir}/imagenet_val_examples', transform=test_transforms)
-        class_names = train_dataset.classes
-
-    elif data_name == 'domainnet':
-        train_dataset = DomainNetDataset(root_dir=data_dir, domain=args.domain_name, \
-                                        split='train', transform=train_transforms, transform2=clip_transform)
-        val_dataset = DomainNetDataset(root_dir=data_dir, domain=args.domain_name, \
-                                        split='test', transform=test_transforms, transform2=clip_transform)
-        class_names = train_dataset.class_names
-
-    elif data_name == 'cifar10':
-        # train_dataset = dset.CIFAR10(root=f'{data_dir}/cifar10', train=True, download=True, transform=train_transforms)
-        # val_dataset = dset.CIFAR10(root=f'{data_dir}/cifar10', train=False, download=True, transform=test_transforms)
-        # class_names = train_dataset.classes
-
-        # # Selecting classes 0, 1, and 2
-        # train_indices = [i for i, (_, y) in enumerate(train_dataset) if y in [0, 1, 2]]
-        # test_indices = [i for i, (_, y) in enumerate(val_dataset) if y in [0, 1, 2]]
-
-        # train_dataset = Subset(train_dataset, train_indices)
-        # val_dataset = Subset(val_dataset, test_indices)
-        train_dataset = CIFAR10TwoTransforms(root=f'{data_dir}/cifar10', train=True, transform1=train_transforms, transform2=clip_transform)
-        val_dataset = CIFAR10TwoTransforms(root=f'{data_dir}/cifar10', train=False, transform1=test_transforms, transform2=clip_transform)
-
-        class_names = ['airplane', 'automobile', 'bird']
-
-    return train_dataset, val_dataset, class_names
 
 def get_save_dir(args):
     
@@ -200,6 +168,7 @@ def get_save_dir(args):
     save_dir += f"_teT_{args.teacher_temp}_sT_{args.student_temp}"
     save_dir += f"_imgweight_{args.weight_img_loss}_txtweight_{args.weight_txt_loss}"
     save_dir += f"_is_mlp_{args.is_mlp}"
+    save_dir += f"_template_num_{args.template_num}"
     
     # save_dir += f"_{datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}"
 
@@ -273,9 +242,12 @@ def main(args):
     # train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=128, shuffle=True, num_workers=8, pin_memory=True)
     val_loader = torch.utils.data.DataLoader(val_dataset, batch_size=128, shuffle=False, num_workers=8, pin_memory=True)
 
-
-    text_encodings = get_CLIP_text_encodings(clip_model, class_names, args.prompt_path, device=device)
-    print(f"Saved CLIP {args.clip_model_name} text encodings to {args.prompt_path}")
+    try:
+        text_encodings= torch.load(args.prompt_path)
+        text_encodings= text_encodings[args.template_num]
+    except:
+        text_encodings = get_CLIP_text_encodings(clip_model, class_names, args.prompt_path, device=device)
+        print(f"Saved CLIP {args.clip_model_name} text encodings to {args.prompt_path}")
 
     classifier_prob_list, proj_prob_list, CLIP_prob_list, label_list, confusion_matrix_classifier, confusion_matrix_proj, confusion_matrix_CLIP =  get_entropy_confusion(val_loader, classifier, clip_model, text_encodings, projector,
                                                                                    args.proj_clip, args.teacher_temp, device)
@@ -372,9 +344,11 @@ if __name__ == "__main__":
     parser.add_argument('--resume_checkpoint_path', type=str, help='Path to checkpoint to resume training from')
     parser.add_argument('--weight_img_loss', type=float, default=0.5, help='Weight for image loss')
     parser.add_argument('--weight_txt_loss', type=float, default=0.5, help='Weight for text loss')
+    parser.add_argument('--template_num', type=int, default=0, help='CLIP text prompt number')
 
     parser.add_argument('--num_gpus', type=int, default=4, help='Number of gpus for DDP per node')
     parser.add_argument('--num_nodes', type=int, default=1, help='Number of nodes for DDP')
+
 
     args = parser.parse_args()
     main(args)

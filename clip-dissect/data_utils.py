@@ -130,31 +130,30 @@ def get_data(dataset_name, preprocess=None, domain=None, data_dir='./data'):
         data = torch.utils.data.ConcatDataset([datasets.ImageFolder(DATASET_ROOTS["imagenet_val"], preprocess), 
                                                      datasets.ImageFolder(DATASET_ROOTS["broden"], preprocess)])
     
-    elif dataset_name == 'custom_domainnet':
+    # elif dataset_name == 'domainnet':
 
-        if domain == "spc":
-            domains_interest = ['clipart', 'painting', 'sketch']
-            combined_data = []
-            for domain in domains_interest:
-                data = DomainNetDataset(root_dir='data/domainnet_v1.0', domain=domain, split='test', transform=preprocess)
-                combined_data.append(data)
-            data = ConcatDataset(combined_data)
-        else:
-            data = DomainNetDataset(root_dir='data/domainnet_v1.0', domain=domain, split='probe', transform=preprocess)
+    #     if domain == "spc":
+    #         domains_interest = ['clipart', 'painting', 'sketch']
+    #         combined_data = []
+    #         for domain in domains_interest:
+    #             data = DomainNetDataset(root_dir=data_dir, domain=domain, split='test', transform=preprocess)
+    #             combined_data.append(data)
+    #         data = ConcatDataset(combined_data)
+    #     else:
+    #         data = DomainNetDataset(root_dir=data_dir, domain=domain, split='test', transform=preprocess)
 
-        if len(data) > 20000:
-            # Randomly subsample 20000 images from the dataset
-            data = torch.utils.data.Subset(data, torch.randperm(len(data))[:20000])
+    #     if len(data) > 20000:
+    #         # Randomly subsample 20000 images from the dataset
+    #         data = torch.utils.data.Subset(data, torch.randperm(len(data))[:20000])
     
     elif dataset_name == 'custom_cifar10':
         data = CIFAR10TwoTransforms(root=f'./data/cifar10', train=False, transform1=preprocess)
 
         class_names = ['airplane', 'automobile', 'bird']
     
-    elif dataset_name in ['cifar10', 'custom_imagenet', 'custom_domainnet', 'custom_cifar10']:
+    elif dataset_name in ['cifar10', 'custom_imagenet', 'domainnet', 'custom_cifar10']:
     
         # data_name = dataset_name.split('_')[1]
-
         train_dataset, val_dataset, class_names =  get_dataset(dataset_name, train_transforms=preprocess, test_transforms=preprocess, 
                                                                clip_transform=None,data_dir=data_dir, domain_name=domain)
         data = val_dataset

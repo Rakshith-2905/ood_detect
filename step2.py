@@ -1,5 +1,6 @@
 import os
 import sys
+import copy
 try:
     del os.environ['OMP_PLACES']
     del os.environ['OMP_PROC_BIND']
@@ -8,6 +9,7 @@ except:
 
 import time
 import torch
+import torch.nn as nn
 import torch.nn.functional as F
 
 import torchvision.transforms as trn
@@ -43,6 +45,125 @@ from utils_proj import SimpleDINOLoss, compute_accuracy, compute_similarities, p
 from models.resnet_cifar import ResNet18
 from torchvision import transforms
 
+
+class PromptedCLIPTextEncoder(nn.Module):
+    def __init__(self, clip_model, n_ctx=16, num_classes=345, device='cpu'):
+        super().__init__()
+        
+        self.clip_model = clip_model
+        self.device = device
+
+        for param in self.clip_model.parameters():
+            param.requires_grad = False
+
+
+        dtype = self.clip_model.dtype
+        ctx_dim = self.clip_model.ln_final.weight.shape[0]
+        
+        ctx_init = " ".join(["X"] * n_ctx)
+        
+        # use given words to initialize context vectors
+        prompt = clip.tokenize(ctx_init).to(self.device)
+        with torch.no_grad():
+            embedding = self.clip_model.token_embedding(prompt).type(dtype)
+        ctx_vectors = embedding[0, 1 : 1 + n_ctx, :]
+
+        self.ctx = nn.ParameterList([nn.Parameter(torch.randn_like(ctx_vectors, dtype=dtype)) for i in range(num_classes)])
+
+        self.dtype = dtype
+        self.n_ctx = n_ctx
+
+        # No gradients for the clip model parameters
+        self.transformer = clip_model.transformer
+        self.positional_embedding = clip_model.positional_embedding
+        self.ln_final = clip_model.ln_final
+        self.text_projection = clip_model.text_projection
+        self.dtype = clip_model.dtype
+
+    def compute_prefix_sufix(self, phrases):
+        
+        prompt_dummy = " ".join(["X"] * self.n_ctx)
+
+        phrases = [phrase.replace("_", " ") for phrase in phrases]
+        prompts = [prompt_dummy + " " + name for name in phrases]
+        
+        # Tokenize the prompt with the dummy preffix added
+        self.tokenized_prompts = torch.cat([clip.tokenize(p) for p in prompts]).to(self.device)
+
+        # Embed the tokens
+        with torch.no_grad():
+            embedding = self.clip_model.token_embedding(self.tokenized_prompts).type(self.dtype)
+
+        # Split the prefix and suffix from the embeddings
+        # prefix is start of sentence[SOS]: suffix is the actual phrase with EOS
+        token_prefix = embedding[:, :1, :]  # (batch, 1, dim)
+        token_suffix = embedding[:, 1 + self.n_ctx :, :] # (batch, *, dim)
+
+        return token_prefix, token_suffix
+
+    def forward(self, phrases):
+
+        # Compute the prefix (SOS) and suffix (EOS) tokens for the phrases
+        prefix, suffix = self.compute_prefix_sufix(phrases)
+
+        prompted_phrases = []
+        for i in range(len(self.ctx)):
+            # Concatenate the prefix, context, and suffix to form the new prompt
+            prompts = torch.cat(
+                [
+                    prefix[i],  # (batch, 1, dim)
+                    self.ctx[i],     # (batch, n_ctx, ctx_dim)
+                    suffix[i],  # (batch, *, dim)
+                ],
+                dim=0,
+            )
+            prompted_phrases.append(prompts)
+        
+        # Concatenate the prompted phrases
+        prompted_phrases = torch.stack(prompted_phrases, dim=0)
+
+        # Compute the embeddings for the prompted phrases
+        text_encodings = self.encode_text(prompted_phrases, self.tokenized_prompts)
+        
+        return text_encodings
+
+    def encode_text(self, prompts, tokenized_prompts):
+
+        x = prompts + self.positional_embedding.type(self.dtype)
+        x = x.permute(1, 0, 2)  # NLD -> LND
+        x = self.transformer(x)
+        x = x.permute(1, 0, 2)  # LND -> NLD
+        x = self.ln_final(x).type(self.dtype)
+
+        # x.shape = [batch_size, n_ctx, transformer.width]
+        # take features from the eot embedding (eot_token is the highest number in each sequence)
+        x = x[torch.arange(x.shape[0]), tokenized_prompts.argmax(dim=-1)] @ self.text_projection
+
+        return x
+
+class CIFAR10C(torch.utils.data.Dataset):
+    def __init__(self, corruption='gaussian_blur', transform=None,clip_transform=None,level=0):
+        numpy_path = f'/usr/workspace/KDML/CIFAR-10-c/CIFAR-10-C/{corruption}.npy'
+        t = 10000
+        self.transform = transform
+        self.clip_transform = clip_transform
+        self.data_ = np.load(numpy_path)[level*10000:(level+1)*10000,:,:,:]
+        self.data = self.data_[:t,:,:,:]
+        self.targets_ = np.load('/usr/workspace/KDML/CIFAR-10-c/CIFAR-10-C/labels.npy')
+        self.targets = self.targets_[:t]
+        self.np_PIL = trn.Compose([trn.ToPILImage()])
+
+    def __len__(self):
+        return self.data.shape[0]
+
+    def __getitem__(self, idx):
+        image_ = self.data[idx,:,:,:]
+        if self.transform:
+            image = self.transform(image_)
+            image_to_clip = self.clip_transform(self.np_PIL(image_))
+        targets = self.targets[idx]
+        return image, targets, image_to_clip
+
 def get_dataset(data_name, train_transforms, test_transforms, clip_transform, data_dir='../data'):
 
     if data_name == 'imagenet':
@@ -68,7 +189,14 @@ def get_dataset(data_name, train_transforms, test_transforms, clip_transform, da
         val_dataset = CIFAR10TwoTransforms(root=f'{data_dir}/cifar10', train=False, transform1=test_transforms, transform2=clip_transform,selected_classes= None)
         class_names= train_dataset.class_names
 
+    elif data_name == 'cifar10-c':
+        not_needed = CIFAR10TwoTransforms(root=f'{data_dir}/cifar10', train=False, transform1=test_transforms, transform2=clip_transform,selected_classes= None)
+        class_names= not_needed.class_names
 
+        train_dataset = CIFAR10C(corruption='gaussian_blur', transform=test_transforms,clip_transform=clip_transform,level=3)
+        val_dataset = train_dataset
+    else:
+        raise ValueError(f"Invalid dataset name: {data_name}")
     return train_dataset, val_dataset, class_names
 
 def read_from_pkl(file_path):
@@ -110,6 +238,10 @@ def get_dataset_from_file(data_name, data_dir='../data'):
         train_dataset, test_dataset, class_names = get_data_from_saved_files(data_dir, return_dataset=True)#TODO: check this
     elif data_name == 'cifar10_full':
         train_dataset, test_dataset, class_names = get_data_from_saved_files(data_dir, return_dataset=True,dataset_name="cifar10_full")
+    
+    elif data_name == 'cifar10-c':
+        train_dataset, test_dataset, class_names = get_data_from_saved_files(data_dir, return_dataset=True,dataset_name="cifar10-c")
+    
     return train_dataset, test_dataset, class_names
 
 def get_save_dir(args):
@@ -172,6 +304,7 @@ def train_one_epoch(train_loader, clip_model, classifier, projector, text_encodi
     pbar = progbar_wrapper(
         train_loader, total=len(train_loader), desc=f"Training Epoch {epoch+1}"
     )
+    
     for images_batch, labels, images_clip_batch in pbar:
 
         images_batch = fabric.to_device(images_batch)
@@ -179,7 +312,7 @@ def train_one_epoch(train_loader, clip_model, classifier, projector, text_encodi
         labels = fabric.to_device(labels)
 
         optimizer.zero_grad()
-        
+
         classifier_logits, classifier_embeddings = classifier(images_batch, return_features=True) # (batch_size, embedding_dim)
 
         clip_image_embeddings = clip_model.encode_image(images_clip_batch) # (batch_size, embedding_dim)
@@ -256,7 +389,7 @@ def validate(val_loader, clip_model, classifier, projector, text_encodings, crit
         images_batch = fabric.to_device(images_batch)
         images_clip_batch = fabric.to_device(images_clip_batch)
         labels = fabric.to_device(labels)
-        
+
         classifier_logits, classifier_embeddings = classifier(images_batch, return_features=True) # (batch_size, embedding_dim)
 
         clip_image_embeddings = clip_model.encode_image(images_clip_batch) # (batch_size, embedding_dim)
@@ -306,7 +439,7 @@ def validate(val_loader, clip_model, classifier, projector, text_encodings, crit
 
     return total_loss, total_base_model_acc, total_clip_acc, total_image_loss, total_text_loss
 
-def train_one_epoch_feat(train_loader, clip_model, classifier, projector, text_encodings, criterion, optimizer, epoch):
+def train_one_epoch_feat(train_loader, clip_model, classifier, projector, text_encodings, criterion, optimizer,epoch):
     clip_model.eval()
     classifier.eval()
     projector.train()
@@ -320,13 +453,16 @@ def train_one_epoch_feat(train_loader, clip_model, classifier, projector, text_e
     pbar = progbar_wrapper(
         train_loader, total=len(train_loader), desc=f"Training Epoch {epoch+1}"
     )
+    
+    
     for classifier_logits, classifier_embeddings, labels, clip_image_embeddings in pbar:
 
         classifier_logits = fabric.to_device(classifier_logits)
         classifier_embeddings = fabric.to_device(classifier_embeddings)
         labels = fabric.to_device(labels)
         clip_image_embeddings = fabric.to_device(clip_image_embeddings)
-
+        
+        
         clip_image_embeddings = clip_image_embeddings.type_as(classifier_embeddings)
         optimizer.zero_grad()
 
@@ -341,6 +477,7 @@ def train_one_epoch_feat(train_loader, clip_model, classifier, projector, text_e
 
         # make the text embeddings to the same data type as image embeddings
         normalized_text_encodings = normalized_text_encodings.type_as(normalized_proj_embeddings)
+        
         # T100 is the logits scale from CLIP
         logits_projection = 100*normalized_proj_embeddings @ normalized_text_encodings.t() # (batch_size, num_classes)
         # print(normalized_proj_embeddings.shape,normalized_text_encodings.shape, logits_projection.shape,classifier_logits.shape)
@@ -349,9 +486,9 @@ def train_one_epoch_feat(train_loader, clip_model, classifier, projector, text_e
         # loss = (loss_image + loss_text)/2 # TODO: optimal value of alpha
         loss = loss_image*args.weight_img_loss + loss_text*args.weight_txt_loss
 
-        
+  
         fabric.backward(loss)
-
+        
         optimizer.step()
 
         probs_from_classifier = F.softmax(classifier_logits, dim=-1)
@@ -381,7 +518,7 @@ def train_one_epoch_feat(train_loader, clip_model, classifier, projector, text_e
     return total_loss, total_base_model_acc, total_clip_acc, total_image_loss, total_text_loss
     
 @torch.no_grad()
-def validate_feat(val_loader, clip_model, classifier, projector, text_encodings, criterion, epoch):
+def validate_feat(val_loader, clip_model, classifier, projector,text_encodings, criterion, epoch):
     
     clip_model.eval()
     classifier.eval()
@@ -410,6 +547,7 @@ def validate_feat(val_loader, clip_model, classifier, projector, text_encodings,
             proj_embeddings = projector(clip_image_embeddings) # (batch_size, projection_dim) 
         else:
             proj_embeddings = projector(classifier_embeddings)
+
 
         normalized_proj_embeddings = F.normalize(proj_embeddings, dim=-1)
         normalized_text_encodings = F.normalize(text_encodings, dim=-1)# (num_classes, projection_dim)
@@ -498,7 +636,9 @@ def main(args):
         projector = ProjectionHead(input_dim=args.projection_dim, output_dim=args.projection_dim,is_mlp=args.is_mlp)
     else:
         projector = ProjectionHead(input_dim=classifier.feature_dim, output_dim=args.projection_dim,is_mlp=args.is_mlp)
+    # initialize projector with identity mapping
     
+
     if args.use_saved_features:
         # domains_interest = ['clipart', 'painting', 'sketch']
 
@@ -534,12 +674,12 @@ def main(args):
     fabric.print(f"Number of training examples: {len(train_loader.dataset)}")
     fabric.print(f"Number of validation examples: {len(val_loader.dataset)}")
     # Get the text encodings for the class names
-    try:
-        text_encodings= torch.load(args.prompt_path)
-        text_encodings= text_encodings[args.template_num]
-    except:
-        text_encodings = get_CLIP_text_encodings(clip_model, class_names, args.prompt_path)
-        fabric.print(f"Saved CLIP {args.clip_model_name} text encodings to {args.prompt_path}")
+   
+
+    clip_prompted = PromptedCLIPTextEncoder(clip_model, n_ctx=16, num_classes=len(class_names), device=fabric.device)
+    clip_prompted.load_state_dict(torch.load("/g/g92/thopalli/ws_kdml/KDML/ood_detect/logs/classifier/cifar10_full/step1/Resnet18_cifar_10scale_100_epoch20_real_lr_0.1_bs256_teT_4.0_sT_1.0_imgweight_0.5_txtweight_0.5_is_mlp_False_template_num_0/best_projector_weights.pth")['clip_prompted'])
+    clip_prompted = fabric.to_device(clip_prompted)
+    class_prompts = [f"This is a photo of a {class_name}" for class_name in class_names]
 
     # Create the optimizer and scheduler
     if args.optimizer == 'adam':
@@ -558,12 +698,19 @@ def main(args):
         clip_model = fabric.to_device(clip_model)
         classifier = fabric.to_device(classifier)
 
-    # Wrap the feature extractor and optimizer with Fabric
-   
-    projector, optimizer = fabric.setup(projector, optimizer)
+    class_prompts = [f"This is a photo of a {class_name}" for class_name in class_names]
+    with torch.no_grad():
+        text_encodings = clip_prompted(class_prompts)
+        text_encodings = text_encodings.detach()
     
+    fabric.print(text_encodings.shape)
+    # add clip_prompted to the optimizer
+    projector,optimizer = fabric.setup(projector, optimizer)
+
+    # Print the optimizer parameters names and their shae
+
     start_epoch = 0
-    state = {"projector": projector, "optimizer": optimizer, "epoch": start_epoch}
+    state = {"projector": projector, "optimizer": optimizer, "epoch": start_epoch, "clip_prompted":clip_prompted}
 
     if args.resume_checkpoint_path:
         fabric.load(args.resume_checkpoint_path, state)

@@ -1,3 +1,28 @@
+gaussian noise
+shot noise
+impulse noise
+speckle noise
+gaussian blur
+motion blur
+defocus blur
+glass blur
+zoom blur
+snow
+frost
+fog
+rain
+spatter
+brightness
+contrast
+elastic transformation
+jpeg compression
+pixelate
+quantization
+saturate
+haze
+lens distortion
+thermal noise
+color jitter
 Siren
 Hospital
 Emergency phone number

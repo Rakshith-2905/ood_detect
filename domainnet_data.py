@@ -71,7 +71,7 @@ def get_data_from_saved_files(save_dir, batch_size=32, train_shuffle=True, retur
     if dataset_name=='domainnet':
         with open('./data/domainnet_v1.0/class_names.txt') as f:
             class_names = [line.strip() for line in f]
-    elif dataset_name=='cifar10_full':
+    elif 'cifar10' in dataset_name:
         class_names=['airplane', 'automobile', 'bird', 'cat', 'deer', 'dog', 'frog', 'horse', 'ship', 'truck']
 
     if return_dataset:

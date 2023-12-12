@@ -63,15 +63,11 @@ def clean_all_categories(all_descriptors):
         cleaned_data[category] = remove_redundant_descriptors(descriptors)
         
         # Save the results for this category immediately
-        with open("clean_descriptors-2.json", 'w') as f:
+        with open(cleaned_descriptors_path, 'w') as f:
             json.dump(cleaned_data, f, indent=4)
     return cleaned_data
 
-def cluster_descriptors(train_classes = 'logs/classifier/resnet_resnet18/train_classes.txt', attributes_dict='descriptors_2.json'):
-
-    # Step 1: Read the class names from train_classes.txt
-    with open(train_classes, 'r') as f:
-        train_classes = [line.strip() for line in f.readlines()]
+def cluster_descriptors(class_names, attributes_dict='descriptors_2.json'):
 
     # Step 2: Load the dictionary of attributes from clean_description_2.json
     with open(attributes_dict, 'r') as f:
@@ -79,7 +75,7 @@ def cluster_descriptors(train_classes = 'logs/classifier/resnet_resnet18/train_c
 
     # Step 3: Extract the attributes for each class in train classes
     attributes_to_save = []
-    for class_name in train_classes:
+    for class_name in class_names:
         if class_name in attribute_dict:
             # Here I assume that attributes for each class in the dictionary are also in a list format
             # If not, adjust accordingly
@@ -87,17 +83,24 @@ def cluster_descriptors(train_classes = 'logs/classifier/resnet_resnet18/train_c
             attributes_to_save.extend(attributes)
 
     # Step 4: Write the extracted attributes to a new text file
-    with open('extracted_attributes.txt', 'w') as f:
+    with open('cifar3_attributes.txt', 'w') as f:
         for attribute in attributes_to_save:
             if attribute:
                 f.write(attribute + '\n')
 
 if __name__ == "__main__":
     # Load data
-    with open("descriptors_2.json", 'r') as f:
+    with open("cifar10_descriptors.json", 'r') as f:
         data = json.load(f)
-        
+    
+    cleaned_descriptors_path = "cifar10_descriptors.json"
     # cleaned_descriptors = clean_all_categories(data)
-    cluster_descriptors()
 
-    print("Cleaned descriptors saved to clean_descriptors.json")
+    with open("cifar10_classnames.json", 'r') as f:
+        class_names = json.load(f)
+
+    class_names = class_names[:3]
+
+    cluster_descriptors(class_names, cleaned_descriptors_path)
+
+    # print("Cleaned descriptors saved to clean_descriptors.json")

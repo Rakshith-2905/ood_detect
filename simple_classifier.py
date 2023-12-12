@@ -107,7 +107,7 @@ def train(model, trainloader, testloader, epochs=10, device='cpu'):
 
 def test(model, testloader, device='cpu'):
     # Load Model
-    model.load_state_dict(torch.load('cifar10_full_logs/model_epoch_10.pth'))
+    model.load_state_dict(torch.load('cifar10_full_logs/model_epoch_29.pth'))
 
     # Test Accuracy
     test_accuracy = calculate_accuracy(testloader, model, device=device)
@@ -142,5 +142,5 @@ if __name__ == '__main__':
 
     net = net.to(device)
     # Training and Testing
-    train(net, trainloader, testloader, epochs=30, device=device)
+    #train(net, trainloader, testloader, epochs=30, device=device)
     test(net, testloader, device=device)
