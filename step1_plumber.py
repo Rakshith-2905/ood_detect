@@ -40,7 +40,6 @@ from domainnet_data import DomainNetDataset, get_data_from_saved_files
 from models.resnet import CustomClassifier, CustomResNet
 from models.projector import ProjectionHead
 from simple_classifier import SimpleCNN, CIFAR10TwoTransforms
-from YFCC_feature_extract import ImageTextDataset
 from utils_proj import SimpleDINOLoss, compute_accuracy, compute_similarities, plot_grad_flow
 from models.resnet_cifar import ResNet18
 from torchvision import transforms
@@ -156,17 +155,22 @@ def get_dataset(data_name, train_transforms, test_transforms, clip_transform, da
         class_names = train_dataset.class_names
 
     elif data_name == 'cifar10':
-        train_dataset = CIFAR10TwoTransforms(root=f'{data_dir}/cifar10', train=True, transform1=train_transforms, transform2=clip_transform)
-        val_dataset = CIFAR10TwoTransforms(root=f'{data_dir}/cifar10', train=False, transform1=test_transforms, transform2=clip_transform)
+        selected_classes = [0,1,2]
+        train_dataset = CIFAR10TwoTransforms(root=f'{data_dir}/cifar10', train=True, transform1=train_transforms, transform2=clip_transform, selected_classes=selected_classes)
+        val_dataset = CIFAR10TwoTransforms(root=f'{data_dir}/cifar10', train=False, transform1=test_transforms, transform2=clip_transform, selected_classes=selected_classes)
 
-        class_names = ['airplane', 'automobile', 'bird']
+        # class_names = ['airplane', 'automobile', 'bird']
+        class_names = ['airplane', 'automobile', 'bird', 'cat', 'deer', 'dog', 'frog', 'horse', 'ship', 'truck']
+    
     elif data_name =="cifar10_full":
         
         train_dataset = CIFAR10TwoTransforms(root=f'{data_dir}/cifar10', train=True, transform1=train_transforms, transform2=clip_transform,selected_classes= None)
         val_dataset = CIFAR10TwoTransforms(root=f'{data_dir}/cifar10', train=False, transform1=test_transforms, transform2=clip_transform,selected_classes= None)
         class_names= train_dataset.class_names
 
-
+    else:
+        raise ValueError(f"Invalid dataset name: {data_name}")
+    
     return train_dataset, val_dataset, class_names
 
 def read_from_pkl(file_path):
@@ -206,6 +210,8 @@ def get_dataset_from_file(data_name, data_dir='../data'):
             class_names = [line.strip() for line in f]
     elif data_name == 'domainnet':
         train_dataset, test_dataset, class_names = get_data_from_saved_files(data_dir, return_dataset=True)#TODO: check this
+    elif data_name == 'cifar10':
+        train_dataset, test_dataset, class_names = get_data_from_saved_files(data_dir, return_dataset=True,dataset_name="cifar10")
     elif data_name == 'cifar10_full':
         train_dataset, test_dataset, class_names = get_data_from_saved_files(data_dir, return_dataset=True,dataset_name="cifar10_full")
     return train_dataset, test_dataset, class_names
@@ -217,15 +223,37 @@ def get_save_dir(args):
         save_dir = os.path.dirname(args.resume_checkpoint_path)
         return save_dir
 
-    save_dir = os.path.join(args.save_dir, args.classifier_name)
+    projector_name = "plumber"
+    if args.img_projection:
+        projector_name += "_img"
+    if args.txt_projection:
+        projector_name += "_text"
+    projector_name += "_proj"
+    if args.learnable_prompts:
+        projector_name += "_LP"
 
-    save_dir += f"{args.prefix}"
-    save_dir += f"_bs{args.batch_size}"
-    save_dir += f"_teT_{args.teacher_temp}_sT_{args.student_temp}"
-    save_dir += f"_imgweight_{args.weight_img_loss}_txtweight_{args.weight_txt_loss}"
-    save_dir += f"_is_mlp_{args.is_mlp}"
-    save_dir += f"_template_num_{args.template_num}"
+    if not args.save_dir:
+        # Get the save directory from the classifier checkpoint path, and go one directory up
+        save_dir = os.path.dirname(os.path.dirname(args.classifier_checkpoint_path))
+        save_dir = os.path.join(save_dir, projector_name)
+    else:
+        save_dir = os.path.join(args.save_dir, args.classifier_name)
     
+
+    # get the epoch number from the checkpoint path
+    epoch = int(os.path.basename(args.classifier_checkpoint_path).split('_')[-1].split('.')[0])
+
+    save_dir_ = f"{args.prefix}"
+    save_dir_ += f"_clsEpoch_{epoch}"
+    save_dir_ += f"_bs_{args.batch_size}"
+    save_dir_ += f"_lr_{args.learning_rate}"
+    save_dir_ += f"_teT_{args.teacher_temp}_sT_{args.student_temp}"
+    save_dir_ += f"_imgweight_{args.weight_img_loss}_txtweight_{args.weight_txt_loss}"
+    save_dir_ += f"_is_mlp_{args.is_mlp}"
+    # save_dir_ += f"_template_num_{args.template_num}"
+
+
+    save_dir = os.path.join(save_dir, save_dir_, 'step_1')
     # save_dir += f"_{datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}"
 
     return save_dir
@@ -256,19 +284,25 @@ def progbar_wrapper(iterable, total, **kwargs):
         return tqdm(iterable, total=total, **kwargs)
     return iterable
     
-def train_one_epoch(train_loader, clip_model, classifier, projector, clip_prompted, class_prompts, criterion, optimizer, epoch):
+def train_one_epoch(data_loader, clip_model, classifier, 
+                    projector, optimizer, projector_txt, optimizer_txt,
+                    text_encodings_raw, class_prompts, clip_prompted, optimizer_ctx, criterion, epoch):
     clip_model.eval()
     classifier.eval()
-    projector.train()
-    
+
+    if projector: 
+        projector.train()
+    if projector_txt:
+        projector_txt.train()
+
     total_loss = 0
     total_image_loss = 0
     total_text_loss = 0
 
     total_base_model_acc = 0
-    total_clip_acc = 0
+    total_plumber_acc = 0
     pbar = progbar_wrapper(
-        train_loader, total=len(train_loader), desc=f"Training Epoch {epoch+1}"
+        data_loader, total=len(data_loader), desc=f"Training Epoch {epoch+1}"
     )
     
     for images_batch, labels, images_clip_batch in pbar:
@@ -277,20 +311,39 @@ def train_one_epoch(train_loader, clip_model, classifier, projector, clip_prompt
         images_clip_batch = fabric.to_device(images_clip_batch)
         labels = fabric.to_device(labels)
 
-        optimizer.zero_grad()
+        if projector:
+            optimizer.zero_grad()
+        if projector_txt:
+            optimizer_txt.zero_grad()
+        if clip_prompted:
+            optimizer_ctx.zero_grad()
 
-        text_encodings = clip_prompted(class_prompts)
         
         classifier_logits, classifier_embeddings = classifier(images_batch, return_features=True) # (batch_size, embedding_dim)
 
         clip_image_embeddings = clip_model.encode_image(images_clip_batch) # (batch_size, embedding_dim)
 
         clip_image_embeddings = clip_image_embeddings.type_as(classifier_embeddings)
-        if args.proj_clip: # this is PLUMBER
-            proj_embeddings = projector(clip_image_embeddings) # (batch_size, projection_dim)
-        else: # this is LIMBER
-            proj_embeddings = projector(classifier_embeddings) # (batch_size, projection_dim)
 
+        # Project the image embeddings
+        if args.img_projection:
+            if args.proj_clip: # this is PLUMBER
+                proj_embeddings = projector(clip_image_embeddings) # (batch_size, projection_dim)
+            else: # this is LIMBER
+                proj_embeddings = projector(classifier_embeddings) # (batch_size, projection_dim)
+        else:
+            proj_embeddings = classifier_embeddings
+
+        # Learnable prompts for the text prompts
+        if clip_prompted:
+            text_encodings = clip_prompted(class_prompts)
+
+        # Project the text embeddings
+        if args.txt_projection:
+            text_encodings = projector_txt(text_encodings_raw)
+        else:
+            text_encodings = text_encodings_raw
+            
         normalized_proj_embeddings = F.normalize(proj_embeddings, dim=-1)
         normalized_text_encodings = F.normalize(text_encodings, dim=-1)# (num_classes, projection_dim)
 
@@ -301,21 +354,28 @@ def train_one_epoch(train_loader, clip_model, classifier, projector, clip_prompt
 
         loss_image = criterion(logits_projection, classifier_logits)
         loss_text = criterion(logits_projection.t(), classifier_logits.t())
-        # loss = (loss_image + loss_text)/2 # TODO: optimal value of alpha
+        
         loss = loss_image*args.weight_img_loss + loss_text*args.weight_txt_loss
+
         
         fabric.backward(loss)
 
-        optimizer.step()
+        if args.img_projection:
+            optimizer.step()
+        if args.txt_projection:
+            optimizer_txt.step()
+        if args.learnable_prompts:
+            optimizer_ctx.step()
+
 
         probs_from_classifier = F.softmax(classifier_logits, dim=-1)
         probs_from_proj = F.softmax(logits_projection, dim=-1)
 
         batch_base_model_acc = compute_accuracy(probs_from_classifier, labels)
-        batch_clip_acc = compute_accuracy(probs_from_proj, labels)
+        batch_plumber_acc = compute_accuracy(probs_from_proj, labels)
 
         total_base_model_acc += batch_base_model_acc
-        total_clip_acc += batch_clip_acc
+        total_plumber_acc += batch_plumber_acc
 
         batch_loss = loss.item() 
         total_loss += batch_loss
@@ -323,53 +383,72 @@ def train_one_epoch(train_loader, clip_model, classifier, projector, clip_prompt
         total_image_loss += loss_image.item()
         total_text_loss += loss_text.item()
 
-        # pbar.set_postfix({"Batch Loss": batch_loss, "Base model Acc": batch_base_model_acc, "CLIP Acc": batch_clip_acc})
+        # pbar.set_postfix({"Batch Loss": batch_loss, "Base model Acc": batch_base_model_acc, "CLIP Acc": batch_plumber_acc})
     
-    total_loss = fabric.all_gather(total_loss).mean() / len(train_loader)
-    total_image_loss = fabric.all_gather(total_image_loss).mean() / len(train_loader)
-    total_text_loss = fabric.all_gather(total_text_loss).mean() / len(train_loader)
+    total_loss = fabric.all_gather(total_loss).mean() / len(data_loader)
+    total_image_loss = fabric.all_gather(total_image_loss).mean() / len(data_loader)
+    total_text_loss = fabric.all_gather(total_text_loss).mean() / len(data_loader)
     
-    total_base_model_acc = fabric.all_gather(total_base_model_acc).mean() / len(train_loader)
-    total_clip_acc = fabric.all_gather(total_clip_acc).mean() / len(train_loader)
+    total_base_model_acc = fabric.all_gather(total_base_model_acc).mean() / len(data_loader)
+    total_plumber_acc = fabric.all_gather(total_plumber_acc).mean() / len(data_loader)
 
-    return total_loss, total_base_model_acc, total_clip_acc, total_image_loss, total_text_loss
+    return total_loss, total_base_model_acc, total_plumber_acc, total_image_loss, total_text_loss
 
 @torch.no_grad()
-def validate(val_loader, clip_model, classifier, projector, clip_prompted, class_prompts, criterion, epoch):
+def validate(data_loader, clip_model, classifier, 
+                    projector, projector_txt,
+                    text_encodings_raw, class_prompts, clip_prompted, criterion, epoch):
     
     clip_model.eval()
     classifier.eval()
-    projector.eval()
-    
+    if projector:
+        projector.eval()
+    if projector_txt:
+        projector_txt.eval()
+
     total_loss = 0
     total_image_loss = 0
     total_text_loss = 0
     
     total_base_model_acc = 0
-    total_clip_acc = 0
+    total_plumber_acc = 0
 
 
     pbar = progbar_wrapper(
-        val_loader, total=len(val_loader), desc=f"Validating Epoch {epoch+1}"
+        data_loader, total=len(data_loader), desc=f"Validating Epoch {epoch+1}"
     )
+    
     for images_batch, labels, images_clip_batch in pbar:
 
         images_batch = fabric.to_device(images_batch)
         images_clip_batch = fabric.to_device(images_clip_batch)
         labels = fabric.to_device(labels)
-        
-        text_encodings = clip_prompted(class_prompts)
 
         classifier_logits, classifier_embeddings = classifier(images_batch, return_features=True) # (batch_size, embedding_dim)
 
         clip_image_embeddings = clip_model.encode_image(images_clip_batch) # (batch_size, embedding_dim)
-        
-        clip_image_embeddings = clip_image_embeddings.type_as(classifier_embeddings)
-        if args.proj_clip: # this is PLUMBER
-            proj_embeddings = projector(clip_image_embeddings) # (batch_size, projection_dim)
-        else: # this is LIMBER
-            proj_embeddings = projector(classifier_embeddings) # (batch_size, projection_dim)
 
+        clip_image_embeddings = clip_image_embeddings.type_as(classifier_embeddings)
+
+        # Project the image embeddings
+        if args.img_projection:
+            if args.proj_clip: # this is PLUMBER
+                proj_embeddings = projector(clip_image_embeddings) # (batch_size, projection_dim)
+            else: # this is LIMBER
+                proj_embeddings = projector(classifier_embeddings) # (batch_size, projection_dim)
+        else:
+            proj_embeddings = classifier_embeddings
+
+        # Learnable prompts for the text prompts
+        if clip_prompted:
+            text_encodings = clip_prompted(class_prompts)
+
+        # Project the text embeddings
+        if args.txt_projection:
+            text_encodings = projector_txt(text_encodings_raw)
+        else:
+            text_encodings = text_encodings_raw
+            
         normalized_proj_embeddings = F.normalize(proj_embeddings, dim=-1)
         normalized_text_encodings = F.normalize(text_encodings, dim=-1)# (num_classes, projection_dim)
 
@@ -380,17 +459,17 @@ def validate(val_loader, clip_model, classifier, projector, clip_prompted, class
 
         loss_image = criterion(logits_projection, classifier_logits)
         loss_text = criterion(logits_projection.t(), classifier_logits.t())
-        # loss = (loss_image + loss_text)/2 # TODO: optimal value of alpha
+
         loss = loss_image*args.weight_img_loss + loss_text*args.weight_txt_loss
 
         probs_from_classifier = F.softmax(classifier_logits, dim=-1)
         probs_from_proj = F.softmax(logits_projection, dim=-1)
 
         batch_base_model_acc = compute_accuracy(probs_from_classifier, labels)
-        batch_clip_acc = compute_accuracy(probs_from_proj, labels)
+        batch_plumber_acc = compute_accuracy(probs_from_proj, labels)
 
         total_base_model_acc += batch_base_model_acc
-        total_clip_acc += batch_clip_acc
+        total_plumber_acc += batch_plumber_acc
 
         batch_loss = loss.item() 
         total_loss += batch_loss
@@ -398,52 +477,72 @@ def validate(val_loader, clip_model, classifier, projector, clip_prompted, class
         total_image_loss += loss_image.item()
         total_text_loss += loss_text.item()
 
-        # pbar.set_postfix({"Batch Loss": batch_loss, "Base model Acc": batch_base_model_acc, "CLIP Acc": batch_clip_acc})
+        # pbar.set_postfix({"Batch Loss": batch_loss, "Base model Acc": batch_base_model_acc, "CLIP Acc": batch_plumber_acc})
     
-    total_loss = fabric.all_gather(total_loss).mean() / len(val_loader)
-    total_image_loss = fabric.all_gather(total_image_loss).mean() / len(val_loader)
-    total_text_loss = fabric.all_gather(total_text_loss).mean() / len(val_loader)
+    total_loss = fabric.all_gather(total_loss).mean() / len(data_loader)
+    total_image_loss = fabric.all_gather(total_image_loss).mean() / len(data_loader)
+    total_text_loss = fabric.all_gather(total_text_loss).mean() / len(data_loader)
     
-    total_base_model_acc = fabric.all_gather(total_base_model_acc).mean() / len(val_loader)
-    total_clip_acc = fabric.all_gather(total_clip_acc).mean() / len(val_loader)
+    total_base_model_acc = fabric.all_gather(total_base_model_acc).mean() / len(data_loader)
+    total_plumber_acc = fabric.all_gather(total_plumber_acc).mean() / len(data_loader)
 
-    return total_loss, total_base_model_acc, total_clip_acc, total_image_loss, total_text_loss
+    return total_loss, total_base_model_acc, total_plumber_acc, total_image_loss, total_text_loss
 
-def train_one_epoch_feat(train_loader, clip_model, classifier, projector, clip_prompted, class_prompts, criterion, optimizer, optimizer_ctx,epoch):
+def train_one_epoch_feat(data_loader, clip_model, classifier, 
+                    projector, optimizer, projector_txt, optimizer_txt,
+                    text_encodings_raw, class_prompts, clip_prompted, optimizer_ctx, criterion, epoch):
+    
     clip_model.eval()
     classifier.eval()
-    projector.train()
-    
+
+    if projector: 
+        projector.train()
+    if projector_txt:
+        projector_txt.train()
+
     total_loss = 0
     total_image_loss = 0
     total_text_loss = 0
 
     total_base_model_acc = 0
-    total_clip_acc = 0
+    total_plumber_acc = 0
     pbar = progbar_wrapper(
-        train_loader, total=len(train_loader), desc=f"Training Epoch {epoch+1}"
+        data_loader, total=len(data_loader), desc=f"Training Epoch {epoch+1}"
     )
-    
-    
     for classifier_logits, classifier_embeddings, labels, clip_image_embeddings in pbar:
+
 
         classifier_logits = fabric.to_device(classifier_logits)
         classifier_embeddings = fabric.to_device(classifier_embeddings)
         labels = fabric.to_device(labels)
         clip_image_embeddings = fabric.to_device(clip_image_embeddings)
 
-        text_encodings = clip_prompted(class_prompts)
-        
-        
-        clip_image_embeddings = clip_image_embeddings.type_as(classifier_embeddings)
-        optimizer.zero_grad()
-        optimizer_ctx.zero_grad()
+        if projector:
+            optimizer.zero_grad()
+        if projector_txt:
+            optimizer_txt.zero_grad()
+        if clip_prompted:
+            optimizer_ctx.zero_grad()
 
-        if args.proj_clip:
-            # Project the CLIP embeddings
-            proj_embeddings = projector(clip_image_embeddings) # (batch_size, projection_dim) 
+        clip_image_embeddings = clip_image_embeddings.type_as(classifier_embeddings)
+        # Project the image embeddings
+        if args.img_projection:
+            if args.proj_clip: # this is PLUMBER
+                proj_embeddings = projector(clip_image_embeddings) # (batch_size, projection_dim)
+            else: # this is LIMBER
+                proj_embeddings = projector(classifier_embeddings) # (batch_size, projection_dim)
         else:
-            proj_embeddings = projector(classifier_embeddings)
+            proj_embeddings = classifier_embeddings
+
+        # Learnable prompts for the text prompts
+        if clip_prompted:
+            text_encodings = clip_prompted(class_prompts)
+
+        # Project the text embeddings
+        if args.txt_projection:
+            text_encodings = projector_txt(text_encodings_raw)
+        else:
+            text_encodings = text_encodings_raw
 
         normalized_proj_embeddings = F.normalize(proj_embeddings, dim=-1)
         normalized_text_encodings = F.normalize(text_encodings, dim=-1)# (num_classes, projection_dim)
@@ -456,28 +555,27 @@ def train_one_epoch_feat(train_loader, clip_model, classifier, projector, clip_p
         # print(normalized_proj_embeddings.shape,normalized_text_encodings.shape, logits_projection.shape,classifier_logits.shape)
         loss_image = criterion(logits_projection, classifier_logits)
         loss_text = criterion(logits_projection.t(), classifier_logits.t())
-        # loss = (loss_image + loss_text)/2 # TODO: optimal value of alpha
+        
         loss = loss_image*args.weight_img_loss + loss_text*args.weight_txt_loss
 
   
         fabric.backward(loss)
         
-        optimizer.step()
-        optimizer_ctx.step()
-        
-        
-        
-            
-        
+        if args.img_projection:
+            optimizer.step()
+        if args.txt_projection:
+            optimizer_txt.step()
+        if args.learnable_prompts:
+            optimizer_ctx.step()
 
         probs_from_classifier = F.softmax(classifier_logits, dim=-1)
         probs_from_proj = F.softmax(logits_projection, dim=-1)
 
         batch_base_model_acc = compute_accuracy(probs_from_classifier, labels)
-        batch_clip_acc = compute_accuracy(probs_from_proj, labels)
+        batch_plumber_acc = compute_accuracy(probs_from_proj, labels)
 
         total_base_model_acc += batch_base_model_acc
-        total_clip_acc += batch_clip_acc
+        total_plumber_acc += batch_plumber_acc
 
         batch_loss = loss.item() 
         total_loss += batch_loss
@@ -485,33 +583,37 @@ def train_one_epoch_feat(train_loader, clip_model, classifier, projector, clip_p
         total_image_loss += loss_image.item()
         total_text_loss += loss_text.item()
 
-        # pbar.set_postfix({"Batch Loss": batch_loss, "Base model Acc": batch_base_model_acc, "CLIP Acc": batch_clip_acc})
+        # pbar.set_postfix({"Batch Loss": batch_loss, "Base model Acc": batch_base_model_acc, "CLIP Acc": batch_plumber_acc})
     
-    total_loss = fabric.all_gather(total_loss).mean() / len(train_loader)
-    total_image_loss = fabric.all_gather(total_image_loss).mean() / len(train_loader)
-    total_text_loss = fabric.all_gather(total_text_loss).mean() / len(train_loader)
+    total_loss = fabric.all_gather(total_loss).mean() / len(data_loader)
+    total_image_loss = fabric.all_gather(total_image_loss).mean() / len(data_loader)
+    total_text_loss = fabric.all_gather(total_text_loss).mean() / len(data_loader)
     
-    total_base_model_acc = fabric.all_gather(total_base_model_acc).mean() / len(train_loader)
-    total_clip_acc = fabric.all_gather(total_clip_acc).mean()/ len(train_loader)
+    total_base_model_acc = fabric.all_gather(total_base_model_acc).mean() / len(data_loader)
+    total_plumber_acc = fabric.all_gather(total_plumber_acc).mean()/ len(data_loader)
 
-    return total_loss, total_base_model_acc, total_clip_acc, total_image_loss, total_text_loss
+    return total_loss, total_base_model_acc, total_plumber_acc, total_image_loss, total_text_loss
     
 @torch.no_grad()
-def validate_feat(val_loader, clip_model, classifier, projector, clip_prompted, class_prompts, criterion, epoch):
-    
+def validate_feat(data_loader, clip_model, classifier, 
+                    projector, projector_txt,
+                    text_encodings_raw, class_prompts, clip_prompted, criterion, epoch):
     clip_model.eval()
     classifier.eval()
-    projector.eval()
-    
+
+    if projector: 
+        projector.eval()
+    if projector_txt:
+        projector_txt.eval()
+
     total_loss = 0
     total_image_loss = 0
     total_text_loss = 0
-    
-    total_base_model_acc = 0
-    total_clip_acc = 0
 
+    total_base_model_acc = 0
+    total_plumber_acc = 0
     pbar = progbar_wrapper(
-        val_loader, total=len(val_loader), desc=f"Validating Epoch {epoch+1}"
+        data_loader, total=len(data_loader), desc=f"Training Epoch {epoch+1}"
     )
     for classifier_logits, classifier_embeddings, labels, clip_image_embeddings in pbar:
 
@@ -519,38 +621,49 @@ def validate_feat(val_loader, clip_model, classifier, projector, clip_prompted, 
         classifier_embeddings = fabric.to_device(classifier_embeddings)
         labels = fabric.to_device(labels)
         clip_image_embeddings = fabric.to_device(clip_image_embeddings)
-        
+
         clip_image_embeddings = clip_image_embeddings.type_as(classifier_embeddings)
-        if args.proj_clip:
-            # Project the CLIP embeddings
-            proj_embeddings = projector(clip_image_embeddings) # (batch_size, projection_dim) 
+        # Project the image embeddings
+        if args.img_projection:
+            if args.proj_clip: # this is PLUMBER
+                proj_embeddings = projector(clip_image_embeddings) # (batch_size, projection_dim)
+            else: # this is LIMBER
+                proj_embeddings = projector(classifier_embeddings) # (batch_size, projection_dim)
         else:
-            proj_embeddings = projector(classifier_embeddings)
+            proj_embeddings = classifier_embeddings
 
-        text_encodings = clip_prompted(class_prompts)
+        # Learnable prompts for the text prompts
+        if clip_prompted:
+            text_encodings = clip_prompted(class_prompts)
 
+        # Project the text embeddings
+        if args.txt_projection:
+            text_encodings = projector_txt(text_encodings_raw)
+        else:
+            text_encodings = text_encodings_raw
 
         normalized_proj_embeddings = F.normalize(proj_embeddings, dim=-1)
         normalized_text_encodings = F.normalize(text_encodings, dim=-1)# (num_classes, projection_dim)
 
         # make the text embeddings to the same data type as image embeddings
         normalized_text_encodings = normalized_text_encodings.type_as(normalized_proj_embeddings)
+        
         # T100 is the logits scale from CLIP
         logits_projection = 100*normalized_proj_embeddings @ normalized_text_encodings.t() # (batch_size, num_classes)
-
+        # print(normalized_proj_embeddings.shape,normalized_text_encodings.shape, logits_projection.shape,classifier_logits.shape)
         loss_image = criterion(logits_projection, classifier_logits)
         loss_text = criterion(logits_projection.t(), classifier_logits.t())
-        # loss = (loss_image + loss_text)/2 # TODO: optimal value of alpha
+        
         loss = loss_image*args.weight_img_loss + loss_text*args.weight_txt_loss
 
         probs_from_classifier = F.softmax(classifier_logits, dim=-1)
         probs_from_proj = F.softmax(logits_projection, dim=-1)
 
         batch_base_model_acc = compute_accuracy(probs_from_classifier, labels)
-        batch_clip_acc = compute_accuracy(probs_from_proj, labels)
+        batch_plumber_acc = compute_accuracy(probs_from_proj, labels)
 
         total_base_model_acc += batch_base_model_acc
-        total_clip_acc += batch_clip_acc
+        total_plumber_acc += batch_plumber_acc
 
         batch_loss = loss.item() 
         total_loss += batch_loss
@@ -558,19 +671,19 @@ def validate_feat(val_loader, clip_model, classifier, projector, clip_prompted, 
         total_image_loss += loss_image.item()
         total_text_loss += loss_text.item()
 
-        # pbar.set_postfix({"Batch Loss": batch_loss, "Base model Acc": batch_base_model_acc, "CLIP Acc": batch_clip_acc})
+        # pbar.set_postfix({"Batch Loss": batch_loss, "Base model Acc": batch_base_model_acc, "CLIP Acc": batch_plumber_acc})
     
-    total_loss = fabric.all_gather(total_loss).mean() / len(val_loader)
-    total_image_loss = fabric.all_gather(total_image_loss).mean() / len(val_loader)
-    total_text_loss = fabric.all_gather(total_text_loss).mean() / len(val_loader)
+    total_loss = fabric.all_gather(total_loss).mean() / len(data_loader)
+    total_image_loss = fabric.all_gather(total_image_loss).mean() / len(data_loader)
+    total_text_loss = fabric.all_gather(total_text_loss).mean() / len(data_loader)
     
-    total_base_model_acc = fabric.all_gather(total_base_model_acc).mean() / len(val_loader)
-    total_clip_acc = fabric.all_gather(total_clip_acc).mean() / len(val_loader)
+    total_base_model_acc = fabric.all_gather(total_base_model_acc).mean() / len(data_loader)
+    total_plumber_acc = fabric.all_gather(total_plumber_acc).mean()/ len(data_loader)
 
-    return total_loss, total_base_model_acc, total_clip_acc, total_image_loss, total_text_loss
-
+    return total_loss, total_base_model_acc, total_plumber_acc, total_image_loss, total_text_loss
+    
 def build_classifier(classifier_name, num_classes, pretrained=False, checkpoint_path=None):
-
+    # TODO: Verify each of the models and the transforms
     if classifier_name in ['vit_b_16', 'swin_b']:
         classifier = CustomClassifier(args.classifier_name, use_pretrained=pretrained)
     elif classifier_name in [ 'resnet50']:
@@ -588,7 +701,6 @@ def build_classifier(classifier_name, num_classes, pretrained=False, checkpoint_
             transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010)),
         ])
 
-
     if checkpoint_path:
         if classifier_name == 'SimpleCNN':
             classifier.load_state_dict(torch.load(checkpoint_path))
@@ -596,10 +708,10 @@ def build_classifier(classifier_name, num_classes, pretrained=False, checkpoint_
             classifier = torch.nn.DataParallel(classifier)
 
             classifier.load_state_dict(torch.load(checkpoint_path)['model_state_dict'])
-            classifier = classifier.module
-            
+            classifier = classifier.module   
         else:
             classifier.load_state_dict(torch.load(checkpoint_path)['model_state_dict'])
+            fabric.print(f"Loaded {classifier_name} from {checkpoint_path}")
     train_transform = classifier.train_transform
     test_transform = classifier.test_transform
 
@@ -607,41 +719,47 @@ def build_classifier(classifier_name, num_classes, pretrained=False, checkpoint_
 
 def main(args):
     
+
     # Load the CLIP model
     clip_model, clip_transform = clip.load(args.clip_model_name)
 
     classifier, train_transform, test_transform = build_classifier(args.classifier_name, num_classes=args.num_classes, 
                                                                     pretrained=args.use_imagenet_pretrained, 
                                                                     checkpoint_path=args.classifier_checkpoint_path)
-    if args.proj_clip:
-        projector = ProjectionHead(input_dim=args.projection_dim, output_dim=args.projection_dim,is_mlp=args.is_mlp)
-    else:
-        projector = ProjectionHead(input_dim=classifier.feature_dim, output_dim=args.projection_dim,is_mlp=args.is_mlp)
-    # initialize projector with identity mapping
+
+    fabric.print(f"Built {args.classifier_name} classifier with checkpoint path: {args.classifier_checkpoint_path}")
+
+    projector = None
+    if args.img_projection:
+        if args.proj_clip:
+            # This is PLUMBER
+            projector = ProjectionHead(input_dim=args.projection_dim, output_dim=args.projection_dim,is_mlp=args.is_mlp)
+            fabric.print(f"Constructed img emb projection PLUMBER with projection dim: {args.projection_dim} and is_mlp: {args.is_mlp}")
+        else:
+            # This is LIMBER
+            projector = ProjectionHead(input_dim=classifier.feature_dim, output_dim=args.projection_dim,is_mlp=args.is_mlp)
+            fabric.print(f"Constructed img emb projection LIMBER with projection dim: {args.projection_dim} and is_mlp: {args.is_mlp}")
     
+    text_projector = None
+    if args.txt_projection:
+        text_projector = ProjectionHead(input_dim=args.projection_dim, output_dim=args.projection_dim,is_mlp=args.is_mlp)
+        fabric.print(f"Constructed text emb projection PLUMBER with projection dim: {args.projection_dim} and is_mlp: {args.is_mlp}")
+
+    ########################### Load the dataset ############################
 
     if args.use_saved_features:
-        # domains_interest = ['clipart', 'painting', 'sketch']
-
-        # combined_train_dataset = []
-        # combined_val_dataset = []
-        # for domain in domains_interest:
-        #     data_dir = os.path.join(args.data_dir, domain)
-        #     train_dataset, val_dataset, class_names = get_dataset_from_file(args.dataset_name, data_dir=data_dir)
-        #     combined_train_dataset.append(train_dataset)
-        #     combined_val_dataset.append(val_dataset)
-        #     print(f"Domain: {domain}, Train dataset length: {len(train_dataset)}, Val dataset length: {len(val_dataset)}")
-        
-        # train_dataset = ConcatDataset(combined_train_dataset)
-        # val_dataset = ConcatDataset(combined_val_dataset)
-
-        data_dir = os.path.join(args.data_dir, args.domain_name)
+        # data_dir = os.path.join(args.data_dir, args.domain_name)
+        # Get the directory of classifier checkpoints
+        data_dir = os.path.dirname(args.classifier_checkpoint_path)
+        data_dir = os.path.join(data_dir, 'features', args.domain_name)
         train_dataset, val_dataset, class_names = get_dataset_from_file(args.dataset_name, data_dir=data_dir)
+        fabric.print(f"Using saved features from {args.dataset_name} dataset from {data_dir}")
     else:
         # Create the data loader and wrap them with Fabric
         train_dataset, val_dataset, class_names = get_dataset(args.dataset_name, train_transform, test_transform, 
                                                                 data_dir=args.data_dir, clip_transform=clip_transform)
-        
+        fabric.print(f"Using {args.dataset_name} dataset")
+
     train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True, num_workers=8, pin_memory=True)
     val_loader = torch.utils.data.DataLoader(val_dataset, batch_size=args.batch_size, shuffle=args.train_on_testset, num_workers=8, pin_memory=True)
 
@@ -657,26 +775,62 @@ def main(args):
     # Get the text encodings for the class names
     try:
         text_encodings= torch.load(args.prompt_path)
-        text_encodings= text_encodings[args.template_num]
+        if text_encodings.shape[0] != len(class_names):
+            raise Exception("Text encodings shape does not match the number of classes")
+
+        fabric.print(f"Loaded CLIP {args.clip_model_name} text encodings from {args.prompt_path}, {text_encodings.shape}")
     except:
         text_encodings = get_CLIP_text_encodings(clip_model, class_names, args.prompt_path)
         fabric.print(f"Saved CLIP {args.clip_model_name} text encodings to {args.prompt_path}")
 
-    clip_prompted = PromptedCLIPTextEncoder(clip_model, n_ctx=16, num_classes=len(class_names), device=fabric.device)
-    clip_prompted = fabric.to_device(clip_prompted)
+    class_prompts = None
+    clip_prompted = None
+    if args.learnable_prompts:
+        # Create the prompted CLIP model
+        clip_prompted = PromptedCLIPTextEncoder(clip_model, n_ctx=args.n_promt_ctx, num_classes=len(class_names), device=fabric.device)
+        clip_prompted = fabric.to_device(clip_prompted)
 
-    
-    class_prompts = [f"This is a photo of a {class_name}" for class_name in class_names]
+        class_prompts = [f"This is a photo of a {class_name}" for class_name in class_names]
 
-    # Create the optimizer and scheduler
-    if args.optimizer == 'adam':
-        optimizer = torch.optim.Adam(projector.parameters(), lr=args.learning_rate)
-    elif args.optimizer == 'sgd':
-        optimizer = torch.optim.SGD(projector.parameters(), lr=args.learning_rate, momentum=0.9)
-    elif args.optimizer == 'adamw':
-        optimizer = torch.optim.AdamW(projector.parameters(), lr=args.learning_rate)
+        fabric.print(f"Constructed CLIP Prompted Text Encoder with {len(class_names)} classes")
 
-    scheduler = torch.optim.lr_scheduler.MultiStepLR(optimizer, milestones=[30, 60, 90], gamma=0.1)
+    ########################### Create the optimizer ############################
+    optimizer = None
+    if args.img_projection:
+        # Create the optimizer and scheduler
+        if args.optimizer == 'adam':
+            optimizer = torch.optim.Adam(projector.parameters(), lr=args.learning_rate)
+        elif args.optimizer == 'sgd':
+            optimizer = torch.optim.SGD(projector.parameters(), lr=args.learning_rate, momentum=0.9)
+        elif args.optimizer == 'adamw':
+            optimizer = torch.optim.AdamW(projector.parameters(), lr=args.learning_rate)
+
+        projector, optimizer = fabric.setup(projector, optimizer)
+        scheduler = torch.optim.lr_scheduler.MultiStepLR(optimizer, milestones=[30, 60, 90], gamma=0.1)
+
+    # Create optimizer for text projection
+    optimizer_txt = None
+    if args.txt_projection:
+        if args.optimizer == 'adam':
+            optimizer_txt = torch.optim.Adam(text_projector.parameters(), lr=args.learning_rate)
+        elif args.optimizer == 'sgd':
+            optimizer_txt = torch.optim.SGD(text_projector.parameters(), lr=args.learning_rate, momentum=0.9)
+        elif args.optimizer == 'adamw':
+            optimizer_txt = torch.optim.AdamW(text_projector.parameters(), lr=args.learning_rate)
+
+        text_projector, optimizer_txt = fabric.setup(text_projector, optimizer_txt)
+        scheduler_txt = torch.optim.lr_scheduler.MultiStepLR(optimizer_txt, milestones=[30, 60, 90], gamma=0.1)
+
+    # Wrap the feature extractor and optimizer with Fabric   
+    # projector.linear.weight = torch.nn.Parameter(torch.eye(projector.linear.weight.shape[0],projector.linear.weight.shape[1]))
+    # projector.linear.bias = torch.nn.Parameter(torch.zeros(projector.linear.bias.shape[0]))
+
+    # add clip_prompted to the optimizer
+    optimizer_ctx = None
+    if args.learnable_prompts:
+        optimizer_ctx = torch.optim.SGD([p for p in clip_prompted.parameters() if p.requires_grad], lr=0.1)
+        clip_prompted, optimizer_ctx = fabric.setup(clip_prompted, optimizer_ctx)
+        
 
     # Loss function
     criterion = SimpleDINOLoss(student_temp=args.student_temp, teacher_temp=args.teacher_temp)
@@ -684,21 +838,11 @@ def main(args):
     if not args.use_saved_features:
         clip_model = fabric.to_device(clip_model)
         classifier = fabric.to_device(classifier)
-
-    # Wrap the feature extractor and optimizer with Fabric
-   
     
-    
-    
-    # add clip_prompted to the optimizer
-    optimizer_ctx= torch.optim.SGD(clip_prompted.ctx.parameters(), lr=0.1)
-    projector,optimizer = fabric.setup(projector, optimizer)
-    clip_prompted,optimizer_ctx = fabric.setup(clip_prompted, optimizer_ctx)
-
-    # Print the optimizer parameters names and their shae
-
     start_epoch = 0
-    state = {"projector": projector, "optimizer": optimizer, "epoch": start_epoch, "clip_prompted":clip_prompted}
+    state = {"projector": projector, "optimizer": optimizer, 
+             "text_projector": text_projector, "optimizer_txt": optimizer_txt,
+             "clip_prompted":clip_prompted, "optimizer_ctx": optimizer_ctx, "epoch": start_epoch}
 
     if args.resume_checkpoint_path:
         fabric.load(args.resume_checkpoint_path, state)
@@ -711,21 +855,37 @@ def main(args):
     best_val_loss = float("inf")
     for epoch in range(start_epoch, args.num_epochs):
         if args.use_saved_features:
-            train_loss,  train_base_acc, train_clip_acc, train_loss_img, train_loss_txt = train_one_epoch_feat(train_loader, clip_model, classifier, projector, clip_prompted, class_prompts, criterion, optimizer,optimizer_ctx, epoch)
+            train_loss,  train_base_acc, train_plumber_acc, train_loss_img, train_loss_txt = train_one_epoch_feat(
+                                                                            train_loader, clip_model, classifier,
+                                                                            projector, optimizer, text_projector, optimizer_txt,
+                                                                            text_encodings, class_prompts, clip_prompted, optimizer_ctx,
+                                                                            criterion, epoch)
             if epoch % args.val_freq == 0:
-                val_loss, val_base_acc, val_clip_acc, val_loss_img, val_loss_txt = validate_feat(val_loader, clip_model, classifier, projector, clip_prompted, class_prompts, criterion, epoch)
+                val_loss, val_base_acc, val_plumber_acc, val_loss_img, val_loss_txt = validate_feat(val_loader, clip_model, classifier, projector, text_projector, 
+                         text_encodings, class_prompts, clip_prompted, criterion, epoch)
         else:    
-            train_loss,  train_base_acc, train_clip_acc, train_loss_img, train_loss_txt = train_one_epoch(train_loader, clip_model, classifier, projector, clip_prompted, class_prompts, criterion, optimizer,optimizer_ctx, epoch)
+            train_loss,  train_base_acc, train_plumber_acc, train_loss_img, train_loss_txt = train_one_epoch(
+                                                                            train_loader, clip_model, classifier, 
+                                                                            projector, optimizer, text_projector, optimizer_txt,
+                                                                            text_encodings, class_prompts, clip_prompted, optimizer_ctx, 
+                                                                            criterion, epoch)
+
             if epoch % args.val_freq == 0:
-                val_loss, val_base_acc, val_clip_acc, val_loss_img, val_loss_txt = validate(val_loader, clip_model, classifier, projector, clip_prompted, class_prompts, criterion, epoch)
-        scheduler.step()
+                val_loss, val_base_acc, val_plumber_acc, val_loss_img, val_loss_txt = validate(val_loader, clip_model, classifier, projector, text_projector, 
+                         text_encodings, class_prompts, clip_prompted, criterion, epoch)
         
-        fabric.print(f"Epoch {epoch}/{args.num_epochs}| Train Loss: {train_loss:.4f}, Train Base Model Accuracy: {train_base_acc:.4f}, Train CLIP Accuracy: {train_clip_acc:.4f}, Val Loss: {val_loss:.4f}, Val Base Model Accuracy: {val_base_acc:.4f}, Val CLIP Accuracy: {val_clip_acc:.4f}")
+        if args.img_projection:
+            scheduler.step()
+        if args.txt_projection:
+            scheduler_txt.step()
+
+        
+        fabric.print(f"Epoch {epoch}/{args.num_epochs}| Train Loss: {train_loss:.4f}, Train Base Model Accuracy: {train_base_acc:.4f}, Train PLUMBER Accuracy: {train_plumber_acc:.4f}, Val Loss: {val_loss:.4f}, Val Base Model Accuracy: {val_base_acc:.4f}, Val PLUMBER Accuracy: {val_plumber_acc:.4f}")
 
         losses_dict = {"train_loss": train_loss, "train_loss_img": train_loss_img, "train_loss_txt": train_loss_txt,
-                        "train_base_acc": train_base_acc, "train_clip_acc": train_clip_acc,
+                        "train_base_acc": train_base_acc, "train_plumber_acc": train_plumber_acc,
                         "val_loss": val_loss, "val_loss_img": val_loss_img, "val_loss_txt": val_loss_txt, 
-                        "val_base_acc": val_base_acc, "val_clip_acc": val_clip_acc}
+                        "val_base_acc": val_base_acc, "val_plumber_acc": val_plumber_acc}
 
         fabric.log_dict(losses_dict, step=epoch)
         
@@ -736,7 +896,7 @@ def main(args):
             state.update(epoch=epoch)
             fabric.save(os.path.join(args.save_dir, "best_projector_weights.pth"), state)
         
-        if epoch % 1 == 0:
+        if epoch % 5 == 0:
             state.update(epoch=epoch)
             fabric.save(os.path.join(args.save_dir, f"projector_weights_{epoch+1}.pth"), state)
 
@@ -754,17 +914,22 @@ if __name__ == "__main__":
     parser.add_argument('--batch_size', type=int, default=32, help='Batch size for the dataloader')
     parser.add_argument('--seed', type=int, default=42, help='Seed for reproducibility')
     
+    parser.add_argument('--img_projection', action='store_true', help='Whether to use task projection or not')
+    parser.add_argument('--txt_projection', action='store_true', help='Whether to use text projection or not')
+
     parser.add_argument('--classifier_name', required=True,  help='Name of the classifier to use sam_vit_h, mae_vit_large_patch16, dino_vits16, resnet50, resnet50_adv_l2_0.1, resnet50_adv_l2_0.5, resnet50x1_bitm, resnetv2_101x1_bit.goog_in21k, deeplabv3_resnet50, deeplabv3_resnet101, fcn_resnet50, fcn_resnet101')
     parser.add_argument('--classifier_checkpoint_path', type=str, help='Path to checkpoint to load the classifier from')
     parser.add_argument('--use_imagenet_pretrained', action='store_true', help='Whether to use imagenet pretrained weights or not')
     parser.add_argument('--clip_model_name', default='ViT-B/32', help='Name of the CLIP model to use.')
     parser.add_argument('--prompt_path', type=str, help='Path to the prompt file')
+    parser.add_argument('--n_promt_ctx', type=int, default=16, help='Number of learnable prompt token for each cls')
+    parser.add_argument('--learnable_prompts', action='store_true', help='Whether to use learnable prompts or not')
 
     parser.add_argument('--num_epochs', type=int, default=100, help='Number of training epochs')
     parser.add_argument('--optimizer', type=str, choices=['adam','adamw', 'sgd'], default='adamw', help='Type of optimizer to use')
     parser.add_argument('--learning_rate', type=float, default=1e-3, help='Learning rate for the optimizer')
     parser.add_argument('--val_freq', type=int, default=1, help='Validation frequency')
-    parser.add_argument('--save_dir', type=str, default='checkpoints', help='Directory to save the results')
+    parser.add_argument('--save_dir', type=str, default=None, help='Directory to save the results')
     parser.add_argument('--prefix', type=str, default='', help='prefix to add to the save directory')
 
     parser.add_argument('--proj_clip', action='store_true', help='Whether to project the clip embeddings or the classifier embeddings')
@@ -788,12 +953,10 @@ if __name__ == "__main__":
     sys.stdout.flush()
 
     # Make directory for saving results
-    args.save_dir = get_save_dir(args)
-    temp_dir = os.path.join(args.save_dir, 'lightning_logs')#TODO: check this
+    args.save_dir = get_save_dir(args)    
+    os.makedirs(os.path.join(args.save_dir, 'lightning_logs'), exist_ok=True)
     
-    os.makedirs(temp_dir, exist_ok=True)
-    
-    print(f"Results will be saved to {args.save_dir}")
+    print(f"\nResults will be saved to {args.save_dir}")
     
     with open(os.path.join(args.save_dir, 'args.txt'), 'w') as f:
         for arg, value in vars(args).items():
@@ -813,3 +976,37 @@ if __name__ == "__main__":
     seed_everything(args.seed)
 
     main(args)
+
+'''
+ python step1_plumber.py \
+        --data_dir './data/'  \
+        --domain_name 'real'    \
+        --dataset_name 'cifar10'    \
+        --train_on_testset    \
+        --use_saved_features \
+        --num_classes 10  \
+        --batch_size 256  \
+        --seed 42    \
+        --img_projection \
+        --txt_projection \
+        --learnable_prompts \
+        --classifier_name 'SimpleCNN' \
+        --classifier_checkpoint_path 'logs_2/cifar10/all/simple_cnn/classifier/model_epoch_29.pth' \
+        --clip_model_name 'ViT-B/32' \
+        --prompt_path 'data/cifar10/CiFAR10_CLIP_ViT-B_32_text_embeddings.pth' \
+        --n_promt_ctx 16 \
+        --num_epochs 10 \
+        --optimizer 'sgd' \
+        --learning_rate 0.1 \
+        --val_freq 1 \
+        --prefix '' \
+        --proj_clip \
+        --projection_dim 512 \
+        --teacher_temp 2.0  \
+        --student_temp 1 \
+        --weight_img_loss 1.0 \
+        --weight_txt_loss 1.0 \
+        --num_gpus 1 \
+        --num_nodes 1
+
+'''

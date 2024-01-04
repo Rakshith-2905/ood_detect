@@ -72,8 +72,6 @@ python train_projection_distill_cont.py \
 
 
  python train_projection_distill_cont.py \
-
- python entropy_viz.py \
         --data_dir './data/'  \
         --domain_name 'real'    \
         --dataset_name 'cifar10'    \

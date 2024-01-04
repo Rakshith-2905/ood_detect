@@ -4,16 +4,16 @@ import torch.nn.functional as F
 import torch.optim as optim
 import torchvision
 import torchvision.transforms as transforms
-from torch.utils.data import Subset
-from sklearn.model_selection import train_test_split
-import torchvision.datasets as dset
 from torch.utils.data import Dataset
+
+import os
+import argparse
 import ssl
 ssl._create_default_https_context = ssl._create_unverified_context
 
 class CIFAR10TwoTransforms(Dataset):
     def __init__(self, root, train, transform1, transform2, selected_classes=None):
-        self.original_dataset = dset.CIFAR10(root=root, train=train, download=True, transform=None)
+        self.original_dataset = torchvision.datasets.CIFAR10(root=root, train=train, download=True, transform=None)
         self.transform1 = transform1
         self.transform2 = transform2
 
@@ -100,47 +100,73 @@ def train(model, trainloader, testloader, epochs=10, device='cpu'):
         test_accuracy = calculate_accuracy(testloader, model, device=device)
         print(f'Epoch {epoch + 1}, Loss: {running_loss / len(trainloader)}, Train accuracy: {train_accuracy}%, Test accuracy: {test_accuracy}%')
 
+        # Save the train log
+        with open(os.path.join(args.log_dir, 'train_log.txt'), 'a') as f:
+            f.write(f'Epoch {epoch + 1}, Loss: {running_loss / len(trainloader)}, Train accuracy: {train_accuracy}%, Test accuracy: {test_accuracy}%\n')
         # Save Model
-        torch.save(model.state_dict(), f'cifar10_full_logs/model_epoch_{epoch+1}.pth')
+        torch.save(model.state_dict(),
+                   os.path.join(args.log_dir, f'model_epoch_{epoch}.pth'))
 
     print('Finished Training')
 
 def test(model, testloader, device='cpu'):
     # Load Model
-    model.load_state_dict(torch.load('cifar10_full_logs/model_epoch_29.pth'))
+    model.load_state_dict(torch.load(os.path.join(args.log_dir, 'model_epoch_29.pth')))
 
     # Test Accuracy
     test_accuracy = calculate_accuracy(testloader, model, device=device)
     print(f'Test accuracy: {test_accuracy}%')
 
 if __name__ == '__main__':
+    parser = argparse.ArgumentParser(description='Train Simple CNN on CIFAR-10 Dataset')
+    parser.add_argument('--batch_size', type=int, default=32, help='Batch size')
+    parser.add_argument('--epochs', type=int, default=30, help='Number of epochs')
+    parser.add_argument('--data_dir', type=str, default='./data', help='Directory to store data')
+    parser.add_argument('--selected_classes', nargs='+', type=int, default=None, help='List of selected classes')
+    parser.add_argument('--log_dir', type=str, default='./logs_2/', help='Directory to store logs')
+
+    args = parser.parse_args()
 
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     # Data Preprocessing
     transform = transforms.Compose([transforms.ToTensor(), transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))])
 
-    # Loading and Subsetting CIFAR-10 Dataset
-    full_trainset = torchvision.datasets.CIFAR10(root='./data', train=True, download=True, transform=transform)
-    full_testset = torchvision.datasets.CIFAR10(root='./data', train=False, download=True, transform=transform)
-
-    # # Selecting classes 0, 1, and 2
-    # train_indices = [i for i, (_, y) in enumerate(full_trainset) if y in [0, 1, 2]]
-    # test_indices = [i for i, (_, y) in enumerate(full_testset) if y in [0, 1, 2]]
-
-    # trainset = Subset(full_trainset, train_indices)
-    # testset = Subset(full_testset, test_indices)
-    
-    trainset = CIFAR10TwoTransforms(root='./data', train=True, transform1=transform, transform2=None, selected_classes=None)
-    testset = CIFAR10TwoTransforms(root='./data', train=False, transform1=transform, transform2=None, selected_classes=None)
+    trainset = CIFAR10TwoTransforms(root=args.data_dir, train=True, transform1=transform, transform2=None, selected_classes=args.selected_classes)
+    testset = CIFAR10TwoTransforms(root=args.data_dir, train=False, transform1=transform, transform2=None, selected_classes=args.selected_classes)
 
     # DataLoader
-    trainloader = torch.utils.data.DataLoader(trainset, batch_size=32, shuffle=True, num_workers=2)
-    testloader = torch.utils.data.DataLoader(testset, batch_size=32, shuffle=False, num_workers=2)
+    trainloader = torch.utils.data.DataLoader(trainset, batch_size=args.batch_size, shuffle=True, num_workers=2)
+    testloader = torch.utils.data.DataLoader(testset, batch_size=args.batch_size, shuffle=False, num_workers=2)
+
+    # Print the length of the dataset
+    print(f"Length of trainset: {len(trainset)}")
+    print(f"Length of testset: {len(testset)}")
+    print(f"Classes: {trainset.class_names}")
+
+    args.log_dir = os.path.join(args.log_dir, 'cifar10')
+    # Update log directory with the selected classes
+    if args.selected_classes is not None:
+        args.log_dir = os.path.join(args.log_dir, '_'.join([str(x) for x in args.selected_classes]))
+    else:
+        args.log_dir = os.path.join(args.log_dir, 'all')
+    args.log_dir = os.path.join(args.log_dir, 'simple_cnn', 'classifier')
+
+    if not os.path.exists(args.log_dir):
+        os.makedirs(args.log_dir)
+
+    # Save the arguments
+    with open(os.path.join(args.log_dir, 'args.txt'), 'w') as f:
+        f.write(str(args))
 
     # Model, Loss Function, and Optimizer
     net = SimpleCNN()
 
     net = net.to(device)
     # Training and Testing
-    #train(net, trainloader, testloader, epochs=30, device=device)
+    train(net, trainloader, testloader, epochs=args.epochs, device=device)
     test(net, testloader, device=device)
+
+'''
+Sample Command:
+python simple_classifier.py --batch_size=32 --epoch=30 --data_dir='./data' --selected_classes 0 1 2 --log_dir='./logs_2'
+'''
