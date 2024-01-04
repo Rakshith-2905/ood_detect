@@ -504,8 +504,8 @@ if __name__ == "__main__":
         --batch_size 256  \
         --seed 42    \
         --img_projection \
-        --txt_projection \
-        --step1_checkpoint_path 'logs_2/cifar10/all/simple_cnn/plumber_img_text_proj/_clsEpoch_29_bs_256_lr_0.1_teT_0.5_sT_1.0_imgweight_1.0_txtweight_1.0_is_mlp_False/step_1/projector_weights_final.pth' \
+        --learnable_prompts \
+        --step1_checkpoint_path 'logs_2/cifar10/all/simple_cnn/plumber_img_proj_LP/_clsEpoch_29_bs_256_lr_0.1_teT_10.0_sT_1.0_imgweight_0.5_txtweight_8.0_is_mlp_False/step_1/projector_weights_final.pth' \
         --classifier_name 'SimpleCNN' \
         --classifier_checkpoint_path 'logs_2/cifar10/all/simple_cnn/classifier/model_epoch_29.pth' \
         --clip_model_name 'ViT-B/32' \
