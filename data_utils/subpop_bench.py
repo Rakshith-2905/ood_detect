@@ -4,11 +4,14 @@ import pandas as pd
 import torch
 from pathlib import Path
 from PIL import Image, ImageFile
+import matplotlib.pyplot as plt
+
 from torchvision import transforms
 from transformers import BertTokenizer, AutoTokenizer, DistilBertTokenizer, GPT2Tokenizer
 from torchvision import datasets
+from torch.utils.data import DataLoader, RandomSampler, BatchSampler, WeightedRandomSampler
 
-from data_utils.fast_dataloader import InfiniteDataLoader, FastDataLoader
+# from fast_dataloader import InfiniteDataLoader, FastDataLoader
 
 
 ImageFile.LOAD_TRUNCATED_IMAGES = True
@@ -212,6 +215,7 @@ class Waterbirds(SubpopDataset):
             transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225]),
         ])
         self.data_type = "images"
+
         super().__init__(root, split, metadata, transform, train_attr, subsample_type, duplicates)
 
     def transform(self, x):
@@ -495,28 +499,89 @@ class Nonliving26(BREEDSBase):
         metadata = os.path.join(data_path, "breeds", "metadata_nonliving26.csv")
         super().__init__(metadata, split, train_attr, subsample_type, duplicates)
 
+class CustomDataLoader:
+    def __init__(self, dataset, weights, batch_size, num_workers):
+        self.dataset = dataset
+        self.weights = weights
+        self.batch_size = batch_size
+        self.num_workers = num_workers
+
+        # Use WeightedRandomSampler if weights are provided, otherwise use RandomSampler
+        if self.weights is not None:
+            self.sampler = WeightedRandomSampler(self.weights, len(self.dataset), replacement=True)
+        else:
+            self.sampler = RandomSampler(self.dataset, replacement=True)
+
+        # BatchSampler to group indices into batches
+        self.batch_sampler = BatchSampler(
+            self.sampler, batch_size=self.batch_size, drop_last=True)
+
+    def get_loader(self):
+        return DataLoader(
+            dataset=self.dataset,
+            batch_sampler=self.batch_sampler,
+            num_workers=self.num_workers,
+            # Additional parameters like pin_memory can be added if required
+        )
+
+# def get_dataloader(dataset_name, data_path, split, hparams, train_attr='yes', subsample_type=None, duplicates=None):
+#     dataset_class = get_dataset_class(dataset_name)
+#     train_dataset = dataset_class(data_path, 'tr', hparams, train_attr, subsample_type, duplicates)
+#     val_dataset = dataset_class(data_path, 'va', hparams, train_attr, subsample_type, duplicates)
+#     test_dataset = dataset_class(data_path, 'te', hparams, train_attr, subsample_type, duplicates)
+#     if hparams['group_balanced']:
+#         # if attribute not available, groups degenerate to classes
+#         weights = np.asarray(dataset.weights_g)
+#         weights /= np.sum(weights)
+#     else:
+#         weights = None
+#     custom_loader = CustomDataLoader(dataset, weights, hparams['batch_size'], hparams['num_workers'])
+#     return custom_loader.get_loader()
+
+# Dataloader to return train and val dataloaders along with the class names
+def get_dataloader(dataset_name, data_path, hparams, train_attr='yes', subsample_type=None, duplicates=None):
+    dataset_class = get_dataset_class(dataset_name)
+    train_dataset = dataset_class(data_path, 'tr', hparams, train_attr, subsample_type, duplicates)
+    val_dataset = dataset_class(data_path, 'va', hparams, train_attr, subsample_type, duplicates)
+    test_dataset = dataset_class(data_path, 'te', hparams, train_attr, subsample_type, duplicates)
+    if hparams['group_balanced']:
+        train_weights = np.asarray(train_dataset.weights_g)
+        train_weights /= np.sum(train_weights)
+    else:
+        train_weights = None
+    train_loader = CustomDataLoader(train_dataset, train_weights, hparams['batch_size'], hparams['num_workers'])
+    val_loader = CustomDataLoader(val_dataset, None, hparams['batch_size'], hparams['num_workers'])
+
+    loaders = {
+        'train': train_loader.get_loader(),
+        'val': val_loader.get_loader(),
+    }
+
+    unique_labels = list(set(train_dataset.y))
+    return loaders, unique_labels
+
 if __name__ == "__main__":
 
     import __main__
 
     datasets = vars(__main__)
 
-    data_choice = "CMNIST"
-    data_dir = "/home/jupyter/datasets"
+    data_choice = "Waterbirds"
+    data_dir = "./data"
     hparams ={
-        'batch_size': 128,
+        'batch_size': 32,
         'cmnist_flip_prob': 0.5, # 0.5 for binary, 0.1 for 3-way
         'cmnist_spur_prob': 0.5, # 0.5 for binary, 0.1 for 3-way
         'cmnist_attr_prob': 0.5, # 0.5 for binary, 0.1 for 3-way
         'cmnist_label_prob': 0.5, # 0.5 for binary, 0.9 for 3-way
-        'group_balanced': True, # if attribute not available, groups degenerate to classes
-        'num_workers': 8,
+        'group_balanced': False, # if attribute not available, groups degenerate to classes
+        'num_workers': 2,
         'subsample_type': None,
         'duplicates': None
 
     }
     train_attr = 'yes'
-    num_workers = 8
+    num_workers = 2
 
     if data_choice in datasets:
         train_dataset = datasets[data_choice](data_dir, 'tr', hparams, train_attr=train_attr)
@@ -524,24 +589,30 @@ if __name__ == "__main__":
         test_dataset = datasets[data_choice](data_dir, 'te', hparams)
     else:
         raise NotImplementedError
-    
+    # Print the size of train, val and test datasets
+    print(f"Length of Train: {len(train_dataset)}")
+    print(f"Length of Val: {len(val_dataset)}")
+    print(f"Length of Test: {len(test_dataset)}")
+
+
     if hparams['group_balanced']:
         # if attribute not available, groups degenerate to classes
         train_weights = np.asarray(train_dataset.weights_g)
         train_weights /= np.sum(train_weights)
     else:
         train_weights = None
-
-    train_loader = InfiniteDataLoader(
-        dataset=train_dataset,
-        weights=train_weights,
-        batch_size=hparams['batch_size'],
-        num_workers=num_workers
-    )
-    split_names = ['va'] + datasets[data_choice].EVAL_SPLITS
-    eval_loaders = [FastDataLoader(
-        dataset=dset,
-        batch_size=max(128, hparams['batch_size'] * 2),
-        num_workers=num_workers)
-        for dset in [datasets[data_choice](data_dir, split, hparams) for split in split_names]
-    ]
+    custom_loader = CustomDataLoader(train_dataset, train_weights, hparams['batch_size'], num_workers)
+    train_loader = custom_loader.get_loader()
+    
+    # train_loader = InfiniteDataLoader(
+    #     dataset=train_dataset,
+    #     weights=train_weights,
+    #     batch_size=hparams['batch_size'],
+    #     num_workers=num_workers
+    # )
+    # eval_loader = FastDataLoader(
+    #     dataset=val_dataset,
+    #     batch_size=max(32, hparams['batch_size'] * 2),
+    #     num_workers=num_workers)
+        
+    print("Done")

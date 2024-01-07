@@ -4,6 +4,7 @@ import torch.optim as optim
 import torchvision.transforms as transforms
 from torchvision.models import resnet18, resnet34, resnet50, resnet101, resnet152
 
+import numpy as np
 import argparse
 import os
 import matplotlib.pyplot as plt
@@ -12,13 +13,56 @@ from tqdm import tqdm
 from models.resnet import CustomResNet
 from domainnet_data import DomainNetDataset, get_domainnet_loaders
 
+from step1_plumber import get_dataset, build_classifier
+from data_utils import subpop_bench
+
+def plot_images(loader, title, n_rows=2, n_cols=5, mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]):
+    """
+    Extracts the first batch of images from the given data loader and plots them in a grid with their labels.
+    Adjusts the image contrast if necessary.
+    """
+    # Get the first batch
+    if args.dataset_name in subpop_bench.DATASETS:
+        _, images, labels, _ = next(iter(loader))
+    else:
+        images, labels = next(iter(loader))
+
+    fig, axes = plt.subplots(n_rows, n_cols, figsize=(15, 6))
+    axes = axes.flatten()
+
+    # Function to denormalize the image
+    def denormalize(image):
+        image = image.numpy().transpose(1, 2, 0)
+        image = std * image + mean
+        image = np.clip(image, 0, 1)
+        return image
+
+    for i in range(n_rows * n_cols):
+        image = denormalize(images[i])
+        label = labels[i]
+
+        axes[i].imshow(image)
+        axes[i].set_title(f"Label: {label}", fontsize=10)
+        axes[i].axis('off')
+
+    plt.suptitle(title)
+    plt.tight_layout(rect=[0, 0.03, 1, 0.95])
+    save_path = os.path.join(args.save_dir, f"{title}.png")
+    plt.savefig(save_path)
+    # plt.show()
+
 def train_one_epoch(train_loader, model, criterion, optimizer, device, epoch):
     model.train()
     total_loss, total_correct, total_samples = 0, 0, len(train_loader.dataset)
     
     # Wrap the train_loader with tqdm for progress bar
     pbar = tqdm(train_loader, desc=f'Training epoch: {epoch+1}')
-    for inputs, labels in pbar:
+    for data in pbar:
+        if args.dataset_name in subpop_bench.DATASETS:
+            inputs, labels = data[1], data[2]
+        else:
+            inputs, labels = data[0], data[1]
+
         inputs, labels = inputs.to(device), labels.to(device)
         
         optimizer.zero_grad()
@@ -45,7 +89,12 @@ def validate(val_loader, model, criterion, device, epoch):
     # Wrap the val_loader with tqdm for progress bar
     pbar = tqdm(val_loader, desc=f'Validating epoch: {epoch+1}')
     with torch.no_grad():
-        for inputs, labels in pbar:
+        for data in pbar:
+            if args.dataset_name in subpop_bench.DATASETS:
+                inputs, labels = data[1], data[2]
+            else:
+                inputs, labels = data[0], data[1]
+
             inputs, labels = inputs.to(device), labels.to(device)
             outputs = model(inputs)
             loss = criterion(outputs, labels)
@@ -63,14 +112,29 @@ def validate(val_loader, model, criterion, device, epoch):
 def main(args):
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
-    loaders, class_names = get_domainnet_loaders(args.domain, batch_size=args.batch_size, train_shuffle=True)
+    if args.dataset_name == 'domainnet':
+        loaders, class_names = get_domainnet_loaders(args.domain, batch_size=args.batch_size, train_shuffle=True)
+    elif args.dataset_name in subpop_bench.DATASETS:
+        hparams = {
+            'batch_size': args.batch_size,
+            'image_size': args.image_size,
+            'num_workers': 4,
+            'group_balanced': None,
+        }
+        loaders, class_names = subpop_bench.get_dataloader(args.dataset_name, args.data_path, hparams, train_attr='yes')
 
-    train_loader = loaders['train']
-    val_loader = loaders['test']
+    train_loader, val_loader = loaders['train'], loaders['val']
 
-    model = CustomResNet(model_name=args.resnet_model, num_classes=len(class_names), use_pretrained=args.use_pretrained)
+    print(f"Number of training samples: {len(train_loader.dataset)}")
+    print(f"Number of validation samples: {len(val_loader.dataset)}")
+    print(f"Number of classes: {len(class_names)}")
+
+
+    model, _, _ = build_classifier(args.classifier_model, len(class_names), pretrained=args.use_pretrained)
     model.to(device)
 
+    print(f"Classifier model: {args.classifier_model}")
+    print(f"Using pretrained weights: {args.use_pretrained}")
     # Dataparallel for multi-GPU training
     if torch.cuda.device_count() > 1:
         print(f"Using {torch.cuda.device_count()} GPUs")
@@ -78,17 +142,34 @@ def main(args):
     
     # Loss function and optimizer
     criterion = nn.CrossEntropyLoss()
-    optimizer = optim.Adam(model.parameters(), lr=args.learning_rate)
-    scheduler = optim.lr_scheduler.MultiStepLR(optimizer, milestones=[30, 60, 90], gamma=0.1)
+    if args.optimizer == 'adam':
+        optimizer = optim.Adam(model.parameters(), lr=args.learning_rate)
+    elif args.optimizer == 'sgd':
+        optimizer = optim.SGD(model.parameters(), lr=args.learning_rate, momentum=0.9)
+    
+    # Learning rate scheduler
+    if args.scheduler == 'MultiStepLR':
+        scheduler = optim.lr_scheduler.MultiStepLR(optimizer, milestones=[30, 60, 90], gamma=0.1)
+    elif args.scheduler == 'cosine':
+        scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=100)
+    else:
+        scheduler = None
     
     # Make directory for saving results
-    save_dir = f"logs/classifier/{args.resnet_model}_{args.dataset}_{args.domain}"
-    if not os.path.exists(save_dir):
-        os.makedirs(save_dir, exist_ok=True)
+    if args.dataset_name == 'domainnet':
+        args.save_dir = f"logs/{args.dataset_name}-{args.domain}/{args.classifier_model}/classifier"
+    else:
+        args.save_dir = f"logs/{args.dataset_name}/{args.classifier_model}/classifier"
+    if not os.path.exists(args.save_dir):
+        os.makedirs(args.save_dir, exist_ok=True)
 
+
+    plot_images(train_loader, title="Training Image")
+    plot_images(val_loader, title="Validation Image")
+    assert False
     # Save arguments if not resuming
     if not args.resume:
-        with open(os.path.join(save_dir, 'args.txt'), 'w') as f:
+        with open(os.path.join(args.save_dir, 'args.txt'), 'w') as f:
             for arg, value in vars(args).items():
                 f.write(f"{arg}: {value}\n")
         
@@ -119,10 +200,11 @@ def main(args):
 
     
     for epoch in range(start_epoch, args.num_epochs):
-        train_loss, train_acc = train_one_epoch(train_loader, model, criterion, optimizer, scheduler, device, epoch)
+        train_loss, train_acc = train_one_epoch(train_loader, model, criterion, optimizer, device, epoch)
         val_loss, val_acc = validate(val_loader, model, criterion, device, epoch)
         
-        scheduler.step()
+        if scheduler is not None:
+            scheduler.step()
 
         train_losses.append(train_loss)
         train_accuracies.append(train_acc)
@@ -143,7 +225,7 @@ def main(args):
         plt.plot(val_accuracies, '-o', label='Validation')
         plt.title('Accuracy')
         plt.legend()
-        plt.savefig(os.path.join(save_dir, 'training_validation_plots.png'))
+        plt.savefig(os.path.join(args.save_dir, 'training_validation_plots.png'))
         plt.close()
 
         # Save best model based on validation accuracy
@@ -155,7 +237,7 @@ def main(args):
                 'best_val_accuracy': best_val_accuracy,
                 'optimizer_state_dict': optimizer.state_dict(),
                 'scheduler_state_dict': scheduler.state_dict(),
-            }, os.path.join(save_dir, f"best_checkpoint.pth"))
+            }, os.path.join(args.save_dir, f"best_checkpoint.pth"))
 
         if epoch % 10 == 0:
             torch.save({
@@ -168,25 +250,27 @@ def main(args):
                 'train_accuracies': train_accuracies,
                 'val_losses': val_losses,
                 'val_accuracies': val_accuracies,
-            }, os.path.join(save_dir, f"checkpoint_{epoch}.pth"))
+            }, os.path.join(args.save_dir, f"checkpoint_{epoch}.pth"))
 
     torch.save({
             'epoch': epoch,
             'model_state_dict': model.state_dict(),
-        }, os.path.join(save_dir, f"checkpoint_{epoch}.pth"))
+        }, os.path.join(args.save_dir, f"checkpoint_{epoch}.pth"))
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description='Train ResNet on WILDS Dataset')
-    parser.add_argument('--dataset', type=str, required=True, help='Name of the WILDS dataset')
-    parser.add_argument('--domain', type=str, required=True, help='Name of the domain to load')
+    parser = argparse.ArgumentParser(description='Train desired classifier model on the desired Dataset')
+    parser.add_argument('--dataset_name', type=str, required=True, help='Name of the dataset')
+    parser.add_argument('--domain', type=str, help='Name of the domain if data is from DomainNet dataset')
+    parser.add_argument('--data_path', default='./data' ,type=str, help='Path to the dataset')
     parser.add_argument('--image_size', type=int, default=224, help='Size to resize images to (assumes square images)')
     parser.add_argument('--batch_size', type=int, default=32, help='Batch size for the dataloader')
-    parser.add_argument('--class_percentage', type=float, default=1, help='Percentage of classes to be included (0.0 to 1.0)')
     parser.add_argument('--seed', type=int, default=42, help='Seed for reproducibility')
     parser.add_argument('--num_epochs', type=int, default=100, help='Number of training epochs')
+    parser.add_argument('--optimizer', type=str, choices=['adam', 'sgd'], default='adam', help='Optimizer to use')
+    parser.add_argument('--scheduler', type=str, choices=['MultiStepLR', 'cosine', 'No'], default='MultiStepLR', help='Scheduler to use')
     parser.add_argument('--learning_rate', type=float, default=0.001, help='Learning rate for the optimizer')
-    parser.add_argument('--resnet_model', type=str, choices=['resnet18', 'resnet34', 'resnet50', 'resnet101', 'resnet152'], default='resnet18', help='Type of ResNet model to use')
+    parser.add_argument('--classifier_model', type=str, choices=['resnet18', 'resnet50', 'vit_b_16', 'swin_b'], default='resnet18', help='Type of classifier model to use')
     parser.add_argument('--use_pretrained', action='store_true', help='Use pretrained weights for ResNet')
     parser.add_argument('--resume', action='store_true', help='Resume training from checkpoint')
     parser.add_argument('--checkpoint_path', type=str, help='Path to checkpoint to resume training from')
@@ -197,3 +281,22 @@ if __name__ == "__main__":
     torch.manual_seed(args.seed)
     
     main(args)
+
+
+
+"""
+Sample command to run:
+python train_classifier.py \
+        --dataset_name Waterbirds \
+        --domain None \
+        --data_path ./data \
+        --image_size 224 \
+        --batch_size 32 \
+        --seed 42 \
+        --num_epochs 100 \
+        --learning_rate 0.001 \
+        --classifier_model resnet18 \
+        --use_pretrained
+
+
+"""

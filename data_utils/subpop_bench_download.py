@@ -10,7 +10,6 @@ from pathlib import Path
 from zipfile import ZipFile
 from sklearn.model_selection import train_test_split
 
-
 logging.basicConfig(level=logging.INFO)
 
 
@@ -688,13 +687,16 @@ def generate_metadata_cmnist(data_path):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Download dataset')
-    parser.add_argument('datasets', nargs='+', type=str, default=[
-        'celeba', 'waterbirds', 'civilcomments', 'multinli', 'imagenetbg', 'metashift', 'nico++',
-        'mimic_cxr', 'chexpert', 'mimic_notes', 'cxr_multisite', 'breeds', 'cmnist'])
+    # parser.add_argument('datasets', nargs='+', type=str, default=[
+    #     'celeba', 'waterbirds', 'civilcomments', 'multinli', 'imagenetbg', 'metashift', 'nico++',
+    #     'mimic_cxr', 'chexpert', 'mimic_notes', 'cxr_multisite', 'breeds', 'cmnist'])
     parser.add_argument('--data_path', type=str)
     parser.add_argument('--download', action='store_true', default=False)
     args = parser.parse_args()
 
+    args.datasets = ['waterbirds', 'civilcomments', 'multinli', 'imagenetbg', 'metashift', 'nico++',
+                    'mimic_cxr', 'chexpert', 'mimic_notes', 'cxr_multisite']
+    # args.datasets = ['breeds', 'cmnist']
     if args.download:
         download_datasets(args.data_path, args.datasets)
     generate_metadata(args.data_path, args.datasets)

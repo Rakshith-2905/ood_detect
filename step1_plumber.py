@@ -43,6 +43,7 @@ from simple_classifier import SimpleCNN, CIFAR10TwoTransforms
 from utils_proj import SimpleDINOLoss, compute_accuracy, compute_similarities, plot_grad_flow
 from models.resnet_cifar import ResNet18
 from torchvision import transforms
+from data_utils import subpop_bench
 
 
 class PromptedCLIPTextEncoder(nn.Module):
@@ -140,7 +141,7 @@ class PromptedCLIPTextEncoder(nn.Module):
 
         return x
 
-def get_dataset(data_name, train_transforms, test_transforms, clip_transform, data_dir='../data'):
+def get_dataset(data_name, train_transforms, test_transforms, clip_transform, data_dir='../data', train_attr=None):
 
     if data_name == 'imagenet':
         train_dataset = dset.ImageFolder(root=f'{data_dir}/imagenet_train_examples', transform=train_transforms)
@@ -167,6 +168,14 @@ def get_dataset(data_name, train_transforms, test_transforms, clip_transform, da
         train_dataset = CIFAR10TwoTransforms(root=f'{data_dir}/cifar10', train=True, transform1=train_transforms, transform2=clip_transform,selected_classes= None)
         val_dataset = CIFAR10TwoTransforms(root=f'{data_dir}/cifar10', train=False, transform1=test_transforms, transform2=clip_transform,selected_classes= None)
         class_names= train_dataset.class_names
+
+    elif data_name in subpop_bench.DATASETS:
+        hparams = {} # TODO: Add hparams need it for CMNIST
+
+        train_dataset = vars(subpop_bench).items()[data_name](data_dir, 'tr', hparams, train_attr=train_attr)
+        val_dataset = vars(subpop_bench).items()[data_name](data_dir, 'va', hparams)
+        test_dataset = vars(subpop_bench).items()[data_name](data_dir, 'te', hparams)
+        
 
     else:
         raise ValueError(f"Invalid dataset name: {data_name}")
@@ -684,10 +693,10 @@ def validate_feat(data_loader, clip_model, classifier,
     
 def build_classifier(classifier_name, num_classes, pretrained=False, checkpoint_path=None):
     # TODO: Verify each of the models and the transforms
-    if classifier_name in ['vit_b_16', 'swin_b']:
-        classifier = CustomClassifier(args.classifier_name, use_pretrained=pretrained)
+    if classifier_name in ['vit_b_16', 'swin_b', 'resnet50', 'resnet18']:
+        classifier = CustomClassifier(classifier_name, use_pretrained=pretrained)
     elif classifier_name in [ 'resnet50']:
-        classifier = CustomResNet(args.classifier_name, num_classes=num_classes, use_pretrained=pretrained)
+        classifier = CustomResNet(classifier_name, num_classes=num_classes, use_pretrained=pretrained)
     elif classifier_name == 'SimpleCNN':
         classifier = SimpleCNN()
     elif classifier_name == 'Resnet18_cifar_10':
