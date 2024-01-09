@@ -135,10 +135,10 @@ def main(args):
 
     print(f"Classifier model: {args.classifier_model}")
     print(f"Using pretrained weights: {args.use_pretrained}")
-    # Dataparallel for multi-GPU training
-    if torch.cuda.device_count() > 1:
-        print(f"Using {torch.cuda.device_count()} GPUs")
-        model = nn.DataParallel(model)    
+    # # Dataparallel for multi-GPU training
+    # if torch.cuda.device_count() > 1:
+    #     print(f"Using {torch.cuda.device_count()} GPUs")
+    #     model = nn.DataParallel(model)    
     
     # Loss function and optimizer
     criterion = nn.CrossEntropyLoss()
@@ -163,10 +163,9 @@ def main(args):
     if not os.path.exists(args.save_dir):
         os.makedirs(args.save_dir, exist_ok=True)
 
-
     plot_images(train_loader, title="Training Image")
     plot_images(val_loader, title="Validation Image")
-    assert False
+    
     # Save arguments if not resuming
     if not args.resume:
         with open(os.path.join(args.save_dir, 'args.txt'), 'w') as f:
