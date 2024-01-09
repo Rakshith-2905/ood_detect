@@ -9,8 +9,8 @@ import os
 from tqdm import tqdm
 
 from domainnet_data import DomainNetDataset
-from step1_plumber import build_classifier
-from step1_plumber import get_dataset
+from train_task_distillation import build_classifier
+from train_task_distillation import get_dataset
 from simple_classifier import SimpleCNN, CIFAR10TwoTransforms
 
 def save_features_and_labels(loader, model, clip_model,  device, save_dir, prefix="train", domain="real"):

@@ -44,7 +44,7 @@ from simple_classifier import SimpleCNN, CIFAR10TwoTransforms
 from utils_proj import SimpleDINOLoss, compute_accuracy, compute_similarities, plot_grad_flow
 from models.resnet_cifar import ResNet18
 
-from step1_plumber import build_classifier, get_dataset, get_dataset_from_file, get_CLIP_text_encodings, PromptedCLIPTextEncoder
+from train_task_distillation import build_classifier, get_dataset, get_dataset_from_file, get_CLIP_text_encodings, PromptedCLIPTextEncoder
 
 
 def get_save_dir(args):
@@ -389,7 +389,7 @@ def main(args):
 
     class_prompts = None
     clip_prompted = None
-    if args.learnable_prompts:
+    if args.cls_txt_prompts:
         # Create the prompted CLIP model
         clip_prompted = PromptedCLIPTextEncoder(clip_model, n_ctx=args.n_promt_ctx, num_classes=len(class_names), device=fabric.device)
         clip_prompted = fabric.to_device(clip_prompted)
@@ -448,7 +448,7 @@ if __name__ == "__main__":
     parser.add_argument('--clip_model_name', default='ViT-B/32', help='Name of the CLIP model to use.')
     parser.add_argument('--prompt_path', type=str, help='Path to the prompt file')
     parser.add_argument('--n_promt_ctx', type=int, default=16, help='Number of learnable prompt token for each cls')
-    parser.add_argument('--learnable_prompts', action='store_true', help='Whether to use learnable prompts or not')
+    parser.add_argument('--cls_txt_prompts', action='store_true', help='Whether to use learnable prompts or not')
 
     parser.add_argument('--num_epochs', type=int, default=100, help='Number of training epochs')
     parser.add_argument('--optimizer', type=str, choices=['adam','adamw', 'sgd'], default='adamw', help='Type of optimizer to use')
@@ -494,7 +494,7 @@ if __name__ == "__main__":
     main(args)
 
 '''
- python plumber_eval.py \
+ python task_distill_eval.py \
         --data_dir './data/'  \
         --domain_name 'gaussian_blur'    \
         --dataset_name 'cifar10-c'    \
@@ -504,7 +504,7 @@ if __name__ == "__main__":
         --batch_size 256  \
         --seed 42    \
         --img_projection \
-        --learnable_prompts \
+        --cls_txt_prompts \
         --step1_checkpoint_path 'logs_2/cifar10/all/simple_cnn/plumber_img_proj_LP/_clsEpoch_29_bs_256_lr_0.1_teT_10.0_sT_1.0_imgweight_0.5_txtweight_8.0_is_mlp_False/step_1/projector_weights_final.pth' \
         --classifier_name 'SimpleCNN' \
         --classifier_checkpoint_path 'logs_2/cifar10/all/simple_cnn/classifier/model_epoch_29.pth' \

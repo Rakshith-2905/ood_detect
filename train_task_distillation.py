@@ -46,7 +46,6 @@ from models.resnet_cifar import ResNet18
 from models.prompted_CLIP import PromptedCLIPTextEncoder, PromptedCLIPImageEncoder
 
 
-
 def get_dataset(data_name, train_transforms, test_transforms, clip_transform, data_dir='../data', train_attr=None):
 
     if data_name == 'imagenet':
@@ -133,46 +132,36 @@ def get_dataset_from_file(data_name, data_dir='../data'):
     return train_dataset, test_dataset, class_names
 
 def get_save_dir(args):
-    
-    # If resume_checkpoint_path is provided, then use the save_dir from that checkpoint
     if args.resume_checkpoint_path:
-        save_dir = os.path.dirname(args.resume_checkpoint_path)
-        return save_dir
+        return os.path.dirname(args.resume_checkpoint_path)
 
-    projector_name = "plumber"
+    projector_name = "plumber" if args.proj_clip else "limber"
+    is_proj = False
+
     if args.img_projection:
         projector_name += "_img"
+        is_proj = True
     if args.txt_projection:
         projector_name += "_text"
-    projector_name += "_proj"
-    if args.learnable_prompts:
-        projector_name += "_LP"
+        is_proj = True
+
+    projector_name += "_proj" if is_proj else ""
+    projector_name += "_img_prompt" if args.img_prompting else ""
+    projector_name += "_dist_LP" if args.cls_txt_prompts and args.is_dist_prompt else ""
+    projector_name += "_LP" if args.cls_txt_prompts and not args.is_dist_prompt else ""
 
     if not args.save_dir:
-        # Get the save directory from the classifier checkpoint path, and go one directory up
-        save_dir = os.path.dirname(os.path.dirname(args.classifier_checkpoint_path))
-        save_dir = os.path.join(save_dir, projector_name)
+        classifier_dir = os.path.dirname(os.path.dirname(args.classifier_checkpoint_path))
+        save_dir = os.path.join(classifier_dir, projector_name)
     else:
         save_dir = os.path.join(args.save_dir, args.classifier_name)
-    
 
-    # get the epoch number from the checkpoint path
     epoch = int(os.path.basename(args.classifier_checkpoint_path).split('_')[-1].split('.')[0])
+    save_dir_details = f"{args.prefix}_clsEpoch_{epoch}_bs_{args.batch_size}_lr_{args.learning_rate}"
+    save_dir_details += f"_teT_{args.teacher_temp}_sT_{args.student_temp}"
+    save_dir_details += f"_imgweight_{args.weight_img_loss}_txtweight_{args.weight_txt_loss}_is_mlp_{args.is_mlp}"
 
-    save_dir_ = f"{args.prefix}"
-    save_dir_ += f"_clsEpoch_{epoch}"
-    save_dir_ += f"_bs_{args.batch_size}"
-    save_dir_ += f"_lr_{args.learning_rate}"
-    save_dir_ += f"_teT_{args.teacher_temp}_sT_{args.student_temp}"
-    save_dir_ += f"_imgweight_{args.weight_img_loss}_txtweight_{args.weight_txt_loss}"
-    save_dir_ += f"_is_mlp_{args.is_mlp}"
-    # save_dir_ += f"_template_num_{args.template_num}"
-
-
-    save_dir = os.path.join(save_dir, save_dir_, 'step_1')
-    # save_dir += f"_{datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}"
-
-    return save_dir
+    return os.path.join(save_dir, save_dir_details, 'step_1')
 
 @torch.no_grad()
 def get_CLIP_text_encodings(clip_model, texts, save_path=None):
@@ -419,7 +408,6 @@ def validate(data_loader, clip_model, classifier,
     total_plumber_acc = fabric.all_gather(total_plumber_acc).mean() / len(data_loader)
 
     return total_loss, total_base_model_acc, total_plumber_acc, total_image_loss, total_text_loss
-
 
 def train_one_epoch_feat(data_loader, clip_model, classifier,
                     img_projector, text_projector, text_encodings_raw, class_prompts,
@@ -730,7 +718,7 @@ def main(args):
 
     class_prompts = None
     clip_prompted_txt_enc = None
-    if args.learnable_prompts:
+    if args.cls_txt_prompts:
 
         # Create the prompted CLIP model
         clip_prompted_txt_enc = PromptedCLIPTextEncoder(clip_model, n_ctx=args.n_promt_ctx, num_classes=len(class_names), 
@@ -780,7 +768,7 @@ def main(args):
 
     # add clip_prompted to the optimizer
     optimizer_txt_prompt = None
-    if args.learnable_prompts:
+    if args.cls_txt_prompts:
         optimizer_txt_prompt = torch.optim.SGD([p for p in clip_prompted_txt_enc.parameters() if p.requires_grad], lr=0.1)
         clip_prompted_txt_enc, optimizer_txt_prompt = fabric.setup(clip_prompted_txt_enc, optimizer_txt_prompt)
     
@@ -903,7 +891,7 @@ if __name__ == "__main__":
     parser.add_argument('--clip_model_name', default='ViT-B/32', help='Name of the CLIP model to use.')
     parser.add_argument('--prompt_path', type=str, help='Path to the prompt file')
     parser.add_argument('--n_promt_ctx', type=int, default=16, help='Number of learnable prompt token for each cls')
-    parser.add_argument('--learnable_prompts', action='store_true', help='Whether to use learnable prompts or not')
+    parser.add_argument('--cls_txt_prompts', action='store_true', help='Whether to use learnable prompts or not')
     parser.add_argument('--dataset_prompt', action='store_true', help='Whether to use dataset level prompts or class level prompts')
 
     parser.add_argument('--num_epochs', type=int, default=100, help='Number of training epochs')
@@ -959,7 +947,7 @@ if __name__ == "__main__":
     main(args)
 
 '''
- python step1_plumber.py \
+ python task_distillation.py \
         --data_dir './data/'  \
         --domain_name 'real'    \
         --dataset_name 'Waterbirds'    \
@@ -968,8 +956,8 @@ if __name__ == "__main__":
         --batch_size 256  \
         --seed 42    \
         --img_projection \
-        --learnable_prompts \
-        --learnable_prompts \
+        --cls_txt_prompts \
+        --cls_txt_prompts \
         --classifier_name 'resnet18' \
         --classifier_checkpoint_path 'logs/Waterbirds/resnet18/classifier/checkpoint_99.pth' \
         --clip_model_name 'ViT-B/32' \

@@ -13,7 +13,7 @@ from tqdm import tqdm
 from models.resnet import CustomResNet
 from domainnet_data import DomainNetDataset, get_domainnet_loaders
 
-from step1_plumber import get_dataset, build_classifier
+from train_task_distillation import get_dataset, build_classifier
 from data_utils import subpop_bench
 
 def plot_images(loader, title, n_rows=2, n_cols=5, mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]):
