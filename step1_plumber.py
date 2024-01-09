@@ -12,8 +12,8 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-import torchvision.transforms as trn
 import torchvision.datasets as dset
+from torchvision import transforms
 from torch.utils.data import Dataset, DataLoader, TensorDataset, ConcatDataset
 from torch.utils.data.dataset import Subset
 
@@ -36,110 +36,16 @@ import random
 import pickle
 
 from domainnet_data import DomainNetDataset, get_data_from_saved_files
+from data_utils import subpop_bench
 
 from models.resnet import CustomClassifier, CustomResNet
 from models.projector import ProjectionHead
 from simple_classifier import SimpleCNN, CIFAR10TwoTransforms
 from utils_proj import SimpleDINOLoss, compute_accuracy, compute_similarities, plot_grad_flow
 from models.resnet_cifar import ResNet18
-from torchvision import transforms
-from data_utils import subpop_bench
+from models.prompted_CLIP import PromptedCLIPTextEncoder, PromptedCLIPImageEncoder
 
 
-class PromptedCLIPTextEncoder(nn.Module):
-    def __init__(self, clip_model, n_ctx=16, num_classes=345, device='cpu'):
-        super().__init__()
-        
-        self.clip_model = clip_model
-        self.device = device
-
-        for param in self.clip_model.parameters():
-            param.requires_grad = False
-
-
-        dtype = self.clip_model.dtype
-        ctx_dim = self.clip_model.ln_final.weight.shape[0]
-        
-        ctx_init = " ".join(["X"] * n_ctx)
-        
-        # use given words to initialize context vectors
-        prompt = clip.tokenize(ctx_init).to(self.device)
-        with torch.no_grad():
-            embedding = self.clip_model.token_embedding(prompt).type(dtype)
-        ctx_vectors = embedding[0, 1 : 1 + n_ctx, :]
-
-        self.ctx = nn.ParameterList([nn.Parameter(torch.randn_like(ctx_vectors, dtype=dtype)) for i in range(num_classes)])
-
-        self.dtype = dtype
-        self.n_ctx = n_ctx
-
-        # No gradients for the clip model parameters
-        self.transformer = clip_model.transformer
-        self.positional_embedding = clip_model.positional_embedding
-        self.ln_final = clip_model.ln_final
-        self.text_projection = clip_model.text_projection
-        self.dtype = clip_model.dtype
-
-    def compute_prefix_sufix(self, phrases):
-        
-        prompt_dummy = " ".join(["X"] * self.n_ctx)
-
-        phrases = [phrase.replace("_", " ") for phrase in phrases]
-        prompts = [prompt_dummy + " " + name for name in phrases]
-        
-        # Tokenize the prompt with the dummy preffix added
-        self.tokenized_prompts = torch.cat([clip.tokenize(p) for p in prompts]).to(self.device)
-
-        # Embed the tokens
-        with torch.no_grad():
-            embedding = self.clip_model.token_embedding(self.tokenized_prompts).type(self.dtype)
-
-        # Split the prefix and suffix from the embeddings
-        # prefix is start of sentence[SOS]: suffix is the actual phrase with EOS
-        token_prefix = embedding[:, :1, :]  # (batch, 1, dim)
-        token_suffix = embedding[:, 1 + self.n_ctx :, :] # (batch, *, dim)
-
-        return token_prefix, token_suffix
-
-    def forward(self, phrases):
-
-        # Compute the prefix (SOS) and suffix (EOS) tokens for the phrases
-        prefix, suffix = self.compute_prefix_sufix(phrases)
-
-        prompted_phrases = []
-        for i in range(len(self.ctx)):
-            # Concatenate the prefix, context, and suffix to form the new prompt
-            prompts = torch.cat(
-                [
-                    prefix[i],  # (batch, 1, dim)
-                    self.ctx[i],     # (batch, n_ctx, ctx_dim)
-                    suffix[i],  # (batch, *, dim)
-                ],
-                dim=0,
-            )
-            prompted_phrases.append(prompts)
-        
-        # Concatenate the prompted phrases
-        prompted_phrases = torch.stack(prompted_phrases, dim=0)
-
-        # Compute the embeddings for the prompted phrases
-        text_encodings = self.encode_text(prompted_phrases, self.tokenized_prompts)
-        
-        return text_encodings
-
-    def encode_text(self, prompts, tokenized_prompts):
-
-        x = prompts + self.positional_embedding.type(self.dtype)
-        x = x.permute(1, 0, 2)  # NLD -> LND
-        x = self.transformer(x)
-        x = x.permute(1, 0, 2)  # LND -> NLD
-        x = self.ln_final(x).type(self.dtype)
-
-        # x.shape = [batch_size, n_ctx, transformer.width]
-        # take features from the eot embedding (eot_token is the highest number in each sequence)
-        x = x[torch.arange(x.shape[0]), tokenized_prompts.argmax(dim=-1)] @ self.text_projection
-
-        return x
 
 def get_dataset(data_name, train_transforms, test_transforms, clip_transform, data_dir='../data', train_attr=None):
 
@@ -293,16 +199,31 @@ def progbar_wrapper(iterable, total, **kwargs):
         return tqdm(iterable, total=total, **kwargs)
     return iterable
     
-def train_one_epoch(data_loader, clip_model, classifier, 
-                    projector, optimizer, projector_txt, optimizer_txt,
-                    text_encodings_raw, class_prompts, clip_prompted, optimizer_ctx, criterion, epoch):
+def train_one_epoch(data_loader, clip_model, classifier,
+                    img_projector, text_projector, text_encodings_raw, class_prompts,
+                    clip_prompted_txt_enc, clip_prompted_img_enc,
+                    optimizers_dict, criterion, epoch):
+
     clip_model.eval()
     classifier.eval()
 
-    if projector: 
-        projector.train()
-    if projector_txt:
-        projector_txt.train()
+    def set_train_mode(*models):
+        for model in models:
+            if model:
+                model.train()
+    
+    def set_zero_grad(*optimizers_dict):
+        for optimizer_name, optimizer in optimizers_dict.items():
+            if optimizer:
+                optimizer.zero_grad()
+    
+    def optimizer_step(*optimizers_dict):
+        for optimizer_name, optimizer in optimizers_dict.items():
+            if optimizer:
+                optimizer.step()
+
+    set_train_mode(img_projector, text_projector, clip_prompted_txt_enc, clip_prompted_img_enc)
+
 
     total_loss = 0
     total_image_loss = 0
@@ -320,36 +241,34 @@ def train_one_epoch(data_loader, clip_model, classifier,
         images_clip_batch = fabric.to_device(images_clip_batch)
         labels = fabric.to_device(labels)
 
-        if projector:
-            optimizer.zero_grad()
-        if projector_txt:
-            optimizer_txt.zero_grad()
-        if clip_prompted:
-            optimizer_ctx.zero_grad()
-
+        set_zero_grad(optimizers_dict)
         
         classifier_logits, classifier_embeddings = classifier(images_batch, return_features=True) # (batch_size, embedding_dim)
 
-        clip_image_embeddings = clip_model.encode_image(images_clip_batch) # (batch_size, embedding_dim)
+        # Learnable Image Prompting
+        if clip_prompted_img_enc:
+            clip_image_embeddings = clip_prompted_img_enc(images_clip_batch) # (batch_size, embedding_dim)
+        else:
+            clip_image_embeddings = clip_model.encode_image(images_clip_batch) # (batch_size, embedding_dim)
 
         clip_image_embeddings = clip_image_embeddings.type_as(classifier_embeddings)
 
         # Project the image embeddings
         if args.img_projection:
             if args.proj_clip: # this is PLUMBER
-                proj_embeddings = projector(clip_image_embeddings) # (batch_size, projection_dim)
+                proj_embeddings = img_projector(clip_image_embeddings) # (batch_size, projection_dim)
             else: # this is LIMBER
-                proj_embeddings = projector(classifier_embeddings) # (batch_size, projection_dim)
+                proj_embeddings = img_projector(classifier_embeddings) # (batch_size, projection_dim)
         else:
             proj_embeddings = classifier_embeddings
 
         # Learnable prompts for the text prompts
-        if clip_prompted:
-            text_encodings = clip_prompted(class_prompts)
+        if clip_prompted_txt_enc:
+            text_encodings = clip_prompted_txt_enc(class_prompts)
 
         # Project the text embeddings
         if args.txt_projection:
-            text_encodings = projector_txt(text_encodings_raw)
+            text_encodings = clip_prompted_txt_enc(text_encodings_raw)
         else:
             text_encodings = text_encodings_raw
             
@@ -369,13 +288,7 @@ def train_one_epoch(data_loader, clip_model, classifier,
         
         fabric.backward(loss)
 
-        if args.img_projection:
-            optimizer.step()
-        if args.txt_projection:
-            optimizer_txt.step()
-        if args.learnable_prompts:
-            optimizer_ctx.step()
-
+        optimizer_step(optimizers_dict)
 
         probs_from_classifier = F.softmax(classifier_logits, dim=-1)
         probs_from_proj = F.softmax(logits_projection, dim=-1)
@@ -404,27 +317,29 @@ def train_one_epoch(data_loader, clip_model, classifier,
     return total_loss, total_base_model_acc, total_plumber_acc, total_image_loss, total_text_loss
 
 @torch.no_grad()
-def validate(data_loader, clip_model, classifier, 
-                    projector, projector_txt,
-                    text_encodings_raw, class_prompts, clip_prompted, criterion, epoch):
-    
+def validate(data_loader, clip_model, classifier,
+                    img_projector, text_projector, text_encodings_raw, class_prompts,
+                    clip_prompted_txt_enc, clip_prompted_img_enc, criterion, epoch):
+
     clip_model.eval()
     classifier.eval()
-    if projector:
-        projector.eval()
-    if projector_txt:
-        projector_txt.eval()
+
+    def set_eval_mode(*models):
+        for model in models:
+            if model:
+                model.eval()
+
+    set_eval_mode(img_projector, text_projector, clip_prompted_txt_enc, clip_prompted_img_enc)
+
 
     total_loss = 0
     total_image_loss = 0
     total_text_loss = 0
-    
+
     total_base_model_acc = 0
     total_plumber_acc = 0
-
-
     pbar = progbar_wrapper(
-        data_loader, total=len(data_loader), desc=f"Validating Epoch {epoch+1}"
+        data_loader, total=len(data_loader), desc=f"Training Epoch {epoch+1}"
     )
     
     for images_batch, labels, images_clip_batch in pbar:
@@ -432,29 +347,33 @@ def validate(data_loader, clip_model, classifier,
         images_batch = fabric.to_device(images_batch)
         images_clip_batch = fabric.to_device(images_clip_batch)
         labels = fabric.to_device(labels)
-
+        
         classifier_logits, classifier_embeddings = classifier(images_batch, return_features=True) # (batch_size, embedding_dim)
 
-        clip_image_embeddings = clip_model.encode_image(images_clip_batch) # (batch_size, embedding_dim)
+        # Learnable Image Prompting
+        if clip_prompted_img_enc:
+            clip_image_embeddings = clip_prompted_img_enc(images_clip_batch) # (batch_size, embedding_dim)
+        else:
+            clip_image_embeddings = clip_model.encode_image(images_clip_batch) # (batch_size, embedding_dim)
 
         clip_image_embeddings = clip_image_embeddings.type_as(classifier_embeddings)
 
         # Project the image embeddings
         if args.img_projection:
             if args.proj_clip: # this is PLUMBER
-                proj_embeddings = projector(clip_image_embeddings) # (batch_size, projection_dim)
+                proj_embeddings = img_projector(clip_image_embeddings) # (batch_size, projection_dim)
             else: # this is LIMBER
-                proj_embeddings = projector(classifier_embeddings) # (batch_size, projection_dim)
+                proj_embeddings = img_projector(classifier_embeddings) # (batch_size, projection_dim)
         else:
             proj_embeddings = classifier_embeddings
 
         # Learnable prompts for the text prompts
-        if clip_prompted:
-            text_encodings = clip_prompted(class_prompts)
+        if clip_prompted_txt_enc:
+            text_encodings = clip_prompted_txt_enc(class_prompts)
 
         # Project the text embeddings
         if args.txt_projection:
-            text_encodings = projector_txt(text_encodings_raw)
+            text_encodings = clip_prompted_txt_enc(text_encodings_raw)
         else:
             text_encodings = text_encodings_raw
             
@@ -468,8 +387,11 @@ def validate(data_loader, clip_model, classifier,
 
         loss_image = criterion(logits_projection, classifier_logits)
         loss_text = criterion(logits_projection.t(), classifier_logits.t())
-
+        
         loss = loss_image*args.weight_img_loss + loss_text*args.weight_txt_loss
+
+        
+        fabric.backward(loss)
 
         probs_from_classifier = F.softmax(classifier_logits, dim=-1)
         probs_from_proj = F.softmax(logits_projection, dim=-1)
@@ -497,17 +419,32 @@ def validate(data_loader, clip_model, classifier,
 
     return total_loss, total_base_model_acc, total_plumber_acc, total_image_loss, total_text_loss
 
-def train_one_epoch_feat(data_loader, clip_model, classifier, 
-                    projector, optimizer, projector_txt, optimizer_txt,
-                    text_encodings_raw, class_prompts, clip_prompted, optimizer_ctx, criterion, epoch):
-    
+
+def train_one_epoch_feat(data_loader, clip_model, classifier,
+                    img_projector, text_projector, text_encodings_raw, class_prompts,
+                    clip_prompted_txt_enc, clip_prompted_img_enc,
+                    optimizers_dict, criterion, epoch):
+
     clip_model.eval()
     classifier.eval()
 
-    if projector: 
-        projector.train()
-    if projector_txt:
-        projector_txt.train()
+    def set_train_mode(*models):
+        for model in models:
+            if model:
+                model.train()
+    
+    def set_zero_grad(*optimizers_dict):
+        for optimizer_name, optimizer in optimizers_dict.items():
+            if optimizer:
+                optimizer.zero_grad()
+    
+    def optimizer_step(*optimizers_dict):
+        for optimizer_name, optimizer in optimizers_dict.items():
+            if optimizer:
+                optimizer.step()
+
+    set_train_mode(img_projector, text_projector, clip_prompted_txt_enc, clip_prompted_img_enc)
+
 
     total_loss = 0
     total_image_loss = 0
@@ -526,30 +463,25 @@ def train_one_epoch_feat(data_loader, clip_model, classifier,
         labels = fabric.to_device(labels)
         clip_image_embeddings = fabric.to_device(clip_image_embeddings)
 
-        if projector:
-            optimizer.zero_grad()
-        if projector_txt:
-            optimizer_txt.zero_grad()
-        if clip_prompted:
-            optimizer_ctx.zero_grad()
+        set_zero_grad(optimizers_dict)
 
         clip_image_embeddings = clip_image_embeddings.type_as(classifier_embeddings)
         # Project the image embeddings
         if args.img_projection:
             if args.proj_clip: # this is PLUMBER
-                proj_embeddings = projector(clip_image_embeddings) # (batch_size, projection_dim)
+                proj_embeddings = img_projector(clip_image_embeddings) # (batch_size, projection_dim)
             else: # this is LIMBER
-                proj_embeddings = projector(classifier_embeddings) # (batch_size, projection_dim)
+                proj_embeddings = img_projector(classifier_embeddings) # (batch_size, projection_dim)
         else:
             proj_embeddings = classifier_embeddings
 
         # Learnable prompts for the text prompts
-        if clip_prompted:
-            text_encodings = clip_prompted(class_prompts)
+        if clip_prompted_txt_enc:
+            text_encodings = clip_prompted_txt_enc(class_prompts)
 
         # Project the text embeddings
         if args.txt_projection:
-            text_encodings = projector_txt(text_encodings_raw)
+            text_encodings = text_projector(text_encodings_raw)
         else:
             text_encodings = text_encodings_raw
 
@@ -570,12 +502,7 @@ def train_one_epoch_feat(data_loader, clip_model, classifier,
   
         fabric.backward(loss)
         
-        if args.img_projection:
-            optimizer.step()
-        if args.txt_projection:
-            optimizer_txt.step()
-        if args.learnable_prompts:
-            optimizer_ctx.step()
+        optimizer_step(optimizers_dict)
 
         probs_from_classifier = F.softmax(classifier_logits, dim=-1)
         probs_from_proj = F.softmax(logits_projection, dim=-1)
@@ -604,16 +531,20 @@ def train_one_epoch_feat(data_loader, clip_model, classifier,
     return total_loss, total_base_model_acc, total_plumber_acc, total_image_loss, total_text_loss
     
 @torch.no_grad()
-def validate_feat(data_loader, clip_model, classifier, 
-                    projector, projector_txt,
-                    text_encodings_raw, class_prompts, clip_prompted, criterion, epoch):
+def validate_feat(data_loader, clip_model, classifier,
+                    img_projector, text_projector, text_encodings_raw, class_prompts,
+                    clip_prompted_txt_enc, clip_prompted_img_enc, criterion, epoch):
+
     clip_model.eval()
     classifier.eval()
 
-    if projector: 
-        projector.eval()
-    if projector_txt:
-        projector_txt.eval()
+    def set_eval_mode(*models):
+        for model in models:
+            if model:
+                model.eval()
+
+    set_eval_mode(img_projector, text_projector, clip_prompted_txt_enc, clip_prompted_img_enc)
+
 
     total_loss = 0
     total_image_loss = 0
@@ -622,9 +553,10 @@ def validate_feat(data_loader, clip_model, classifier,
     total_base_model_acc = 0
     total_plumber_acc = 0
     pbar = progbar_wrapper(
-        data_loader, total=len(data_loader), desc=f"Training Epoch {epoch+1}"
+        data_loader, total=len(data_loader), desc=f"Validation Epoch {epoch+1}"
     )
     for classifier_logits, classifier_embeddings, labels, clip_image_embeddings in pbar:
+
 
         classifier_logits = fabric.to_device(classifier_logits)
         classifier_embeddings = fabric.to_device(classifier_embeddings)
@@ -635,19 +567,19 @@ def validate_feat(data_loader, clip_model, classifier,
         # Project the image embeddings
         if args.img_projection:
             if args.proj_clip: # this is PLUMBER
-                proj_embeddings = projector(clip_image_embeddings) # (batch_size, projection_dim)
+                proj_embeddings = img_projector(clip_image_embeddings) # (batch_size, projection_dim)
             else: # this is LIMBER
-                proj_embeddings = projector(classifier_embeddings) # (batch_size, projection_dim)
+                proj_embeddings = img_projector(classifier_embeddings) # (batch_size, projection_dim)
         else:
             proj_embeddings = classifier_embeddings
 
         # Learnable prompts for the text prompts
-        if clip_prompted:
-            text_encodings = clip_prompted(class_prompts)
+        if clip_prompted_txt_enc:
+            text_encodings = clip_prompted_txt_enc(class_prompts)
 
         # Project the text embeddings
         if args.txt_projection:
-            text_encodings = projector_txt(text_encodings_raw)
+            text_encodings = text_projector(text_encodings_raw)
         else:
             text_encodings = text_encodings_raw
 
@@ -665,6 +597,9 @@ def validate_feat(data_loader, clip_model, classifier,
         
         loss = loss_image*args.weight_img_loss + loss_text*args.weight_txt_loss
 
+  
+        fabric.backward(loss)
+        
         probs_from_classifier = F.softmax(classifier_logits, dim=-1)
         probs_from_proj = F.softmax(logits_projection, dim=-1)
 
@@ -728,7 +663,6 @@ def build_classifier(classifier_name, num_classes, pretrained=False, checkpoint_
 
 def main(args):
     
-
     # Load the CLIP model
     clip_model, clip_transform = clip.load(args.clip_model_name)
 
@@ -738,15 +672,15 @@ def main(args):
 
     fabric.print(f"Built {args.classifier_name} classifier with checkpoint path: {args.classifier_checkpoint_path}")
 
-    projector = None
+    img_projector = None
     if args.img_projection:
         if args.proj_clip:
             # This is PLUMBER
-            projector = ProjectionHead(input_dim=args.projection_dim, output_dim=args.projection_dim,is_mlp=args.is_mlp)
+            img_projector = ProjectionHead(input_dim=args.projection_dim, output_dim=args.projection_dim,is_mlp=args.is_mlp)
             fabric.print(f"Constructed img emb projection PLUMBER with projection dim: {args.projection_dim} and is_mlp: {args.is_mlp}")
         else:
             # This is LIMBER
-            projector = ProjectionHead(input_dim=classifier.feature_dim, output_dim=args.projection_dim,is_mlp=args.is_mlp)
+            img_projector = ProjectionHead(input_dim=classifier.feature_dim, output_dim=args.projection_dim,is_mlp=args.is_mlp)
             fabric.print(f"Constructed img emb projection LIMBER with projection dim: {args.projection_dim} and is_mlp: {args.is_mlp}")
     
     text_projector = None
@@ -793,52 +727,76 @@ def main(args):
         fabric.print(f"Saved CLIP {args.clip_model_name} text encodings to {args.prompt_path}")
 
     class_prompts = None
-    clip_prompted = None
+    clip_prompted_txt_enc = None
     if args.learnable_prompts:
+
         # Create the prompted CLIP model
-        clip_prompted = PromptedCLIPTextEncoder(clip_model, n_ctx=args.n_promt_ctx, num_classes=len(class_names), device=fabric.device)
-        clip_prompted = fabric.to_device(clip_prompted)
+        clip_prompted_txt_enc = PromptedCLIPTextEncoder(clip_model, n_ctx=args.n_promt_ctx, num_classes=len(class_names), 
+                                                    device=fabric.device, is_dist_prompt=args.is_dist_prompt)
+        clip_prompted_txt_enc = fabric.to_device(clip_prompted_txt_enc)
 
         class_prompts = [f"This is a photo of a {class_name}" for class_name in class_names]
 
-        fabric.print(f"Constructed CLIP Prompted Text Encoder with {len(class_names)} classes")
+        if args.dataset_prompt:
+            fabric.print(f"Constructed CLIP Prompted Text Encoder with {len(class_names)} classes")
+        else:
+            fabric.print(f"Constructed CLIP Prompted Text Encoder- dist prompting")
+    
+    if args.img_prompting:
+        # Create the prompted CLIP model
+        clip_prompted_img_enc = PromptedCLIPImageEncoder(clip_model, num_tokens=args.n_promt_ctx, device=fabric.device)
+        clip_prompted_img_enc = fabric.to_device(clip_prompted_img_enc)
+
+        fabric.print(f"Constructed CLIP Prompted Image Encoder")
 
     ########################### Create the optimizer ############################
-    optimizer = None
+    optimizer_img_proj = None
     if args.img_projection:
         # Create the optimizer and scheduler
         if args.optimizer == 'adam':
-            optimizer = torch.optim.Adam(projector.parameters(), lr=args.learning_rate)
+            optimizer_img_proj = torch.optim.Adam(img_projector.parameters(), lr=args.learning_rate)
         elif args.optimizer == 'sgd':
-            optimizer = torch.optim.SGD(projector.parameters(), lr=args.learning_rate, momentum=0.9)
+            optimizer_img_proj = torch.optim.SGD(img_projector.parameters(), lr=args.learning_rate, momentum=0.9)
         elif args.optimizer == 'adamw':
-            optimizer = torch.optim.AdamW(projector.parameters(), lr=args.learning_rate)
+            optimizer_img_proj = torch.optim.AdamW(img_projector.parameters(), lr=args.learning_rate)
 
-        projector, optimizer = fabric.setup(projector, optimizer)
-        scheduler = torch.optim.lr_scheduler.MultiStepLR(optimizer, milestones=[30, 60, 90], gamma=0.1)
+        img_projector, optimizer_img_proj = fabric.setup(img_projector, optimizer_img_proj)
+        scheduler_img_proj = torch.optim.lr_scheduler.MultiStepLR(optimizer_img_proj, milestones=[30, 60, 90], gamma=0.1)
 
     # Create optimizer for text projection
-    optimizer_txt = None
+    optimizer_txt_proj = None
     if args.txt_projection:
         if args.optimizer == 'adam':
-            optimizer_txt = torch.optim.Adam(text_projector.parameters(), lr=args.learning_rate)
+            optimizer_txt_proj = torch.optim.Adam(text_projector.parameters(), lr=args.learning_rate)
         elif args.optimizer == 'sgd':
-            optimizer_txt = torch.optim.SGD(text_projector.parameters(), lr=args.learning_rate, momentum=0.9)
+            optimizer_txt_proj = torch.optim.SGD(text_projector.parameters(), lr=args.learning_rate, momentum=0.9)
         elif args.optimizer == 'adamw':
-            optimizer_txt = torch.optim.AdamW(text_projector.parameters(), lr=args.learning_rate)
+            optimizer_txt_proj = torch.optim.AdamW(text_projector.parameters(), lr=args.learning_rate)
 
-        text_projector, optimizer_txt = fabric.setup(text_projector, optimizer_txt)
-        scheduler_txt = torch.optim.lr_scheduler.MultiStepLR(optimizer_txt, milestones=[30, 60, 90], gamma=0.1)
-
-    # Wrap the feature extractor and optimizer with Fabric   
-    # projector.linear.weight = torch.nn.Parameter(torch.eye(projector.linear.weight.shape[0],projector.linear.weight.shape[1]))
-    # projector.linear.bias = torch.nn.Parameter(torch.zeros(projector.linear.bias.shape[0]))
+        text_projector, optimizer_txt_proj = fabric.setup(text_projector, optimizer_txt_proj)
+        scheduler_txt_proj = torch.optim.lr_scheduler.MultiStepLR(optimizer_txt_proj, milestones=[30, 60, 90], gamma=0.1)
 
     # add clip_prompted to the optimizer
-    optimizer_ctx = None
+    optimizer_txt_prompt = None
     if args.learnable_prompts:
-        optimizer_ctx = torch.optim.SGD([p for p in clip_prompted.parameters() if p.requires_grad], lr=0.1)
-        clip_prompted, optimizer_ctx = fabric.setup(clip_prompted, optimizer_ctx)
+        optimizer_txt_prompt = torch.optim.SGD([p for p in clip_prompted_txt_enc.parameters() if p.requires_grad], lr=0.1)
+        clip_prompted_txt_enc, optimizer_txt_prompt = fabric.setup(clip_prompted_txt_enc, optimizer_txt_prompt)
+    
+    optimizer_img_prompt = None
+    if args.img_prompting:
+        optimizer_img_prompt = torch.optim.SGD([p for p in clip_prompted_img_enc.parameters() if p.requires_grad], lr=0.1)
+        clip_prompted_img_enc, optimizer_img_prompt = fabric.setup(clip_prompted_img_enc, optimizer_img_prompt)
+    
+    optimizers_dict = {
+        "optimizer_img_proj": optimizer_img_proj,
+        "optimizer_txt_proj": optimizer_txt_proj,
+        "optimizer_txt_prompt": optimizer_txt_prompt,
+        "optimizer_img_prompt": optimizer_img_prompt
+    }
+    scheduler_dict = {
+        "scheduler_img_proj": scheduler_img_proj,
+        "scheduler_txt_proj": scheduler_txt_proj
+    }
         
 
     # Loss function
@@ -849,9 +807,10 @@ def main(args):
         classifier = fabric.to_device(classifier)
     
     start_epoch = 0
-    state = {"projector": projector, "optimizer": optimizer, 
-             "text_projector": text_projector, "optimizer_txt": optimizer_txt,
-             "clip_prompted":clip_prompted, "optimizer_ctx": optimizer_ctx, "epoch": start_epoch}
+
+    state = {"clip_model": clip_model, "classifier": classifier, "optimizer_img_proj": optimizer_img_proj,
+                "optimizer_txt_proj": optimizer_txt_proj, "optimizer_txt_prompt": optimizer_txt_prompt, 
+                "optimizer_img_prompt": optimizer_img_prompt, "epoch": start_epoch}
 
     if args.resume_checkpoint_path:
         fabric.load(args.resume_checkpoint_path, state)
@@ -866,27 +825,36 @@ def main(args):
         if args.use_saved_features:
             train_loss,  train_base_acc, train_plumber_acc, train_loss_img, train_loss_txt = train_one_epoch_feat(
                                                                             train_loader, clip_model, classifier,
-                                                                            projector, optimizer, text_projector, optimizer_txt,
-                                                                            text_encodings, class_prompts, clip_prompted, optimizer_ctx,
-                                                                            criterion, epoch)
+                                                                            img_projector, text_projector,
+                                                                            text_encodings, class_prompts,
+                                                                            clip_prompted_txt_enc, clip_prompted_img_enc,
+                                                                            optimizers_dict, criterion, epoch)
             if epoch % args.val_freq == 0:
-                val_loss, val_base_acc, val_plumber_acc, val_loss_img, val_loss_txt = validate_feat(val_loader, clip_model, classifier, projector, text_projector, 
-                         text_encodings, class_prompts, clip_prompted, criterion, epoch)
+                val_loss, val_base_acc, val_plumber_acc, val_loss_img, val_loss_txt = validate_feat( clip_model, classifier,
+                                                                            img_projector, text_projector,
+                                                                            text_encodings, class_prompts,
+                                                                            clip_prompted_txt_enc, clip_prompted_img_enc,
+                                                                            criterion, epoch)
         else:    
             train_loss,  train_base_acc, train_plumber_acc, train_loss_img, train_loss_txt = train_one_epoch(
-                                                                            train_loader, clip_model, classifier, 
-                                                                            projector, optimizer, text_projector, optimizer_txt,
-                                                                            text_encodings, class_prompts, clip_prompted, optimizer_ctx, 
-                                                                            criterion, epoch)
-
+                                                                            train_loader, clip_model, classifier,
+                                                                            img_projector, text_projector,
+                                                                            text_encodings, class_prompts,
+                                                                            clip_prompted_txt_enc, clip_prompted_img_enc,
+                                                                            optimizers_dict, criterion, epoch)
             if epoch % args.val_freq == 0:
-                val_loss, val_base_acc, val_plumber_acc, val_loss_img, val_loss_txt = validate(val_loader, clip_model, classifier, projector, text_projector, 
-                         text_encodings, class_prompts, clip_prompted, criterion, epoch)
+                val_loss, val_base_acc, val_plumber_acc, val_loss_img, val_loss_txt = validate(
+                                                                            train_loader, clip_model, classifier,
+                                                                            img_projector, text_projector,
+                                                                            text_encodings, class_prompts,
+                                                                            clip_prompted_txt_enc, clip_prompted_img_enc,
+                                                                            criterion, epoch)
         
         if args.img_projection:
-            scheduler.step()
+            scheduler_img_proj.step()
         if args.txt_projection:
-            scheduler_txt.step()
+            scheduler_txt_proj.step()
+            
 
         
         fabric.print(f"Epoch {epoch}/{args.num_epochs}| Train Loss: {train_loss:.4f}, Train Base Model Accuracy: {train_base_acc:.4f}, Train PLUMBER Accuracy: {train_plumber_acc:.4f}, Val Loss: {val_loss:.4f}, Val Base Model Accuracy: {val_base_acc:.4f}, Val PLUMBER Accuracy: {val_plumber_acc:.4f}")
@@ -925,6 +893,7 @@ if __name__ == "__main__":
     
     parser.add_argument('--img_projection', action='store_true', help='Whether to use task projection or not')
     parser.add_argument('--txt_projection', action='store_true', help='Whether to use text projection or not')
+    parser.add_argument('--img_prompting', action='store_true', help='Whether to use image prompting or not')
 
     parser.add_argument('--classifier_name', required=True,  help='Name of the classifier to use sam_vit_h, mae_vit_large_patch16, dino_vits16, resnet50, resnet50_adv_l2_0.1, resnet50_adv_l2_0.5, resnet50x1_bitm, resnetv2_101x1_bit.goog_in21k, deeplabv3_resnet50, deeplabv3_resnet101, fcn_resnet50, fcn_resnet101')
     parser.add_argument('--classifier_checkpoint_path', type=str, help='Path to checkpoint to load the classifier from')
@@ -933,6 +902,7 @@ if __name__ == "__main__":
     parser.add_argument('--prompt_path', type=str, help='Path to the prompt file')
     parser.add_argument('--n_promt_ctx', type=int, default=16, help='Number of learnable prompt token for each cls')
     parser.add_argument('--learnable_prompts', action='store_true', help='Whether to use learnable prompts or not')
+    parser.add_argument('--dataset_prompt', action='store_true', help='Whether to use dataset level prompts or class level prompts')
 
     parser.add_argument('--num_epochs', type=int, default=100, help='Number of training epochs')
     parser.add_argument('--optimizer', type=str, choices=['adam','adamw', 'sgd'], default='adamw', help='Type of optimizer to use')
