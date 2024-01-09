@@ -10,7 +10,7 @@ import matplotlib.pyplot as plt
 from tqdm import tqdm
 
 from models.resnet import CustomResNet
-from domainnet_data import DomainNetDataset, get_domainnet_loaders
+from data_utils.domainnet_data import DomainNetDataset, get_domainnet_loaders
 from utils_proj import compute_accuracy
 
 

@@ -36,7 +36,7 @@ import numpy as np
 import random
 import pickle
 
-from domainnet_data import DomainNetDataset, get_data_from_saved_files
+from data_utils.domainnet_data import DomainNetDataset, get_data_from_saved_files
 
 from models.resnet import CustomClassifier, CustomResNet
 from models.projector import ProjectionHead

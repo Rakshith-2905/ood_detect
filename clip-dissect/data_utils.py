@@ -10,7 +10,7 @@ import torchvision.datasets as dset
 
 import sys
 sys.path.insert(0, '../')
-from domainnet_data import DomainNetDataset, get_domainnet_loaders
+from data_utils.domainnet_data import DomainNetDataset, get_domainnet_loaders
 from models.resnet import CustomClassifier, CustomResNet
 from models.projector import ProjectionHead
 

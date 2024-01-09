@@ -35,7 +35,7 @@ import numpy as np
 import random
 import pickle
 
-from domainnet_data import DomainNetDataset, get_data_from_saved_files
+from data_utils.domainnet_data import DomainNetDataset, get_data_from_saved_files
 from data_utils import subpop_bench
 
 from models.resnet import CustomClassifier, CustomResNet
@@ -83,6 +83,34 @@ def get_dataset(data_name, train_transforms, test_transforms, clip_transform, da
 
         class_names = train_dataset.class_names
     
+    elif data_name == 'CelebA':
+        class_attr = 'Young' # attribute for binary classification
+        imbalance_attr = ['Male']
+        imbalance_percent = {1: [20], 0:[80]} # 1 = Young, 0 = Not Young; 20% of the Young data will be Male
+        ignore_attrs = []  # Example: ignore samples that are 'Bald' or 'Wearing_Earrings'
+        mask = False
+        mask_region = []
+        train_dataset = FilteredCelebADataset(root_dir='data/CelebA/CelebA/Img/img_align_celeba/', 
+                                            transform=train_transforms, 
+                                            trainsform1=clip_transform,
+                                            split='tr', 
+                                            class_attr=class_attr, 
+                                            num_images=62030,
+                                            imbalance_attr=imbalance_attr,
+                                            imbalance_percent=imbalance_percent,
+                                            ignore_attrs=ignore_attrs,
+                                            mask=mask,
+                                            mask_region=mask_region)
+        
+        val_dataset = FilteredCelebADataset(root_dir='data/CelebA/CelebA/Img/img_align_celeba/',
+                                            transform=data_transforms,
+                                            split='va',
+                                            num_images=7180,
+                                            class_attr=class_attr,
+                                            imbalance_attr=imbalance_attr,
+                                            imbalance_percent={1: [50], 0:[50]} ,
+                                            ignore_attrs=ignore_attrs)
+        
     else:
         raise ValueError(f"Invalid dataset name: {data_name}")
     

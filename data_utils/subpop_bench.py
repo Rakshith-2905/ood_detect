@@ -21,7 +21,7 @@ DATASETS = [
     "CMNIST",
     # Current subpop datasets
     "Waterbirds",
-    "CelebA",
+    # "CelebA",
     "CivilCommentsFine",  # "CivilComments"
     "MultiNLI",
     "MetaShift",
@@ -533,20 +533,6 @@ class CustomDataLoader:
             num_workers=self.num_workers,
             # Additional parameters like pin_memory can be added if required
         )
-
-# def get_dataloader(dataset_name, data_path, split, hparams, train_attr='yes', subsample_type=None, duplicates=None):
-#     dataset_class = get_dataset_class(dataset_name)
-#     train_dataset = dataset_class(data_path, 'tr', hparams, train_attr, subsample_type, duplicates)
-#     val_dataset = dataset_class(data_path, 'va', hparams, train_attr, subsample_type, duplicates)
-#     test_dataset = dataset_class(data_path, 'te', hparams, train_attr, subsample_type, duplicates)
-#     if hparams['group_balanced']:
-#         # if attribute not available, groups degenerate to classes
-#         weights = np.asarray(dataset.weights_g)
-#         weights /= np.sum(weights)
-#     else:
-#         weights = None
-#     custom_loader = CustomDataLoader(dataset, weights, hparams['batch_size'], hparams['num_workers'])
-#     return custom_loader.get_loader()
 
 # Dataloader to return train and val dataloaders along with the class names
 def get_dataloader(dataset_name, data_path, hparams, transforms1=None, train_attr='yes', subsample_type=None, duplicates=None):

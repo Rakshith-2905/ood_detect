@@ -11,7 +11,8 @@ import matplotlib.pyplot as plt
 from tqdm import tqdm
 
 from models.resnet import CustomResNet
-from domainnet_data import DomainNetDataset, get_domainnet_loaders
+from data_utils.domainnet_data import DomainNetDataset, get_domainnet_loaders
+from data_utils.celebA_dataset import get_celebA_dataloader
 
 from train_task_distillation import get_dataset, build_classifier
 from data_utils import subpop_bench
@@ -112,6 +113,7 @@ def validate(val_loader, model, criterion, device, epoch):
 def main(args):
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
+    ########################### Load Dataset ###########################
     if args.dataset_name == 'domainnet':
         loaders, class_names = get_domainnet_loaders(args.domain, batch_size=args.batch_size, train_shuffle=True)
     elif args.dataset_name in subpop_bench.DATASETS:
@@ -122,6 +124,15 @@ def main(args):
             'group_balanced': None,
         }
         loaders, class_names = subpop_bench.get_dataloader(args.dataset_name, args.data_path, hparams, train_attr='yes')
+    elif args.dataset_name == 'CelebA':
+        class_attr = 'Young' # attribute for binary classification
+        imbalance_attr = ['Male']
+        imbalance_percent = {1: [20], 0:[80]} # 1 = Young, 0 = Not Young; 20% of the Young data will be Male
+        ignore_attrs = []  # Example: ignore samples that are 'Bald' or 'Wearing_Earrings'
+
+        loaders, class_names = get_celebA_dataloader(args.batch_size, class_attr, imbalance_attr, imbalance_percent, 
+                                                     ignore_attrs, img_size=args.image_size, mask=False, mask_region=None)
+        
 
     train_loader, val_loader = loaders['train'], loaders['val']
 
@@ -135,10 +146,12 @@ def main(args):
 
     print(f"Classifier model: {args.classifier_model}")
     print(f"Using pretrained weights: {args.use_pretrained}")
-    # # Dataparallel for multi-GPU training
-    # if torch.cuda.device_count() > 1:
-    #     print(f"Using {torch.cuda.device_count()} GPUs")
-    #     model = nn.DataParallel(model)    
+
+    print(model)
+    # Dataparallel for multi-GPU training
+    if torch.cuda.device_count() > 1:
+        print(f"Using {torch.cuda.device_count()} GPUs")
+        model = nn.DataParallel(model)    
     
     # Loss function and optimizer
     criterion = nn.CrossEntropyLoss()
@@ -227,21 +240,29 @@ def main(args):
         plt.savefig(os.path.join(args.save_dir, 'training_validation_plots.png'))
         plt.close()
 
+        # if data parallel, save the model without the module
+        if torch.cuda.device_count() > 1:
+            model_state_dict = model.module.state_dict()
+        else:
+            model_state_dict = model.state_dict()
+
         # Save best model based on validation accuracy
         if val_acc > best_val_accuracy:
             best_val_accuracy = val_acc
+                
             torch.save({
                 'epoch': epoch,
-                'model_state_dict': model.state_dict(),
+                'model_state_dict': model_state_dict,
                 'best_val_accuracy': best_val_accuracy,
                 'optimizer_state_dict': optimizer.state_dict(),
                 'scheduler_state_dict': scheduler.state_dict(),
             }, os.path.join(args.save_dir, f"best_checkpoint.pth"))
 
         if epoch % 10 == 0:
+
             torch.save({
                 'epoch': epoch,
-                'model_state_dict': model.state_dict(),
+                'model_state_dict': model_state_dict,
                 'best_val_accuracy': best_val_accuracy,
                 'optimizer_state_dict': optimizer.state_dict(),
                 'scheduler_state_dict': scheduler.state_dict(),
@@ -253,7 +274,7 @@ def main(args):
 
     torch.save({
             'epoch': epoch,
-            'model_state_dict': model.state_dict(),
+            'model_state_dict': model_state_dict,
         }, os.path.join(args.save_dir, f"checkpoint_{epoch}.pth"))
 
 
@@ -282,17 +303,16 @@ if __name__ == "__main__":
     main(args)
 
 
-
 """
 Sample command to run:
 python train_classifier.py \
-        --dataset_name Waterbirds \
+        --dataset_name CelebA \
         --domain None \
         --data_path ./data \
-        --image_size 224 \
-        --batch_size 32 \
+        --image_size 75 \
+        --batch_size 512 \
         --seed 42 \
-        --num_epochs 100 \
+        --num_epochs 30 \
         --learning_rate 0.001 \
         --classifier_model resnet18 \
         --use_pretrained

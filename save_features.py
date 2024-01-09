@@ -8,7 +8,7 @@ import argparse
 import os
 from tqdm import tqdm
 
-from domainnet_data import DomainNetDataset
+from data_utils.domainnet_data import DomainNetDataset
 from train_task_distillation import build_classifier
 from train_task_distillation import get_dataset
 from simple_classifier import SimpleCNN, CIFAR10TwoTransforms
