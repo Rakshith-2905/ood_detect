@@ -76,13 +76,14 @@ def get_dataset(data_name, train_transforms, test_transforms, clip_transform, da
         class_names= train_dataset.class_names
 
     elif data_name in subpop_bench.DATASETS:
+        dataset_class = subpop_bench.get_dataset_class(data_name)
         hparams = {} # TODO: Add hparams need it for CMNIST
+        train_dataset = dataset_class(data_dir, 'tr', hparams, clip_transform, train_attr=train_attr)
+        val_dataset = dataset_class(data_dir, 'va', hparams, clip_transform)
+        test_dataset = dataset_class(data_dir, 'te', hparams, clip_transform)
 
-        train_dataset = vars(subpop_bench).items()[data_name](data_dir, 'tr', hparams, train_attr=train_attr)
-        val_dataset = vars(subpop_bench).items()[data_name](data_dir, 'va', hparams)
-        test_dataset = vars(subpop_bench).items()[data_name](data_dir, 'te', hparams)
-        
-
+        class_names = train_dataset.class_names
+    
     else:
         raise ValueError(f"Invalid dataset name: {data_name}")
     
@@ -628,9 +629,9 @@ def validate_feat(data_loader, clip_model, classifier,
     
 def build_classifier(classifier_name, num_classes, pretrained=False, checkpoint_path=None):
     # TODO: Verify each of the models and the transforms
-    if classifier_name in ['vit_b_16', 'swin_b', 'resnet50', 'resnet18']:
+    if classifier_name in ['vit_b_16', 'swin_b']:
         classifier = CustomClassifier(classifier_name, use_pretrained=pretrained)
-    elif classifier_name in [ 'resnet50']:
+    elif classifier_name in ['resnet18', 'resnet50']:
         classifier = CustomResNet(classifier_name, num_classes=num_classes, use_pretrained=pretrained)
     elif classifier_name == 'SimpleCNN':
         classifier = SimpleCNN()
@@ -646,6 +647,7 @@ def build_classifier(classifier_name, num_classes, pretrained=False, checkpoint_
         ])
 
     if checkpoint_path:
+
         if classifier_name == 'SimpleCNN':
             classifier.load_state_dict(torch.load(checkpoint_path))
         elif classifier_name == 'Resnet18_cifar_10':
@@ -960,19 +962,18 @@ if __name__ == "__main__":
  python step1_plumber.py \
         --data_dir './data/'  \
         --domain_name 'real'    \
-        --dataset_name 'cifar10'    \
+        --dataset_name 'Waterbirds'    \
         --train_on_testset    \
-        --use_saved_features \
-        --num_classes 10  \
+        --num_classes 2  \
         --batch_size 256  \
         --seed 42    \
         --img_projection \
-        --txt_projection \
         --learnable_prompts \
-        --classifier_name 'SimpleCNN' \
-        --classifier_checkpoint_path 'logs_2/cifar10/all/simple_cnn/classifier/model_epoch_29.pth' \
+        --learnable_prompts \
+        --classifier_name 'resnet18' \
+        --classifier_checkpoint_path 'logs/Waterbirds/resnet18/classifier/checkpoint_99.pth' \
         --clip_model_name 'ViT-B/32' \
-        --prompt_path 'data/cifar10/CiFAR10_CLIP_ViT-B_32_text_embeddings.pth' \
+        --prompt_path 'data/waterbirds/waterbirds_CLIP_ViT-B_32_text_embeddings.pth' \
         --n_promt_ctx 16 \
         --num_epochs 10 \
         --optimizer 'sgd' \

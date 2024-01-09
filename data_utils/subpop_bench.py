@@ -58,7 +58,7 @@ class SubpopDataset:
     }
     EVAL_SPLITS = ['te']     # Default, subclasses may override
 
-    def __init__(self, root, split, metadata, transform, train_attr='yes', subsample_type=None, duplicates=None):
+    def __init__(self, root, split, metadata, transform, transform1= None, train_attr='yes', subsample_type=None, duplicates=None):
         df = pd.read_csv(metadata)
         df = df[df["split"] == (self.SPLITS[split])]
 
@@ -67,6 +67,7 @@ class SubpopDataset:
         self.y = df["y"].tolist()
         self.a = df["a"].tolist() if train_attr == 'yes' else [0] * len(df["a"].tolist())
         self.transform_ = transform
+        self.transform1 = transform1
         self._count_groups()
 
         if subsample_type is not None:
@@ -118,9 +119,16 @@ class SubpopDataset:
 
     def __getitem__(self, index):
         i = self.idx[index]
+
         x = self.transform(self.x[i])
         y = torch.tensor(self.y[i], dtype=torch.long)
         a = torch.tensor(self.a[i], dtype=torch.long)
+
+        if self.transform1 is not None:
+            img = Image.open(self.x[i]).convert("RGB")
+            x_1 = self.transform1(img)
+            return x, y, x_1
+
         return i, x, y, a
 
     def __len__(self):
@@ -205,7 +213,7 @@ class Waterbirds(SubpopDataset):
     CHECKPOINT_FREQ = 300
     INPUT_SHAPE = (3, 224, 224,)
 
-    def __init__(self, data_path, split, hparams, train_attr='yes', subsample_type=None, duplicates=None):
+    def __init__(self, data_path, split, hparams, transform1, train_attr='yes', subsample_type=None, duplicates=None):
         root = os.path.join(data_path, "waterbirds", "waterbird_complete95_forest2water2")
         metadata = os.path.join(data_path, "waterbirds", "metadata_waterbirds.csv")
         transform = transforms.Compose([
@@ -216,7 +224,9 @@ class Waterbirds(SubpopDataset):
         ])
         self.data_type = "images"
 
-        super().__init__(root, split, metadata, transform, train_attr, subsample_type, duplicates)
+        self.class_names = ['waterbird', 'landbird']
+        
+        super().__init__(root, split, metadata, transform, transform1, train_attr, subsample_type, duplicates)
 
     def transform(self, x):
         return self.transform_(Image.open(x).convert("RGB"))
@@ -539,11 +549,11 @@ class CustomDataLoader:
 #     return custom_loader.get_loader()
 
 # Dataloader to return train and val dataloaders along with the class names
-def get_dataloader(dataset_name, data_path, hparams, train_attr='yes', subsample_type=None, duplicates=None):
+def get_dataloader(dataset_name, data_path, hparams, transforms1=None, train_attr='yes', subsample_type=None, duplicates=None):
     dataset_class = get_dataset_class(dataset_name)
-    train_dataset = dataset_class(data_path, 'tr', hparams, train_attr, subsample_type, duplicates)
-    val_dataset = dataset_class(data_path, 'va', hparams, train_attr, subsample_type, duplicates)
-    test_dataset = dataset_class(data_path, 'te', hparams, train_attr, subsample_type, duplicates)
+    train_dataset = dataset_class(data_path, 'tr', hparams, transforms1, train_attr, subsample_type, duplicates)
+    val_dataset = dataset_class(data_path, 'va', hparams, transforms1, train_attr, subsample_type, duplicates)
+    test_dataset = dataset_class(data_path, 'te', hparams, transforms1, train_attr, subsample_type, duplicates)
     if hparams['group_balanced']:
         train_weights = np.asarray(train_dataset.weights_g)
         train_weights /= np.sum(train_weights)
@@ -557,8 +567,8 @@ def get_dataloader(dataset_name, data_path, hparams, train_attr='yes', subsample
         'val': val_loader.get_loader(),
     }
 
-    unique_labels = list(set(train_dataset.y))
-    return loaders, unique_labels
+    class_names = train_dataset.class_names    
+    return loaders, class_names
 
 if __name__ == "__main__":
 
@@ -583,6 +593,8 @@ if __name__ == "__main__":
     train_attr = 'yes'
     num_workers = 2
 
+    loggers, unique_labels = get_dataloader(data_choice, data_dir, hparams, train_attr)
+    assert False
     if data_choice in datasets:
         train_dataset = datasets[data_choice](data_dir, 'tr', hparams, train_attr=train_attr)
         val_dataset = datasets[data_choice](data_dir, 'va', hparams)
