@@ -1,9 +1,10 @@
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
+import torch.optim as optim
 import torchvision.transforms as transforms
-import clip
+from torchvision.models import resnet18, resnet34, resnet50, resnet101, resnet152
 
+import numpy as np
 import argparse
 import os
 import matplotlib.pyplot as plt
@@ -11,205 +12,171 @@ from tqdm import tqdm
 
 from models.resnet import CustomResNet
 from data_utils.domainnet_data import DomainNetDataset, get_domainnet_loaders
-from utils_proj import compute_accuracy
+from data_utils.celebA_dataset import get_celebA_dataloader
 
+from train_task_distillation import get_dataset, build_classifier
+from data_utils import subpop_bench
 
-def get_all_domainnet_loaders(batch_size=32):
-    domains = ["clipart", "infograph", "painting", "quickdraw", "real", "sketch"] 
-    loaders_dict = {}
-    for domain in domains:
-        loaders_dict[domain], class_names = get_domainnet_loaders(data_dir="/usr/workspace/KDML/DomainNet",domain_name=domain, batch_size=batch_size)
-    return loaders_dict, class_names
+def plot_images(loader, title, n_rows=2, n_cols=5, mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]):
+    """
+    Extracts the first batch of images from the given data loader and plots them in a grid with their labels.
+    Adjusts the image contrast if necessary.
+    """
+    # Get the first batch
+    if args.dataset_name in subpop_bench.DATASETS:
+        _, images, labels, _ = next(iter(loader))
+    else:
+        images, labels = next(iter(loader))
 
-def evaluate(loader, model, criterion, device):
+    fig, axes = plt.subplots(n_rows, n_cols, figsize=(15, 6))
+    axes = axes.flatten()
+
+    # Function to denormalize the image
+    def denormalize(image):
+        image = image.numpy().transpose(1, 2, 0)
+        image = std * image + mean
+        image = np.clip(image, 0, 1)
+        return image
+
+    for i in range(n_rows * n_cols):
+        image = denormalize(images[i])
+        label = labels[i]
+
+        axes[i].imshow(image)
+        axes[i].set_title(f"Label: {label}", fontsize=10)
+        axes[i].axis('off')
+
+    plt.suptitle(title)
+    plt.tight_layout(rect=[0, 0.03, 1, 0.95])
+    save_path = os.path.join(args.save_dir, f"{title}.png")
+    plt.savefig(save_path)
+    # plt.show()
+
+def evaluate(val_loader, model, criterion, device, epoch):
     model.eval()
-    total_loss = 0.0
-    total_acc = 0.0
-    total = 0
+    total_loss, total_correct, total_samples = 0, 0, len(val_loader.dataset)
+    
+    # Wrap the val_loader with tqdm for progress bar
+    pbar = tqdm(val_loader, desc=f'Validating epoch: {epoch+1}')
     with torch.no_grad():
-        for inputs, labels in loader:
+        for data in pbar:
+            if args.dataset_name in subpop_bench.DATASETS:
+                inputs, labels = data[1], data[2]
+            else:
+                inputs, labels = data[0], data[1]
+
             inputs, labels = inputs.to(device), labels.to(device)
-            
-            outputs, features = model(inputs, return_features=True)
+            outputs = model(inputs)
             loss = criterion(outputs, labels)
 
-            predictions = F.softmax(outputs, dim=-1)         
-            total_loss += loss.item()
+            batch_loss = loss.item() * inputs.size(0)
+            total_loss += batch_loss
+            _, predicted = outputs.max(1)
+            batch_correct = (predicted == labels).sum().item()
+            total_correct += batch_correct
+            # Set metrics for tqdm
+            pbar.set_postfix({"Epoch Loss": total_loss/total_samples, "Epoch Acc": total_correct/total_samples})
 
-            batch_acc = compute_accuracy(predictions, labels)   
-
-            total_acc += batch_acc
-            total += labels.size(0)
-
-    accuracy = 100. * total_acc / len(loader)
-    avg_loss = total_loss / len(loader)
-    return avg_loss, accuracy
-
-def save_features_and_labels(loader, model, device, save_dir, prefix="train", domain="real"):
-    """
-    Saves outputs, features, and labels from the model for a given dataset.
-
-    Args:
-    - loader (torch.utils.data.DataLoader): DataLoader for your dataset.
-    - model (torch.nn.Module): Your model.
-    - device (torch.device): Device to which data should be loaded.
-    - save_dir (str): Directory to save the data.
-    - prefix (str): Prefix for filenames, e.g., 'train' or 'test'.
-    """
-    # Initialize CLIP
-    clip_model, preprocess = clip.load("ViT-B/32", device=device)
-
-    if prefix == "train":
-        base_geometry_transform = transforms.Compose([
-                                        transforms.RandomResizedCrop(224),
-                                        transforms.RandomHorizontalFlip()])
-    else:
-
-        base_geometry_transform = transforms.Compose([
-                                        transforms.Resize(256),
-                                        transforms.CenterCrop(224)])        
-    
-    resnet_transform = transforms.Compose([
-            transforms.ToTensor(),
-            transforms.Normalize(mean=[0.485, 0.456, 0.406],
-                                 std=[0.229, 0.224, 0.225]),
-
-        ])
-
-    dataset = DomainNetDataset(root_dir='/usr/workspace/KDML/DomainNet', domain=domain, split=prefix, transform=None)
-
-    all_outputs = []
-    all_features = []
-    CLIP_features = []
-    all_labels = []
-
-    with torch.no_grad():
-        # for inputs, labels in loader:
-        for i in tqdm(range(len(dataset))):
-            inputs, labels = dataset[i]
-
-            labels = torch.tensor(labels)
-            
-            inputs = base_geometry_transform(inputs)
-
-            inputs_resnet = resnet_transform(inputs).unsqueeze(0).to(device)
-            inputs_clip = preprocess(inputs).unsqueeze(0).to(device)
-
-            # inputs = inputs.to(device)
-
-            outputs, features = model(inputs_resnet, return_features=True)
-
-            # Get CLIP image features for the inputs
-            image_features = clip_model.encode_image(inputs_clip)
-
-            CLIP_features.append(image_features.cpu())
-
-            all_outputs.append(outputs.cpu())
-            all_features.append(features.cpu())
-            all_labels.append(labels)
-
-    # Concatenate the results
-    CLIP_features = torch.cat(CLIP_features, dim=0)
-    all_outputs = torch.cat(all_outputs, dim=0)
-    all_features = torch.cat(all_features, dim=0)
-    all_labels = torch.stack(all_labels, dim=0)
-
-
-    print(f"CLIP features shape: {CLIP_features.shape}")
-    print(f"Outputs shape: {all_outputs.shape}")
-    print(f"Features shape: {all_features.shape}")
-    print(f"Labels shape: {all_labels.shape}")
-
-    save_dir = os.path.join(save_dir, 'features', domain)
-    # Save the results
-    if not os.path.exists(save_dir):
-        os.makedirs(save_dir)
-    torch.save(CLIP_features, os.path.join(save_dir, f"{prefix}_ViTB32_CLIP_features.pth"))
-    torch.save(all_outputs, os.path.join(save_dir, f"{prefix}_outputs.pth"))
-    torch.save(all_features, os.path.join(save_dir, f"{prefix}_features.pth"))
-    torch.save(all_labels, os.path.join(save_dir, f"{prefix}_labels.pth"))
+    return total_loss/total_samples, total_correct/total_samples
 
 def main(args):
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    
-    # Get all the test loaders for each domain
-    loaders_dict, class_names = get_all_domainnet_loaders(batch_size=args.batch_size)
 
-    # Load your trained model from checkpoint
-    checkpoint = torch.load(args.checkpoint_path)
-    
-    model = CustomResNet(model_name=args.resnet_model, num_classes=len(class_names))
-    model.load_state_dict(checkpoint['model_state_dict'])
-    epoch = checkpoint['epoch']
-    print(f"Loaded model from epoch {epoch}")
+    ########################### Load Dataset ###########################
+    if args.dataset_name == 'domainnet':
+        loaders, class_names = get_domainnet_loaders(args.domain, batch_size=args.batch_size, train_shuffle=True)
+    elif args.dataset_name in subpop_bench.DATASETS:
+        hparams = {
+            'batch_size': args.batch_size,
+            'image_size': args.image_size,
+            'num_workers': 4,
+            'group_balanced': None,
+        }
+        loaders, class_names = subpop_bench.get_dataloader(args.dataset_name, args.data_path, hparams, train_attr='yes')
+    elif args.dataset_name == 'CelebA':
+        class_attr = 'Young' # attribute for binary classification
+        imbalance_attr = ['Male']
+        imbalance_percent = {1: [20], 0:[80]} # 1 = Young, 0 = Not Young; 20% of the Young data will be Male
+        ignore_attrs = []  # Example: ignore samples that are 'Bald' or 'Wearing_Earrings'
 
+        loaders, class_names = get_celebA_dataloader(args.batch_size, class_attr, imbalance_attr, imbalance_percent, 
+                                                     ignore_attrs, img_size=args.image_size, mask=False, mask_region=None)
+        
+
+    train_loader, val_loader, test_loader = loaders['train'], loaders['val'], loaders['test']
+
+    print(f"Number of training samples: {len(train_loader.dataset)}")
+    print(f"Number of validation samples: {len(val_loader.dataset)}")
+    print(f"Number of test samples: {len(test_loader.dataset)}")
+    print(f"Number of classes: {len(class_names)}")
+
+    model, _, _ = build_classifier(args.classifier_model, len(class_names), pretrained=args.use_pretrained)
     model.to(device)
-    model.eval()
+
+    print(f"Classifier model: {args.classifier_model}")
+    print(f"Using pretrained weights: {args.use_pretrained}")
+
+    print(model)
+    # Dataparallel for multi-GPU training
+    if torch.cuda.device_count() > 1:
+        print(f"Using {torch.cuda.device_count()} GPUs")
+        model = nn.DataParallel(model)    
     
-
-    # Save results
-    save_dir = f"logs/classifier/{args.resnet_model}_{args.dataset}_real"
-    os.makedirs(save_dir, exist_ok=True)
-    if not os.path.exists(save_dir):
-        assert False, f"Directory {save_dir} does not exist"
-
-    save_features_and_labels(loaders_dict[args.domain]['train'], model, device, save_dir, prefix="train", domain=args.domain)
-    save_features_and_labels(loaders_dict[args.domain]['test'], model, device, save_dir, prefix="test", domain=args.domain)
-    assert False
-    # Loss function
+    # Loss function and optimizer
     criterion = nn.CrossEntropyLoss()
     
-    results = {}
-    for domain, loader in loaders_dict.items():
-        loss, acc = evaluate(loader['test'], model, criterion, device)
-        results[domain] = {"Loss": loss, "Accuracy": acc}
-        print(f"Domain: {domain}\tLoss: {loss:.4f}\tAccuracy: {acc:.2f}%")
+    # Make directory for saving results
+    if args.dataset_name == 'domainnet':
+        args.save_dir = f"logs/{args.dataset_name}-{args.domain}/{args.classifier_model}/classifier"
+    else:
+        args.save_dir = f"logs/{args.dataset_name}/{args.classifier_model}/classifier"
 
+    assert os.path.exists(args.save_dir), f"Save directory {args.save_dir} does not exists!"
+
+    plot_images(train_loader, title="Training Image")
+    plot_images(val_loader, title="Validation Image")
+    plot_images(test_loader, title="Test Image")
     
-    avg_ood_acc = 0
-    for domain, acc in results.items():
-        if domain != 'real':
-            avg_ood_acc += acc['Accuracy']
-    avg_ood_acc /= 5
-    with open(os.path.join(save_dir, 'evaluation_results.txt'), 'w') as f:
-        f.write("Domain\tLoss\tAccuracy\n")
-        for domain, metrics in results.items():
-            f.write(f"{domain}\t{metrics['Loss']:.4f}\t{metrics['Accuracy']:.2f}%\n")
-        f.write(f"Average OOD\t{avg_ood_acc:.2f}%\n")
+    # Load checkpoint
+    checkpoint = torch.load(args.checkpoint_path)
+    # Load model state
+    model.load_state_dict(checkpoint['model_state_dict'])
 
-def get_accuracy(model, batch_size, device, save_dir):
-    loaders_dict = get_all_domainnet_loaders(batch_size=batch_size)
-    accuracies = {}
-    for domain, loader in loaders_dict.items():
-        _, acc = evaluate(loader['test'], model, criterion, device)
-        accuracies[domain] = acc
-    if save_dir:
-        # Calulate average accuracy across domains excluding real
-        avg_ood_acc = sum([acc for domain, acc in accuracies.items() if domain != 'real']) / 5
+    val_loss, val_acc = evaluate(test_loader, model, criterion, device, 0)
+    print(f"Test Loss: {val_loss:.4f}, Test Accuracy: {val_acc:.4f}")
 
-        # Save accuracies
-        with open(os.path.join(save_dir, 'accuracies.txt'), 'w') as f:
-            f.write("Domain\tAccuracy\n")
-            for domain, acc in accuracies.items():
-                f.write(f"{domain}\t{acc:.2f}%\n")
-            f.write(f"Average OOD\t{avg_acc:.2f}%\n")
-    return accuracies
+    with open(os.path.join(args.save_dir, 'results.txt'), 'w') as f:
+        f.write(f"Dataset {args.dataset_name} {args.domain} Test Accuracy: {val_acc:.4f}\n")
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description='Train ResNet on WILDS Dataset')
-    parser.add_argument('--dataset', type=str, required=True, help='Name of the WILDS dataset')
-    parser.add_argument('--domain', type=str, required=True, help='Name of the domain to load')
+    parser = argparse.ArgumentParser(description='Train desired classifier model on the desired Dataset')
+    parser.add_argument('--dataset_name', type=str, required=True, help='Name of the dataset')
+    parser.add_argument('--domain', type=str, help='Name of the domain if data is from DomainNet dataset')
+    parser.add_argument('--data_path', default='./data' ,type=str, help='Path to the dataset')
     parser.add_argument('--image_size', type=int, default=224, help='Size to resize images to (assumes square images)')
     parser.add_argument('--batch_size', type=int, default=32, help='Batch size for the dataloader')
-    parser.add_argument('--class_percentage', type=float, default=1, help='Percentage of classes to be included (0.0 to 1.0)')
     parser.add_argument('--seed', type=int, default=42, help='Seed for reproducibility')
-    parser.add_argument('--resnet_model', type=str, choices=['resnet18', 'resnet34', 'resnet50', 'resnet101', 'resnet152'], default='resnet18', help='Type of ResNet model to use')
+    parser.add_argument('--learning_rate', type=float, default=0.001, help='Learning rate for the optimizer')
+    parser.add_argument('--classifier_model', type=str, choices=['resnet18', 'resnet50', 'vit_b_16', 'swin_b'], default='resnet18', help='Type of classifier model to use')
     parser.add_argument('--checkpoint_path', type=str, help='Path to checkpoint to resume training from')
 
     args = parser.parse_args()
+
+    # Set seed
+    torch.manual_seed(args.seed)
+    
     main(args)
 
 
-# python test_classifier.py --dataset domainnet --domain real --image_size 224 --batch_size 64 \
-#                             --class_percentage 1     --seed 42  
-#                             --resnet_model resnet50 --checkpoint_path 'logs/classifier/resnet50_domainnet_real/best_checkpoint.pth'
+"""
+Sample command to run:
+python test_classifier.py \
+        --dataset_name CelebA \
+        --data_path ./data \
+        --image_size 75 \
+        --batch_size 512 \
+        --seed 42 \
+        --classifier_model resnet18
+
+
+"""

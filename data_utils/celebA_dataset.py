@@ -316,11 +316,21 @@ def get_celebA_dataloader(batch_size, class_attr, imbalance_attr, imbalance_perc
                                         imbalance_percent={1: [50], 0:[50]} ,
                                         ignore_attrs=ignore_attrs)
 
+    test_dataset = FilteredCelebADataset(root_dir='data/CelebA/CelebA/Img/img_align_celeba/',
+                                        transform=data_transforms,
+                                        split='te',
+                                        num_images=31015,
+                                        class_attr=class_attr,
+                                        imbalance_attr=imbalance_attr,
+                                        imbalance_percent={1: [50], 0:[50]} ,
+                                        ignore_attrs=ignore_attrs)
+
     # Define a DataLoader
     train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
-    val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=True)
+    val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False)
+    test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
 
-    loaders = {'train': train_loader, 'val': val_loader}
+    loaders = {'train': train_loader, 'val': val_loader, 'test': test_loader}
     class_names = ['Not Young', 'Young']
     return loaders, class_names
 

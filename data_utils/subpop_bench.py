@@ -547,10 +547,12 @@ def get_dataloader(dataset_name, data_path, hparams, transforms1=None, train_att
         train_weights = None
     train_loader = CustomDataLoader(train_dataset, train_weights, hparams['batch_size'], hparams['num_workers'])
     val_loader = CustomDataLoader(val_dataset, None, hparams['batch_size'], hparams['num_workers'])
+    test_loader = CustomDataLoader(test_dataset, None, hparams['batch_size'], hparams['num_workers'])
 
     loaders = {
         'train': train_loader.get_loader(),
         'val': val_loader.get_loader(),
+        'test': test_loader.get_loader()
     }
 
     class_names = train_dataset.class_names    

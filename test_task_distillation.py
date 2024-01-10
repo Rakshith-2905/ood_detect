@@ -43,8 +43,8 @@ from models.projector import ProjectionHead
 from simple_classifier import SimpleCNN, CIFAR10TwoTransforms
 from utils_proj import SimpleDINOLoss, compute_accuracy, compute_similarities, plot_grad_flow
 from models.resnet_cifar import ResNet18
-
-from train_task_distillation import build_classifier, get_dataset, get_dataset_from_file, get_CLIP_text_encodings, PromptedCLIPTextEncoder
+from train_task_distillation import build_classifier, get_dataset_from_file, get_CLIP_text_encodings
+from models.prompted_CLIP import PromptedCLIPTextEncoder, PromptedCLIPImageEncoder
 
 
 def get_save_dir(args):
@@ -316,7 +316,7 @@ def validate_feat(data_loader, clip_model, classifier,
     total_plumber_acc = fabric.all_gather(total_plumber_acc).mean()/ len(data_loader)
 
     return total_loss, total_base_model_acc, total_plumber_acc, total_image_loss, total_text_loss
-    
+
 def main(args):
     
     # Load the CLIP model
@@ -328,25 +328,20 @@ def main(args):
 
     fabric.print(f"Built {args.classifier_name} classifier with checkpoint path: {args.classifier_checkpoint_path}")
 
-    projector = None
-    if args.proj_clip:
-        # This is PLUMBER
-        projector = ProjectionHead(input_dim=args.projection_dim, output_dim=args.projection_dim,is_mlp=args.is_mlp)
-        fabric.print(f"Constructed img emb projection PLUMBER with projection dim: {args.projection_dim} and is_mlp: {args.is_mlp}")
-    else:
-        # This is LIMBER
-        projector = ProjectionHead(input_dim=classifier.feature_dim, output_dim=args.projection_dim,is_mlp=args.is_mlp)
-        fabric.print(f"Constructed img emb projection LIMBER with projection dim: {args.projection_dim} and is_mlp: {args.is_mlp}")
-
-    step1_checkpoints = torch.load(args.step1_checkpoint_path)
-    projector.load_state_dict(step1_checkpoints['projector'])
-    projector = fabric.to_device(projector)
-
+    img_projector = None
+    if args.img_projection:
+        if args.proj_clip:
+            # This is PLUMBER
+            img_projector = ProjectionHead(input_dim=args.projection_dim, output_dim=args.projection_dim,is_mlp=args.is_mlp)
+            fabric.print(f"Constructed img emb projection PLUMBER with projection dim: {args.projection_dim} and is_mlp: {args.is_mlp}")
+        else:
+            # This is LIMBER
+            img_projector = ProjectionHead(input_dim=classifier.feature_dim, output_dim=args.projection_dim,is_mlp=args.is_mlp)
+            fabric.print(f"Constructed img emb projection LIMBER with projection dim: {args.projection_dim} and is_mlp: {args.is_mlp}")
+    
     text_projector = None
     if args.txt_projection:
         text_projector = ProjectionHead(input_dim=args.projection_dim, output_dim=args.projection_dim,is_mlp=args.is_mlp)
-        text_projector.load_state_dict(step1_checkpoints['text_projector'])
-        text_projector = fabric.to_device(text_projector)
         fabric.print(f"Constructed text emb projection PLUMBER with projection dim: {args.projection_dim} and is_mlp: {args.is_mlp}")
 
     ########################### Load the dataset ############################
@@ -388,18 +383,27 @@ def main(args):
         fabric.print(f"Saved CLIP {args.clip_model_name} text encodings to {args.prompt_path}")
 
     class_prompts = None
-    clip_prompted = None
+    clip_prompted_txt_enc = None
     if args.cls_txt_prompts:
-        # Create the prompted CLIP model
-        clip_prompted = PromptedCLIPTextEncoder(clip_model, n_ctx=args.n_promt_ctx, num_classes=len(class_names), device=fabric.device)
-        clip_prompted = fabric.to_device(clip_prompted)
 
-        clip_prompted.load_state_dict(step1_checkpoints['clip_prompted'])
-        clip_prompted = fabric.to_device(clip_prompted)
+        # Create the prompted CLIP model
+        clip_prompted_txt_enc = PromptedCLIPTextEncoder(clip_model, n_ctx=args.n_promt_ctx, num_classes=len(class_names), 
+                                                    device=fabric.device, is_dist_prompt=args.is_dist_prompt)
+        clip_prompted_txt_enc = fabric.to_device(clip_prompted_txt_enc)
+
         class_prompts = [f"This is a photo of a {class_name}" for class_name in class_names]
 
-        fabric.print(f"Constructed CLIP Prompted Text Encoder with {len(class_names)} classes")
+        if args.dataset_prompt:
+            fabric.print(f"Constructed CLIP Prompted Text Encoder with {len(class_names)} classes")
+        else:
+            fabric.print(f"Constructed CLIP Prompted Text Encoder- dist prompting")
+    
+    if args.img_prompting:
+        # Create the prompted CLIP model
+        clip_prompted_img_enc = PromptedCLIPImageEncoder(clip_model, num_tokens=args.n_promt_ctx, device=fabric.device)
+        clip_prompted_img_enc = fabric.to_device(clip_prompted_img_enc)
 
+        fabric.print(f"Constructed CLIP Prompted Image Encoder")
 
     # Loss function
     criterion = SimpleDINOLoss(student_temp=args.student_temp, teacher_temp=args.teacher_temp)
@@ -407,15 +411,22 @@ def main(args):
     if not args.use_saved_features:
         clip_model = fabric.to_device(clip_model)
         classifier = fabric.to_device(classifier)
+    
+        val_loss, val_base_acc, val_plumber_acc, val_loss_img, val_loss_txt = validate(
+                                                                    train_loader, clip_model, classifier,
+                                                                    img_projector, text_projector,
+                                                                    text_encodings, class_prompts,
+                                                                    clip_prompted_txt_enc, clip_prompted_img_enc,
+                                                                    criterion, 0)
+    else:
 
-    if args.use_saved_features:
-        val_loss, val_base_acc, val_plumber_acc, val_loss_img, val_loss_txt = validate_feat(val_loader, clip_model, classifier, projector, text_projector, 
-                    text_encodings, class_prompts, clip_prompted, criterion, 0)
-    else:    
-        val_loss, val_base_acc, val_plumber_acc, val_loss_img, val_loss_txt = validate(val_loader, clip_model, classifier, projector, text_projector, 
-                                       text_encodings, class_prompts, clip_prompted, criterion, 0)
-        
-        
+        val_loss, val_base_acc, val_plumber_acc, val_loss_img, val_loss_txt = validate_feat( clip_model, classifier,
+                                                                    img_projector, text_projector,
+                                                                    text_encodings, class_prompts,
+                                                                    clip_prompted_txt_enc, clip_prompted_img_enc,
+                                                                    criterion, 0)
+
+                    
     output_message = f"Dataset: {args.dataset_name} | {args.domain_name} - {args.severity}:\tVal Loss: {val_loss:.4f}, Val Base Model Accuracy: {val_base_acc:.4f}, Val PLUMBER Accuracy: {val_plumber_acc:.4f}"
     fabric.print(output_message)
 
@@ -424,6 +435,7 @@ def main(args):
         output_file_path = os.path.join(args.save_dir, "validation_results.txt")
         with open(output_file_path, "a") as file:
             file.write(output_message + "\n")
+
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Train ResNet on WILDS Dataset')
@@ -440,6 +452,7 @@ if __name__ == "__main__":
     
     parser.add_argument('--img_projection', action='store_true', help='Whether to use task projection or not')
     parser.add_argument('--txt_projection', action='store_true', help='Whether to use text projection or not')
+    parser.add_argument('--img_prompting', action='store_true', help='Whether to use image prompting or not')
     parser.add_argument('--step1_checkpoint_path', type=str, help='Path to checkpoint to load the step 1 model from')
 
     parser.add_argument('--classifier_name', required=True,  help='Name of the classifier to use sam_vit_h, mae_vit_large_patch16, dino_vits16, resnet50, resnet50_adv_l2_0.1, resnet50_adv_l2_0.5, resnet50x1_bitm, resnetv2_101x1_bit.goog_in21k, deeplabv3_resnet50, deeplabv3_resnet101, fcn_resnet50, fcn_resnet101')
@@ -449,6 +462,7 @@ if __name__ == "__main__":
     parser.add_argument('--prompt_path', type=str, help='Path to the prompt file')
     parser.add_argument('--n_promt_ctx', type=int, default=16, help='Number of learnable prompt token for each cls')
     parser.add_argument('--cls_txt_prompts', action='store_true', help='Whether to use learnable prompts or not')
+    parser.add_argument('--dataset_prompt', action='store_true', help='Whether to use dataset level prompts or class level prompts')
 
     parser.add_argument('--num_epochs', type=int, default=100, help='Number of training epochs')
     parser.add_argument('--optimizer', type=str, choices=['adam','adamw', 'sgd'], default='adamw', help='Type of optimizer to use')
