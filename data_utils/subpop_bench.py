@@ -11,8 +11,6 @@ from transformers import BertTokenizer, AutoTokenizer, DistilBertTokenizer, GPT2
 from torchvision import datasets
 from torch.utils.data import DataLoader, RandomSampler, BatchSampler, WeightedRandomSampler
 
-# from fast_dataloader import InfiniteDataLoader, FastDataLoader
-
 
 ImageFile.LOAD_TRUNCATED_IMAGES = True
 
@@ -54,7 +52,8 @@ class SubpopDataset:
     SPLITS = {               # Default, subclasses may override
         'tr': 0,
         'va': 1,
-        'te': 2
+        'te': 2,
+        'distill': 3
     }
     EVAL_SPLITS = ['te']     # Default, subclasses may override
 
@@ -540,6 +539,8 @@ def get_dataloader(dataset_name, data_path, hparams, transforms1=None, train_att
     train_dataset = dataset_class(data_path, 'tr', hparams, transforms1, train_attr, subsample_type, duplicates)
     val_dataset = dataset_class(data_path, 'va', hparams, transforms1, train_attr, subsample_type, duplicates)
     test_dataset = dataset_class(data_path, 'te', hparams, transforms1, train_attr, subsample_type, duplicates)
+    distill_dataset = dataset_class(data_path, 'distill', hparams, transforms1, train_attr, subsample_type, duplicates)
+
     if hparams['group_balanced']:
         train_weights = np.asarray(train_dataset.weights_g)
         train_weights /= np.sum(train_weights)
@@ -552,7 +553,8 @@ def get_dataloader(dataset_name, data_path, hparams, transforms1=None, train_att
     loaders = {
         'train': train_loader.get_loader(),
         'val': val_loader.get_loader(),
-        'test': test_loader.get_loader()
+        'test': test_loader.get_loader(),
+        'distill': distill_dataset
     }
 
     class_names = train_dataset.class_names    

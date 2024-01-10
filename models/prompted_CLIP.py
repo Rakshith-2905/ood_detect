@@ -20,6 +20,9 @@ class VisualTransformer(nn.Module):
         self.dtype = clip_model.dtype 
 
     def embed_image(self, x):
+        """
+        The input is tensor image
+        """
         x = self.visual.conv1(x)  # shape = [*, width, grid, grid]
         x = x.reshape(x.shape[0], x.shape[1], -1)  # shape = [*, width, grid ** 2]
         x = x.permute(0, 2, 1)  # shape = [*, grid ** 2, width]
@@ -28,6 +31,9 @@ class VisualTransformer(nn.Module):
         return x
 
     def encoder(self, x):
+        """
+        The input is after positional embedding
+        """
     
         x = self.visual.ln_pre(x)
         x = x.permute(1, 0, 2)  # NLD -> LND
@@ -45,6 +51,59 @@ class VisualTransformer(nn.Module):
         x = self.encoder(x)
         return x
 
+class PromptedCLIPImageEncoder(VisualTransformer):
+    def __init__(self, clip_model, prompt_initiation='random', 
+                 dropout=0.0, num_tokens=16, prompt_dim=768, device='cpu'):
+        super(PromptedCLIPImageEncoder, self).__init__(clip_model)
+
+        
+        patch_size = _pair((16, 16))
+
+        num_tokens = num_tokens
+        self.num_tokens = num_tokens  # number of prompted tokens
+
+        self.prompt_dropout = Dropout(dropout)
+
+        prompt_dim = 768
+        self.prompt_proj = nn.Identity()
+
+        # initiate prompt:
+        if prompt_initiation == "random":
+            val = math.sqrt(6. / float(3 * reduce(mul, patch_size, 1) + prompt_dim))  # noqa
+
+            self.prompt_embeddings = nn.Parameter(torch.zeros(
+                1, num_tokens, prompt_dim)).to(device)  # (1, n_prompt, prompt_dim)
+            # xavier_uniform initialization
+            nn.init.uniform_(self.prompt_embeddings.data, -val, val)
+        else:
+            raise ValueError("Other initiation scheme is not supported")
+
+    def incorporate_prompt(self, x):
+        """
+        The input is tensor image
+        """
+        B = x.shape[0]
+        x = self.embed_image(x) # (batch_size, cls_token + n_patches, hidden_dim) output after positional embedding
+
+        # incorporate prompt into the input features after cls token and before patches
+        x = torch.cat((
+                x[:, :1, :],
+                self.prompt_dropout(self.prompt_proj(self.prompt_embeddings).expand(B, -1, -1)),
+                x[:, 1:, :]
+            ), dim=1)
+        # (batch_size, cls_token + n_prompt + n_patches, hidden_dim)
+
+        return x
+
+    def forward(self, image_input):
+        
+        # Incorporate the prompt into the image features after the positional embedding
+        embedding_output = self.incorporate_prompt(image_input.type(self.dtype))
+
+        # Encode the image features
+        encoded = self.encoder(embedding_output.type(self.dtype))
+
+        return encoded
 
 class PromptedCLIPTextEncoder(nn.Module):
     def __init__(self, clip_model, n_ctx=16, num_classes=345, device='cpu', is_dist_prompt=False):
@@ -106,11 +165,10 @@ class PromptedCLIPTextEncoder(nn.Module):
         return token_prefix, token_suffix
 
     def forward(self, phrases):
-
         # Compute the prefix (SOS) and suffix (EOS) tokens for the phrases
         prefix, suffix = self.compute_prefix_sufix(phrases)
 
-        if self.is_dist_prompt:
+        if not self.is_dist_prompt:
             prompted_phrases = []
             for i in range(len(self.ctx)):
                 # Concatenate the prefix, context, and suffix to form the new prompt
@@ -127,6 +185,7 @@ class PromptedCLIPTextEncoder(nn.Module):
             # Concatenate the prompted phrases
             prompted_phrases = torch.stack(prompted_phrases, dim=0)
         else:
+            B = prefix.shape[0]
             # Concatenate the prefix, context, and suffix to form the new prompt
             prompted_phrases = torch.cat(
                 [
@@ -155,55 +214,6 @@ class PromptedCLIPTextEncoder(nn.Module):
 
         return x
 
-
-class PromptedCLIPImageEncoder(VisualTransformer):
-    def __init__(self, clip_model, prompt_initiation='random', 
-                 dropout=0.0, num_tokens=16, prompt_dim=768, device='cpu'):
-        super(PromptedCLIPImageEncoder, self).__init__(clip_model)
-
-        
-        patch_size = _pair((16, 16))
-
-        num_tokens = num_tokens
-        self.num_tokens = num_tokens  # number of prompted tokens
-
-        self.prompt_dropout = Dropout(dropout)
-
-        prompt_dim = 768
-        self.prompt_proj = nn.Identity()
-
-        # initiate prompt:
-        if prompt_initiation == "random":
-            val = math.sqrt(6. / float(3 * reduce(mul, patch_size, 1) + prompt_dim))  # noqa
-
-            self.prompt_embeddings = nn.Parameter(torch.zeros(
-                1, num_tokens, prompt_dim)).to(device)  # (1, n_prompt, prompt_dim)
-            # xavier_uniform initialization
-            nn.init.uniform_(self.prompt_embeddings.data, -val, val)
-        else:
-            raise ValueError("Other initiation scheme is not supported")
-
-    def incorporate_prompt(self, x):
-        # The input is after positional embedding
-        B = x.shape[0]
-        x = self.embed_image(x)
-        x = torch.cat((
-                x[:, :1, :],
-                self.prompt_dropout(self.prompt_proj(self.prompt_embeddings).expand(B, -1, -1)),
-                x[:, 1:, :]
-            ), dim=1)
-        # (batch_size, cls_token + n_prompt + n_patches, hidden_dim)
-
-        return x
-
-    def forward(self, image_input):
-        # this is the default version:
-        embedding_output = self.incorporate_prompt(image_input.type(self.dtype))
-
-        encoded = self.encoder(embedding_output.type(self.dtype))
-
-        return encoded
-    
 if __name__ == "__main__":
     device = "cuda" if torch.cuda.is_available() else "cpu"
 
@@ -213,7 +223,8 @@ if __name__ == "__main__":
 
     CLIP_image_encoder = VisualTransformer(clip_model)
 
-    visual_prompter = PromptedCLIPImageEncoder(clip_model, num_tokens=8).to(device)
+    visual_prompter = PromptedCLIPImageEncoder(clip_model, num_tokens=8, device=device).to(device)
+    text_prompter = PromptedCLIPTextEncoder(clip_model, num_classes=2, is_dist_prompt=False, device=device).to(device)
 
     # Load and preprocess the image
     image = preprocess(Image.open("donkey.jpg")).unsqueeze(0).to(device)
@@ -222,6 +233,7 @@ if __name__ == "__main__":
         image_features = CLIP_image_encoder(image)
 
         prompted_image_features = visual_prompter(image)
+        prompted_text_features = text_prompter(["a photo of a donkey", "a photo of a horse"])
 
         # Compare the text and image features
         logits_per_image, logits_per_text = clip_model(image, text)

@@ -36,6 +36,8 @@ import random
 import pickle
 
 from data_utils.domainnet_data import DomainNetDataset, get_data_from_saved_files
+from data_utils.cifar100_data import CIFAR100C, CIFAR100Filtered, CIFAR10C
+from data_utils.celebA_dataset import FilteredCelebADataset
 from data_utils import subpop_bench
 
 from models.resnet import CustomClassifier, CustomResNet
@@ -46,7 +48,7 @@ from models.resnet_cifar import ResNet18
 from models.prompted_CLIP import PromptedCLIPTextEncoder, PromptedCLIPImageEncoder
 
 
-def get_dataset(data_name, train_transforms, test_transforms, clip_transform, data_dir='../data', train_attr=None):
+def get_dataset(data_name, train_transforms, test_transforms, clip_transform, data_dir='../data', train_attr=None, return_failure_set=False):
 
     if data_name == 'imagenet':
         train_dataset = dset.ImageFolder(root=f'{data_dir}/imagenet_train_examples', transform=train_transforms)
@@ -73,6 +75,13 @@ def get_dataset(data_name, train_transforms, test_transforms, clip_transform, da
         train_dataset = CIFAR10TwoTransforms(root=f'{data_dir}/cifar10', train=True, transform1=train_transforms, transform2=clip_transform,selected_classes= None)
         val_dataset = CIFAR10TwoTransforms(root=f'{data_dir}/cifar10', train=False, transform1=test_transforms, transform2=clip_transform,selected_classes= None)
         class_names= train_dataset.class_names
+    
+    elif data_name == 'cifar10-c':
+        not_needed = CIFAR10TwoTransforms(root=f'{data_dir}/cifar10', train=False, transform1=test_transforms, transform2=clip_transform,selected_classes= None)
+        class_names= not_needed.class_names
+
+        train_dataset = CIFAR10C(corruption=args.domain_name, transform=test_transforms,clip_transform=clip_transform,level=args.severity)
+        val_dataset = train_dataset
 
     elif data_name in subpop_bench.DATASETS:
         dataset_class = subpop_bench.get_dataset_class(data_name)
@@ -80,6 +89,7 @@ def get_dataset(data_name, train_transforms, test_transforms, clip_transform, da
         train_dataset = dataset_class(data_dir, 'tr', hparams, clip_transform, train_attr=train_attr)
         val_dataset = dataset_class(data_dir, 'va', hparams, clip_transform)
         test_dataset = dataset_class(data_dir, 'te', hparams, clip_transform)
+        distill_dataset = dataset_class(data_dir, 'distill', hparams, clip_transform, train_attr=train_attr)
 
         class_names = train_dataset.class_names
     
@@ -103,16 +113,40 @@ def get_dataset(data_name, train_transforms, test_transforms, clip_transform, da
                                             mask_region=mask_region)
         
         val_dataset = FilteredCelebADataset(root_dir='data/CelebA/CelebA/Img/img_align_celeba/',
-                                            transform=data_transforms,
+                                            transform=test_transforms,
+                                            trainsform1=clip_transform,
                                             split='va',
+                                            class_attr=class_attr,
                                             num_images=7180,
+                                            imbalance_attr=imbalance_attr,
+                                            imbalance_percent={1: [50], 0:[50]} ,
+                                            ignore_attrs=ignore_attrs,
+                                            mask=mask,
+                                            mask_region=mask_region)
+        test_dataset = FilteredCelebADataset(root_dir='data/CelebA/CelebA/Img/img_align_celeba/',
+                                            transform=test_transforms,
+                                            trainsform1=clip_transform,
+                                            split='te',
+                                            num_images=31015,
                                             class_attr=class_attr,
                                             imbalance_attr=imbalance_attr,
                                             imbalance_percent={1: [50], 0:[50]} ,
                                             ignore_attrs=ignore_attrs)
+        failure_dataset = FilteredCelebADataset(root_dir='data/CelebA/CelebA/Img/img_align_celeba/',
+                                                transform=test_transforms,
+                                                trainsform1=clip_transform,
+                                                split='failure_set',
+                                                num_images=31015,
+                                                class_attr=class_attr,
+                                                imbalance_attr=imbalance_attr,
+                                                imbalance_percent={1: [50], 0:[50]} ,
+                                                ignore_attrs=ignore_attrs)
         
     else:
         raise ValueError(f"Invalid dataset name: {data_name}")
+    
+    if return_failure_set:
+        return train_dataset, val_dataset, test_dataset, distill_dataset, class_names
     
     return train_dataset, val_dataset, class_names
 
@@ -272,7 +306,7 @@ def train_one_epoch(data_loader, clip_model, classifier,
         clip_image_embeddings = clip_image_embeddings.type_as(classifier_embeddings)
 
         # Project the image embeddings
-        if args.img_projection:
+        if img_projector:
             if args.proj_clip: # this is PLUMBER
                 proj_embeddings = img_projector(clip_image_embeddings) # (batch_size, projection_dim)
             else: # this is LIMBER
@@ -282,11 +316,11 @@ def train_one_epoch(data_loader, clip_model, classifier,
 
         # Learnable prompts for the text prompts
         if clip_prompted_txt_enc:
-            text_encodings = clip_prompted_txt_enc(class_prompts)
+            text_encodings_raw = clip_prompted_txt_enc(class_prompts)
 
         # Project the text embeddings
-        if args.txt_projection:
-            text_encodings = clip_prompted_txt_enc(text_encodings_raw)
+        if text_projector:
+            text_encodings = text_projector(text_encodings_raw)
         else:
             text_encodings = text_encodings_raw
             
@@ -377,7 +411,7 @@ def validate(data_loader, clip_model, classifier,
         clip_image_embeddings = clip_image_embeddings.type_as(classifier_embeddings)
 
         # Project the image embeddings
-        if args.img_projection:
+        if img_projector:
             if args.proj_clip: # this is PLUMBER
                 proj_embeddings = img_projector(clip_image_embeddings) # (batch_size, projection_dim)
             else: # this is LIMBER
@@ -387,11 +421,11 @@ def validate(data_loader, clip_model, classifier,
 
         # Learnable prompts for the text prompts
         if clip_prompted_txt_enc:
-            text_encodings = clip_prompted_txt_enc(class_prompts)
+            text_encodings_raw = clip_prompted_txt_enc(class_prompts)
 
         # Project the text embeddings
-        if args.txt_projection:
-            text_encodings = clip_prompted_txt_enc(text_encodings_raw)
+        if text_projector:
+            text_encodings = text_projector(text_encodings_raw)
         else:
             text_encodings = text_encodings_raw
             
@@ -407,9 +441,6 @@ def validate(data_loader, clip_model, classifier,
         loss_text = criterion(logits_projection.t(), classifier_logits.t())
         
         loss = loss_image*args.weight_img_loss + loss_text*args.weight_txt_loss
-
-        
-        fabric.backward(loss)
 
         probs_from_classifier = F.softmax(classifier_logits, dim=-1)
         probs_from_proj = F.softmax(logits_projection, dim=-1)
@@ -483,8 +514,11 @@ def train_one_epoch_feat(data_loader, clip_model, classifier,
         set_zero_grad(optimizers_dict)
 
         clip_image_embeddings = clip_image_embeddings.type_as(classifier_embeddings)
+
+        # Cannot do image prompting as the image embeddings are already computed
+
         # Project the image embeddings
-        if args.img_projection:
+        if img_projector:
             if args.proj_clip: # this is PLUMBER
                 proj_embeddings = img_projector(clip_image_embeddings) # (batch_size, projection_dim)
             else: # this is LIMBER
@@ -497,7 +531,7 @@ def train_one_epoch_feat(data_loader, clip_model, classifier,
             text_encodings = clip_prompted_txt_enc(class_prompts)
 
         # Project the text embeddings
-        if args.txt_projection:
+        if text_projector:
             text_encodings = text_projector(text_encodings_raw)
         else:
             text_encodings = text_encodings_raw
@@ -581,8 +615,11 @@ def validate_feat(data_loader, clip_model, classifier,
         clip_image_embeddings = fabric.to_device(clip_image_embeddings)
 
         clip_image_embeddings = clip_image_embeddings.type_as(classifier_embeddings)
+
+        # Cannot prompt the image embeddings as they are already computed
+
         # Project the image embeddings
-        if args.img_projection:
+        if img_projector:
             if args.proj_clip: # this is PLUMBER
                 proj_embeddings = img_projector(clip_image_embeddings) # (batch_size, projection_dim)
             else: # this is LIMBER
@@ -592,10 +629,10 @@ def validate_feat(data_loader, clip_model, classifier,
 
         # Learnable prompts for the text prompts
         if clip_prompted_txt_enc:
-            text_encodings = clip_prompted_txt_enc(class_prompts)
+            text_encodings_raw = clip_prompted_txt_enc(class_prompts)
 
         # Project the text embeddings
-        if args.txt_projection:
+        if text_projector:
             text_encodings = text_projector(text_encodings_raw)
         else:
             text_encodings = text_encodings_raw
@@ -614,9 +651,6 @@ def validate_feat(data_loader, clip_model, classifier,
         
         loss = loss_image*args.weight_img_loss + loss_text*args.weight_txt_loss
 
-  
-        fabric.backward(loss)
-        
         probs_from_classifier = F.softmax(classifier_logits, dim=-1)
         probs_from_proj = F.softmax(logits_projection, dim=-1)
 
@@ -750,15 +784,20 @@ def main(args):
 
         # Create the prompted CLIP model
         clip_prompted_txt_enc = PromptedCLIPTextEncoder(clip_model, n_ctx=args.n_promt_ctx, num_classes=len(class_names), 
-                                                    device=fabric.device, is_dist_prompt=args.is_dist_prompt)
+                                                    device=fabric.device, is_dist_prompt=False)
         clip_prompted_txt_enc = fabric.to_device(clip_prompted_txt_enc)
 
         class_prompts = [f"This is a photo of a {class_name}" for class_name in class_names]
+        fabric.print(f"Constructed CLIP Class specific Prompted Text Encoder with {len(class_names)} classes")
 
-        if args.dataset_prompt:
-            fabric.print(f"Constructed CLIP Prompted Text Encoder with {len(class_names)} classes")
-        else:
-            fabric.print(f"Constructed CLIP Prompted Text Encoder- dist prompting")
+    elif args.dataset_txt_prompt:
+        # Create the prompted CLIP model
+        clip_prompted_txt_enc = PromptedCLIPTextEncoder(clip_model, n_ctx=args.n_promt_ctx, num_classes=len(class_names),
+                                                    device=fabric.device, is_dist_prompt=True)
+        clip_prompted_txt_enc = fabric.to_device(clip_prompted_txt_enc)
+        
+        class_prompts = [f"This is a photo of a {class_name}" for class_name in class_names]
+        fabric.print(f"Constructed CLIP Dataset specific Prompted Text Encoder with {len(class_names)} classes")
     
     if args.img_prompting:
         # Create the prompted CLIP model
@@ -796,7 +835,7 @@ def main(args):
 
     # add clip_prompted to the optimizer
     optimizer_txt_prompt = None
-    if args.cls_txt_prompts:
+    if args.cls_txt_prompts or args.dataset_txt_prompt:
         optimizer_txt_prompt = torch.optim.SGD([p for p in clip_prompted_txt_enc.parameters() if p.requires_grad], lr=0.1)
         clip_prompted_txt_enc, optimizer_txt_prompt = fabric.setup(clip_prompted_txt_enc, optimizer_txt_prompt)
     
@@ -949,6 +988,9 @@ if __name__ == "__main__":
     print(args)
     sys.stdout.flush()
 
+    if args.use_saved_features and args.img_prompting:
+        raise Exception("Cannot use saved features and learn image prompting")
+    
     # Make directory for saving results
     args.save_dir = get_save_dir(args)    
     os.makedirs(os.path.join(args.save_dir, 'lightning_logs'), exist_ok=True)

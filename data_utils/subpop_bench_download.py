@@ -203,8 +203,26 @@ def generate_metadata(data_path, datasets=['celeba', 'waterbirds', 'civilcomment
         'breeds': generate_metadata_breeds,
         'cmnist': generate_metadata_cmnist
     }
+
+    data_paths = {
+        'celeba': os.path.join(data_path, "celeba", "metadata_celeba.csv"),
+        'waterbirds': os.path.join(data_path, "waterbirds", "metadata_waterbirds.csv"),
+        'civilcomments': os.path.join(data_path, "civilcomments", "metadata_civilcomments_coarse.csv"),
+        'multinli': os.path.join(data_path, "multinli", "metadata_multinli.csv"),
+        'imagenetbg': os.path.join(data_path, "backgrounds_challenge", "metadata.csv"),
+        'metashift': os.path.join(data_path, "metashift", "metadata_metashift.csv"),
+        'nico++': os.path.join(data_path, "nicopp", "metadata.csv"),
+        'mimic_cxr': os.path.join(data_path, "MIMIC-CXR-JPG", "subpop_bench_meta", "metadata_no_finding.csv"),
+        'mimic_notes': os.path.join(data_path, "mimic_notes", "subpop_bench_meta", "metadata.csv"),
+        'cxr_multisite': os.path.join(data_path, "MIMIC-CXR-JPG", "subpop_bench_meta", "metadata_multisite.csv"),
+        'chexpert': os.path.join(data_path, "chexpert", "subpop_bench_meta", "metadata_multisite.csv"),
+        'breeds': os.path.join(data_path, "breeds", "metadata.csv"),
+        'cmnist': os.path.join(data_path, "cmnist", "metadata.csv")
+    }
     for dataset in datasets:
         dataset_metadata_generators[dataset](data_path)
+        # Split the validation set into a validation and distill set
+        create_distill_samples(data_paths[dataset], split_percent=0.50, root_partition=1)
 
 
 def generate_metadata_celeba(data_path):
@@ -684,6 +702,31 @@ def generate_metadata_breeds(data_path, val_pct=0.1):
 def generate_metadata_cmnist(data_path):
     pass
 
+
+def create_distill_samples(file_path, split_percent=0.50, root_partition=1):
+    """
+    Reads a file, splits % of samples in the root partition into distill split, and saves the updated DataFrame.
+    Args:
+        file_path (str): Path to the file to be updated.
+        split_percent (float): Percentage of samples to be moved to the new split.
+        root_partition (int): The partition to be split.    [0: train, 1: val, 2: test]
+    """
+    # Read the data
+    df = pd.read_csv(file_path)
+
+    root_samples = df[df['split'] == root_partition]
+    sample_size = int(len(root_samples) * split_percent)
+
+    # Randomly sample the training data
+    sampled = root_samples.sample(n=sample_size, random_state=42)
+
+    # Update the split value to '3' for the sampled data
+    df.loc[sampled.index, 'split'] = 3
+
+    new_file_path = file_path.replace('.csv', '_distill_split.csv')
+    # Save the updated DataFrame
+    df.to_csv(new_file_path, index=False)
+    
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Download dataset')

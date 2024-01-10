@@ -16,6 +16,35 @@ import seaborn as sns
 random.seed(0)
 np.random.seed(0)
 
+
+def create_distill_samples(file_path, split_percent=0.10, root_partition=1):
+    """
+    Splits the dataset into training and validation sets.
+    Args:
+        file_path (str): The path to the file containing the dataset information.
+        split_percent (float): The percentage of the training samples to use for validation.
+        root_partition (int): The partition from which the distill samples are to be split.
+                                [0: train, 1: val, 2: test]
+    """
+
+    df = pd.read_csv(file_path, sep=' ', header=None, names=['image_name', 'split'])
+
+    # Filter out the root samples
+    root_samples = df[df['split'] == root_partition]
+
+    # Calculate % of the training samples
+    sample_size = int(len(root_samples) * split_percent)
+
+    random_state = 42
+    sampled = root_samples.sample(n=sample_size, random_state=random_state)
+
+    # Update the split value to '3' for the sampled data
+    df.loc[sampled.index, 'split'] = 3
+
+    new_file_path = file_path.replace('eval', 'eval_distill.txt')
+    df.to_csv(new_file_path, sep=' ', header=False, index=False)
+
+
 class FilteredCelebADataset(Dataset):
     def __init__(self, root_dir, attr_path='data/CelebA/CelebA/Anno/list_attr_celeba.txt',
                  partition_path='data/CelebA/CelebA/Eval/list_eval_partition.txt', 
@@ -86,6 +115,8 @@ class FilteredCelebADataset(Dataset):
             partition = 1
         elif split == 'te':
             partition = 2
+        elif split == 'distill':
+            partition = 3
 
         self.partition = partition
         # load attributes
@@ -324,17 +355,29 @@ def get_celebA_dataloader(batch_size, class_attr, imbalance_attr, imbalance_perc
                                         imbalance_attr=imbalance_attr,
                                         imbalance_percent={1: [50], 0:[50]} ,
                                         ignore_attrs=ignore_attrs)
+    distill_dataset = FilteredCelebADataset(root_dir='data/CelebA/CelebA/Img/img_align_celeba/',
+                                        transform=data_transforms,
+                                        split='distill',
+                                        num_images=31015,
+                                        class_attr=class_attr,
+                                        imbalance_attr=imbalance_attr,
+                                        imbalance_percent={1: [50], 0:[50]} ,
+                                        ignore_attrs=ignore_attrs)
 
     # Define a DataLoader
     train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
     val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False)
     test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
+    distill_loader = DataLoader(distill_dataset, batch_size=batch_size, shuffle=False)
 
-    loaders = {'train': train_loader, 'val': val_loader, 'test': test_loader}
+    loaders = {'train': train_loader, 'val': val_loader, 'test': test_loader, 'distill': distill_loader}
     class_names = ['Not Young', 'Young']
     return loaders, class_names
 
 if __name__ == '__main__':
+
+    ## Uncomment the following line to create the distill samples
+    # #create_distill_samples('data/CelebA/CelebA/Eval/list_eval_partition.txt', split_percent=0.50, root_partition=1)
 
     # Define transformations
     data_transforms = transforms.Compose([
