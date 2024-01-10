@@ -17,17 +17,19 @@ random.seed(0)
 np.random.seed(0)
 
 
-def create_distill_samples(file_path, split_percent=0.10, root_partition=1):
+def create_failure_samples(file_path, split_percent=0.10, root_partition=1):
     """
     Splits the dataset into training and validation sets.
     Args:
         file_path (str): The path to the file containing the dataset information.
         split_percent (float): The percentage of the training samples to use for validation.
-        root_partition (int): The partition from which the distill samples are to be split.
+        root_partition (int): The partition from which the failure samples are to be split.
                                 [0: train, 1: val, 2: test]
     """
 
     df = pd.read_csv(file_path, sep=' ', header=None, names=['image_name', 'split'])
+    # Save the original df to file with a different name
+    df.to_csv(file_path.replace('eval', 'eval_original.txt'), sep=' ', header=False, index=False)
 
     # Filter out the root samples
     root_samples = df[df['split'] == root_partition]
@@ -41,9 +43,7 @@ def create_distill_samples(file_path, split_percent=0.10, root_partition=1):
     # Update the split value to '3' for the sampled data
     df.loc[sampled.index, 'split'] = 3
 
-    new_file_path = file_path.replace('eval', 'eval_distill.txt')
-    df.to_csv(new_file_path, sep=' ', header=False, index=False)
-
+    df.to_csv(file_path, sep=' ', header=False, index=False)
 
 class FilteredCelebADataset(Dataset):
     def __init__(self, root_dir, attr_path='data/CelebA/CelebA/Anno/list_attr_celeba.txt',
@@ -115,8 +115,10 @@ class FilteredCelebADataset(Dataset):
             partition = 1
         elif split == 'te':
             partition = 2
-        elif split == 'distill':
+        elif split == 'failure':
             partition = 3
+        else:
+            raise ValueError(f"Invalid split value: {split}. Valid values are: 'tr', 'va', 'te', 'failure'")
 
         self.partition = partition
         # load attributes
@@ -256,8 +258,8 @@ class FilteredCelebADataset(Dataset):
         label = self.attr_df.iloc[idx][self.class_attr]
         attributes = self.attr_df.iloc[idx][self.imbalance_attr[0]]
 
-        if self.partition == 2:
-            return image_transformed, label, attributes, img_name
+        # if self.partition == 2:
+        #     return image_transformed, label, attributes, img_name
         
         if self.transform1:
             x1 = self.transform1(image)
@@ -310,13 +312,20 @@ def plot_attribute_distribution(dataset, selected_attribute):
     plt.tight_layout()
     plt.savefig('att_dist.jpg')
 
-def get_celebA_dataloader(batch_size, class_attr, imbalance_attr, imbalance_percent, ignore_attrs, img_size=224, mask=None, mask_region=None):
-    # Define transformations
+def get_celebA_datatransforms(img_size=224):
+        # Define transformations
     data_transforms = transforms.Compose([
         transforms.Resize((img_size, img_size)),
         transforms.ToTensor(),
         transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225]),
     ])
+    return data_transforms
+
+
+def get_celebA_dataloader(batch_size, class_attr, imbalance_attr, imbalance_percent, ignore_attrs, img_size=224, mask=None, mask_region=None):
+    # Define transformations
+    data_transforms = get_celebA_datatransforms(img_size)
+
 
     # class_attr = 'Young' # attribute for binary classification
     # imbalance_attr = ['Male']
@@ -355,10 +364,10 @@ def get_celebA_dataloader(batch_size, class_attr, imbalance_attr, imbalance_perc
                                         imbalance_attr=imbalance_attr,
                                         imbalance_percent={1: [50], 0:[50]} ,
                                         ignore_attrs=ignore_attrs)
-    distill_dataset = FilteredCelebADataset(root_dir='data/CelebA/CelebA/Img/img_align_celeba/',
+    failure_dataset = FilteredCelebADataset(root_dir='data/CelebA/CelebA/Img/img_align_celeba/',
                                         transform=data_transforms,
-                                        split='distill',
-                                        num_images=31015,
+                                        split='failure',
+                                        num_images=7180,
                                         class_attr=class_attr,
                                         imbalance_attr=imbalance_attr,
                                         imbalance_percent={1: [50], 0:[50]} ,
@@ -368,16 +377,16 @@ def get_celebA_dataloader(batch_size, class_attr, imbalance_attr, imbalance_perc
     train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
     val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False)
     test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
-    distill_loader = DataLoader(distill_dataset, batch_size=batch_size, shuffle=False)
+    failure_loader = DataLoader(failure_dataset, batch_size=batch_size, shuffle=False)
 
-    loaders = {'train': train_loader, 'val': val_loader, 'test': test_loader, 'distill': distill_loader}
-    class_names = ['Not Young', 'Young']
+    loaders = {'train': train_loader, 'val': val_loader, 'test': test_loader, 'failure': failure_loader}
+    class_names = ["old person", "young person"]
     return loaders, class_names
 
 if __name__ == '__main__':
 
-    ## Uncomment the following line to create the distill samples
-    # #create_distill_samples('data/CelebA/CelebA/Eval/list_eval_partition.txt', split_percent=0.50, root_partition=1)
+    ## Uncomment the following line to create the failure samples
+    # #create_failure_samples('data/CelebA/CelebA/Eval/list_eval_partition.txt', split_percent=0.50, root_partition=1)
 
     # Define transformations
     data_transforms = transforms.Compose([

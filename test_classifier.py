@@ -116,12 +116,6 @@ def main(args):
     print(f"Classifier model: {args.classifier_model}")
     print(f"Using pretrained weights: {args.use_pretrained}")
 
-    print(model)
-    # Dataparallel for multi-GPU training
-    if torch.cuda.device_count() > 1:
-        print(f"Using {torch.cuda.device_count()} GPUs")
-        model = nn.DataParallel(model)    
-    
     # Loss function and optimizer
     criterion = nn.CrossEntropyLoss()
     
@@ -142,11 +136,19 @@ def main(args):
     # Load model state
     model.load_state_dict(checkpoint['model_state_dict'])
 
+    # Dataparallel for multi-GPU training
+    if torch.cuda.device_count() > 1:
+        print(f"Using {torch.cuda.device_count()} GPUs")
+        model = nn.DataParallel(model)    
+    
     val_loss, val_acc = evaluate(test_loader, model, criterion, device, 0)
     print(f"Test Loss: {val_loss:.4f}, Test Accuracy: {val_acc:.4f}")
 
     with open(os.path.join(args.save_dir, 'results.txt'), 'w') as f:
-        f.write(f"Dataset {args.dataset_name} {args.domain} Test Accuracy: {val_acc:.4f}\n")
+        if args.dataset_name == 'domainnet':
+            f.write(f"Dataset {args.dataset_name} {args.domain} Test Accuracy: {val_acc:.4f}\n")
+        else:
+            f.write(f"Dataset {args.dataset_name} Test Accuracy: {val_acc:.4f}\n")
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Train desired classifier model on the desired Dataset')
@@ -157,6 +159,7 @@ if __name__ == "__main__":
     parser.add_argument('--batch_size', type=int, default=32, help='Batch size for the dataloader')
     parser.add_argument('--seed', type=int, default=42, help='Seed for reproducibility')
     parser.add_argument('--learning_rate', type=float, default=0.001, help='Learning rate for the optimizer')
+    parser.add_argument('--use_pretrained', action='store_true', help='Use pretrained weights for ResNet')
     parser.add_argument('--classifier_model', type=str, choices=['resnet18', 'resnet50', 'vit_b_16', 'swin_b'], default='resnet18', help='Type of classifier model to use')
     parser.add_argument('--checkpoint_path', type=str, help='Path to checkpoint to resume training from')
 
@@ -176,7 +179,8 @@ python test_classifier.py \
         --image_size 75 \
         --batch_size 512 \
         --seed 42 \
-        --classifier_model resnet18
+        --classifier_model resnet18 \
+        --checkpoint_path logs/CelebA/resnet18/classifier/checkpoint_29.pth
 
 
 """

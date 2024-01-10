@@ -10,7 +10,7 @@ from torchvision import transforms
 import argparse
 
 
-class CIFAR100CDataset(Dataset):
+class CIFAR100C(Dataset):
     """ Custom Dataset for CIFAR100-C with specific corruption type """
     def __init__(self, data_dir, corruption_name, transform=None):
         self.data_dir = data_dir

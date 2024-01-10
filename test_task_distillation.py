@@ -88,7 +88,7 @@ def validate(data_loader, clip_model, classifier,
     total_base_model_acc = 0
     total_plumber_acc = 0
     pbar = progbar_wrapper(
-        data_loader, total=len(data_loader), desc=f"Training Epoch {epoch+1}"
+        data_loader, total=len(data_loader), desc=f"Validating Epoch {epoch+1}"
     )
     
     for images_batch, labels, images_clip_batch in pbar:
@@ -272,6 +272,9 @@ def main(args):
 
     fabric.print(f"Built {args.classifier_name} classifier with checkpoint path: {args.classifier_checkpoint_path}")
 
+    # Load the checkpoint for the step 1 model
+    checkpoint = torch.load(args.step1_checkpoint_path, map_location=fabric.device)
+
     img_projector = None
     if args.img_projection:
         if args.proj_clip:
@@ -282,12 +285,14 @@ def main(args):
             # This is LIMBER
             img_projector = ProjectionHead(input_dim=classifier.feature_dim, output_dim=args.projection_dim,is_mlp=args.is_mlp)
             fabric.print(f"Constructed img emb projection LIMBER with projection dim: {args.projection_dim} and is_mlp: {args.is_mlp}")
-    
+        img_projector = fabric.to_device(img_projector)
+        img_projector.load_state_dict(checkpoint['img_projector_state_dict'])
+
     text_projector = None
     if args.txt_projection:
         text_projector = ProjectionHead(input_dim=args.projection_dim, output_dim=args.projection_dim,is_mlp=args.is_mlp)
         fabric.print(f"Constructed text emb projection PLUMBER with projection dim: {args.projection_dim} and is_mlp: {args.is_mlp}")
-
+        text_projector = fabric.to_device(text_projector)
     ########################### Load the dataset ############################
 
     if args.use_saved_features:
@@ -299,17 +304,20 @@ def main(args):
         fabric.print(f"Using saved features from {args.dataset_name} dataset from {data_dir}")
     else:
         # Create the data loader and wrap them with Fabric
-        train_dataset, val_dataset, class_names = get_dataset(args.dataset_name, train_transform, test_transform, 
-                                                                data_dir=args.data_dir, clip_transform=clip_transform)
+        train_dataset, val_dataset, test_dataset, failure_dataset, class_names = get_dataset(args.dataset_name, train_transform, test_transform, 
+                                                                data_dir=args.data_dir, clip_transform=clip_transform, img_size=args.img_size, return_failure_set=True)
         fabric.print(f"Using {args.dataset_name} dataset")
 
     train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True, num_workers=8, pin_memory=True)
     val_loader = torch.utils.data.DataLoader(val_dataset, batch_size=args.batch_size, shuffle=args.train_on_testset, num_workers=8, pin_memory=True)
+    test_loader = torch.utils.data.DataLoader(test_dataset, batch_size=args.batch_size, shuffle=False, num_workers=8, pin_memory=True)
+    failure_loader = torch.utils.data.DataLoader(failure_dataset, batch_size=args.batch_size, shuffle=False, num_workers=8, pin_memory=True)
 
-    train_loader, val_loader = fabric.setup_dataloaders(train_loader, val_loader)
+    val_loader, test_loader = fabric.setup_dataloaders(val_loader, test_loader)
 
-    fabric.print(f"Number of training examples: {len(train_loader.dataset)}")
+
     fabric.print(f"Number of validation examples: {len(val_loader.dataset)}")
+    fabric.print(f"Number of test examples: {len(test_loader.dataset)}")
     # Get the text encodings for the class names
     try:
         text_encodings= torch.load(args.prompt_path)
@@ -343,6 +351,7 @@ def main(args):
         class_prompts = [f"This is a photo of a {class_name}" for class_name in class_names]
         fabric.print(f"Constructed CLIP Dataset specific Prompted Text Encoder with {len(class_names)} classes")
     
+    clip_prompted_img_enc = None
     if args.img_prompting:
         # Create the prompted CLIP model
         clip_prompted_img_enc = PromptedCLIPImageEncoder(clip_model, num_tokens=args.n_promt_ctx, device=fabric.device)
@@ -358,7 +367,13 @@ def main(args):
         classifier = fabric.to_device(classifier)
     
         val_loss, val_base_acc, val_plumber_acc, val_loss_img, val_loss_txt = validate(
-                                                                    train_loader, clip_model, classifier,
+                                                                    val_loader, clip_model, classifier,
+                                                                    img_projector, text_projector,
+                                                                    text_encodings, class_prompts,
+                                                                    clip_prompted_txt_enc, clip_prompted_img_enc,
+                                                                    criterion, 0)
+        test_loss, test_base_acc, test_plumber_acc, test_loss_img, test_loss_txt = validate(
+                                                                    test_loader, clip_model, classifier,
                                                                     img_projector, text_projector,
                                                                     text_encodings, class_prompts,
                                                                     clip_prompted_txt_enc, clip_prompted_img_enc,
@@ -371,13 +386,14 @@ def main(args):
                                                                     clip_prompted_txt_enc, clip_prompted_img_enc,
                                                                     criterion, 0)
 
-                    
-    output_message = f"Dataset: {args.dataset_name} | {args.domain_name} - {args.severity}:\tVal Loss: {val_loss:.4f}, Val Base Model Accuracy: {val_base_acc:.4f}, Val PLUMBER Accuracy: {val_plumber_acc:.4f}"
+
+    output_message = f"Validation Base Acc: {val_base_acc:.4f}, Validation PLUMBER Acc: {val_plumber_acc:.4f}, \n Test Base Acc: {test_base_acc:.4f}, Test PLUMBER Acc: {test_plumber_acc:.4f}"
+    
     fabric.print(output_message)
 
     if fabric.is_global_zero:
         # Save the output to a text file
-        output_file_path = os.path.join(args.save_dir, "validation_results.txt")
+        output_file_path = os.path.join(args.save_dir, "test_results.txt")
         with open(output_file_path, "a") as file:
             file.write(output_message + "\n")
 
@@ -393,6 +409,7 @@ if __name__ == "__main__":
     parser.add_argument('--train_on_testset', action='store_true', help='Whether to train on the test set or not')
     parser.add_argument('--use_saved_features',action = 'store_true', help='Whether to use saved features or not')
     parser.add_argument('--batch_size', type=int, default=32, help='Batch size for the dataloader')
+    parser.add_argument('--img_size', type=int, default=75, help='Image size for the celebA dataloader only')
     parser.add_argument('--seed', type=int, default=42, help='Seed for reproducibility')
     
     parser.add_argument('--img_projection', action='store_true', help='Whether to use task projection or not')
@@ -453,35 +470,35 @@ if __name__ == "__main__":
     main(args)
 
 '''
- python task_distill_eval.py \
-        --data_dir './data/'  \
-        --domain_name 'gaussian_blur'    \
-        --dataset_name 'cifar10-c'    \
-        --severity 3    \
-        --train_on_testset    \
-        --num_classes 10  \
-        --batch_size 256  \
-        --seed 42    \
-        --img_projection \
-        --cls_txt_prompts \
-        --step1_checkpoint_path 'logs_2/cifar10/all/simple_cnn/plumber_img_proj_LP/_clsEpoch_29_bs_256_lr_0.1_teT_10.0_sT_1.0_imgweight_0.5_txtweight_8.0_is_mlp_False/step_1/projector_weights_final.pth' \
-        --classifier_name 'SimpleCNN' \
-        --classifier_checkpoint_path 'logs_2/cifar10/all/simple_cnn/classifier/model_epoch_29.pth' \
-        --clip_model_name 'ViT-B/32' \
-        --prompt_path 'data/cifar10/CiFAR10_CLIP_ViT-B_32_text_embeddings.pth' \
-        --n_promt_ctx 16 \
-        --num_epochs 10 \
-        --optimizer 'sgd' \
-        --learning_rate 0.1 \
-        --val_freq 1 \
-        --prefix '' \
-        --proj_clip \
-        --projection_dim 512 \
-        --teacher_temp 0.5  \
-        --student_temp 1 \
-        --weight_img_loss 1 \
-        --weight_txt_loss 1 \
-        --num_gpus 1 \
-        --num_nodes 1
+python test_task_distillation.py \
+    --data_dir "./data/" \
+    --domain_name 'real' \
+    --dataset_name "CelebA" \
+    --train_on_testset \
+    --num_classes 2 \
+    --batch_size 256 \
+    --seed 42 \
+    --img_size 75 \
+    --img_projection --txt_projection \
+    --classifier_name "resnet18" \
+    --classifier_checkpoint_path "logs/CelebA/resnet18/classifier/checkpoint_29.pth" \
+    --step1_checkpoint_path "logs/CelebA/resnet18/plumber_img_text_proj/_clsEpoch_29_bs_256_lr_0.1_teT_2.0_sT_1.0_imgweight_1.0_txtweight_1.0_is_mlp_False/step_1/best_projector_weights.pth" \
+    --clip_model_name 'ViT-B/32' \
+    --prompt_path "data/CelebA/CelebA_CLIP_ViT-B_32_text_embeddings.pth" \
+    --n_promt_ctx 16 \
+    --num_epochs 10 \
+    --optimizer 'sgd' \
+    --learning_rate 0.1 \
+    --val_freq 1 \
+    --prefix '' \
+    --proj_clip \
+    --projection_dim 512 \
+    --teacher_temp 2 \
+    --student_temp 1 \
+    --weight_img_loss 1 \
+    --weight_txt_loss 1 \
+    --num_gpus 1 \
+    --num_nodes 1
+
 
 '''

@@ -37,7 +37,7 @@ import pickle
 
 from data_utils.domainnet_data import DomainNetDataset, get_data_from_saved_files
 from data_utils.cifar100_data import CIFAR100C, CIFAR100Filtered, CIFAR10C
-from data_utils.celebA_dataset import FilteredCelebADataset
+from data_utils.celebA_dataset import FilteredCelebADataset, get_celebA_datatransforms
 from data_utils import subpop_bench
 
 from models.resnet import CustomClassifier, CustomResNet
@@ -48,7 +48,7 @@ from models.resnet_cifar import ResNet18
 from models.prompted_CLIP import PromptedCLIPTextEncoder, PromptedCLIPImageEncoder
 
 
-def get_dataset(data_name, train_transforms, test_transforms, clip_transform, data_dir='../data', train_attr=None, return_failure_set=False):
+def get_dataset(data_name, train_transforms, test_transforms, clip_transform, data_dir='../data', train_attr=None, img_size=75, return_failure_set=False):
 
     if data_name == 'imagenet':
         train_dataset = dset.ImageFolder(root=f'{data_dir}/imagenet_train_examples', transform=train_transforms)
@@ -89,7 +89,7 @@ def get_dataset(data_name, train_transforms, test_transforms, clip_transform, da
         train_dataset = dataset_class(data_dir, 'tr', hparams, clip_transform, train_attr=train_attr)
         val_dataset = dataset_class(data_dir, 'va', hparams, clip_transform)
         test_dataset = dataset_class(data_dir, 'te', hparams, clip_transform)
-        distill_dataset = dataset_class(data_dir, 'distill', hparams, clip_transform, train_attr=train_attr)
+        failure_dataset = dataset_class(data_dir, 'failure', hparams, clip_transform, train_attr=train_attr)
 
         class_names = train_dataset.class_names
     
@@ -100,9 +100,11 @@ def get_dataset(data_name, train_transforms, test_transforms, clip_transform, da
         ignore_attrs = []  # Example: ignore samples that are 'Bald' or 'Wearing_Earrings'
         mask = False
         mask_region = []
+
+        train_transforms = get_celebA_datatransforms(img_size)
         train_dataset = FilteredCelebADataset(root_dir='data/CelebA/CelebA/Img/img_align_celeba/', 
                                             transform=train_transforms, 
-                                            trainsform1=clip_transform,
+                                            transform1=clip_transform,
                                             split='tr', 
                                             class_attr=class_attr, 
                                             num_images=62030,
@@ -113,8 +115,8 @@ def get_dataset(data_name, train_transforms, test_transforms, clip_transform, da
                                             mask_region=mask_region)
         
         val_dataset = FilteredCelebADataset(root_dir='data/CelebA/CelebA/Img/img_align_celeba/',
-                                            transform=test_transforms,
-                                            trainsform1=clip_transform,
+                                            transform=train_transforms,
+                                            transform1=clip_transform,
                                             split='va',
                                             class_attr=class_attr,
                                             num_images=7180,
@@ -124,8 +126,8 @@ def get_dataset(data_name, train_transforms, test_transforms, clip_transform, da
                                             mask=mask,
                                             mask_region=mask_region)
         test_dataset = FilteredCelebADataset(root_dir='data/CelebA/CelebA/Img/img_align_celeba/',
-                                            transform=test_transforms,
-                                            trainsform1=clip_transform,
+                                            transform=train_transforms,
+                                            transform1=clip_transform,
                                             split='te',
                                             num_images=31015,
                                             class_attr=class_attr,
@@ -133,20 +135,22 @@ def get_dataset(data_name, train_transforms, test_transforms, clip_transform, da
                                             imbalance_percent={1: [50], 0:[50]} ,
                                             ignore_attrs=ignore_attrs)
         failure_dataset = FilteredCelebADataset(root_dir='data/CelebA/CelebA/Img/img_align_celeba/',
-                                                transform=test_transforms,
-                                                trainsform1=clip_transform,
-                                                split='failure_set',
+                                                transform=train_transforms,
+                                                transform1=clip_transform,
+                                                split='failure',
                                                 num_images=31015,
                                                 class_attr=class_attr,
                                                 imbalance_attr=imbalance_attr,
                                                 imbalance_percent={1: [50], 0:[50]} ,
                                                 ignore_attrs=ignore_attrs)
+    
+        class_names = ["old person", "young person"]
         
     else:
         raise ValueError(f"Invalid dataset name: {data_name}")
     
     if return_failure_set:
-        return train_dataset, val_dataset, test_dataset, distill_dataset, class_names
+        return train_dataset, val_dataset, test_dataset, failure_dataset, class_names
     
     return train_dataset, val_dataset, class_names
 
@@ -210,7 +214,7 @@ def get_save_dir(args):
     projector_name += "_proj" if is_proj else ""
     projector_name += "_img_prompt" if args.img_prompting else ""
     projector_name += "_dist_LP" if args.cls_txt_prompts and args.is_dist_prompt else ""
-    projector_name += "_LP" if args.cls_txt_prompts and not args.is_dist_prompt else ""
+    projector_name += "_cls_LP" if args.cls_txt_prompts and not args.is_dist_prompt else ""
 
     if not args.save_dir:
         classifier_dir = os.path.dirname(os.path.dirname(args.classifier_checkpoint_path))
@@ -264,12 +268,12 @@ def train_one_epoch(data_loader, clip_model, classifier,
             if model:
                 model.train()
     
-    def set_zero_grad(*optimizers_dict):
+    def set_zero_grad(optimizers_dict):
         for optimizer_name, optimizer in optimizers_dict.items():
             if optimizer:
                 optimizer.zero_grad()
     
-    def optimizer_step(*optimizers_dict):
+    def optimizer_step(optimizers_dict):
         for optimizer_name, optimizer in optimizers_dict.items():
             if optimizer:
                 optimizer.step()
@@ -707,7 +711,7 @@ def build_classifier(classifier_name, num_classes, pretrained=False, checkpoint_
             classifier = classifier.module   
         else:
             classifier.load_state_dict(torch.load(checkpoint_path)['model_state_dict'])
-            fabric.print(f"Loaded {classifier_name} from {checkpoint_path}")
+            # fabric.print(f"Loaded {classifier_name} from {checkpoint_path}")
     train_transform = classifier.train_transform
     test_transform = classifier.test_transform
 
@@ -752,7 +756,7 @@ def main(args):
     else:
         # Create the data loader and wrap them with Fabric
         train_dataset, val_dataset, class_names = get_dataset(args.dataset_name, train_transform, test_transform, 
-                                                                data_dir=args.data_dir, clip_transform=clip_transform)
+                                                                data_dir=args.data_dir, clip_transform=clip_transform, img_size=args.img_size)
         fabric.print(f"Using {args.dataset_name} dataset")
 
     train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True, num_workers=8, pin_memory=True)
@@ -799,6 +803,7 @@ def main(args):
         class_prompts = [f"This is a photo of a {class_name}" for class_name in class_names]
         fabric.print(f"Constructed CLIP Dataset specific Prompted Text Encoder with {len(class_names)} classes")
     
+    clip_prompted_img_enc = None
     if args.img_prompting:
         # Create the prompted CLIP model
         clip_prompted_img_enc = PromptedCLIPImageEncoder(clip_model, num_tokens=args.n_promt_ctx, device=fabric.device)
@@ -865,13 +870,18 @@ def main(args):
     
     start_epoch = 0
 
-    state = {"clip_model": clip_model, "classifier": classifier, "optimizer_img_proj": optimizer_img_proj,
-                "optimizer_txt_proj": optimizer_txt_proj, "optimizer_txt_prompt": optimizer_txt_prompt, 
-                "optimizer_img_prompt": optimizer_img_prompt, "epoch": start_epoch}
+    state = {"clip_model": clip_model, "classifier": classifier, 
+            "img_projector": img_projector, "text_projector": text_projector,
+            "clip_prompted_txt_enc": clip_prompted_txt_enc, "clip_prompted_img_enc": clip_prompted_img_enc,
+            "optimizer_img_proj": optimizer_img_proj,
+            "optimizer_txt_proj": optimizer_txt_proj, "optimizer_txt_prompt": optimizer_txt_prompt, 
+            "optimizer_img_prompt": optimizer_img_prompt, "epoch": start_epoch}
 
     if args.resume_checkpoint_path:
         fabric.load(args.resume_checkpoint_path, state)
         start_epoch = state["epoch"] + 1
+        fabric.print(f"Resuming training from epoch {start_epoch}")
+        # update the optimizers 
 
     if start_epoch >= args.num_epochs:
         fabric.print(f"Already finished training for {args.num_epochs} epochs. Exiting...")
@@ -912,8 +922,6 @@ def main(args):
         if args.txt_projection:
             scheduler_txt_proj.step()
             
-
-        
         fabric.print(f"Epoch {epoch}/{args.num_epochs}| Train Loss: {train_loss:.4f}, Train Base Model Accuracy: {train_base_acc:.4f}, Train PLUMBER Accuracy: {train_plumber_acc:.4f}, Val Loss: {val_loss:.4f}, Val Base Model Accuracy: {val_base_acc:.4f}, Val PLUMBER Accuracy: {val_plumber_acc:.4f}")
 
         losses_dict = {"train_loss": train_loss, "train_loss_img": train_loss_img, "train_loss_txt": train_loss_txt,
@@ -946,6 +954,7 @@ if __name__ == "__main__":
     parser.add_argument('--train_on_testset', action='store_true', help='Whether to train on the test set or not')
     parser.add_argument('--use_saved_features',action = 'store_true', help='Whether to use saved features or not')
     parser.add_argument('--batch_size', type=int, default=32, help='Batch size for the dataloader')
+    parser.add_argument('--img_size', type=int, default=75, help='Image size for the celebA dataloader only')
     parser.add_argument('--seed', type=int, default=42, help='Seed for reproducibility')
     
     parser.add_argument('--img_projection', action='store_true', help='Whether to use task projection or not')
@@ -959,7 +968,7 @@ if __name__ == "__main__":
     parser.add_argument('--prompt_path', type=str, help='Path to the prompt file')
     parser.add_argument('--n_promt_ctx', type=int, default=16, help='Number of learnable prompt token for each cls')
     parser.add_argument('--cls_txt_prompts', action='store_true', help='Whether to use learnable prompts or not')
-    parser.add_argument('--dataset_prompt', action='store_true', help='Whether to use dataset level prompts or class level prompts')
+    parser.add_argument('--dataset_txt_prompt', action='store_true', help='Whether to use dataset level prompts or class level prompts')
 
     parser.add_argument('--num_epochs', type=int, default=100, help='Number of training epochs')
     parser.add_argument('--optimizer', type=str, choices=['adam','adamw', 'sgd'], default='adamw', help='Type of optimizer to use')
@@ -1017,34 +1026,34 @@ if __name__ == "__main__":
     main(args)
 
 '''
- python task_distillation.py \
-        --data_dir './data/'  \
-        --domain_name 'real'    \
-        --dataset_name 'Waterbirds'    \
-        --train_on_testset    \
-        --num_classes 2  \
-        --batch_size 256  \
-        --seed 42    \
-        --img_projection \
-        --cls_txt_prompts \
-        --cls_txt_prompts \
-        --classifier_name 'resnet18' \
-        --classifier_checkpoint_path 'logs/Waterbirds/resnet18/classifier/checkpoint_99.pth' \
-        --clip_model_name 'ViT-B/32' \
-        --prompt_path 'data/waterbirds/waterbirds_CLIP_ViT-B_32_text_embeddings.pth' \
-        --n_promt_ctx 16 \
-        --num_epochs 10 \
-        --optimizer 'sgd' \
-        --learning_rate 0.1 \
-        --val_freq 1 \
-        --prefix '' \
-        --proj_clip \
-        --projection_dim 512 \
-        --teacher_temp 2.0  \
-        --student_temp 1 \
-        --weight_img_loss 1.0 \
-        --weight_txt_loss 1.0 \
-        --num_gpus 1 \
-        --num_nodes 1
+python train_task_distillation.py \
+    --data_dir "./data/" \
+    --domain_name 'real' \
+    --dataset_name "CelebA" \
+    --train_on_testset \
+    --num_classes 2 \
+    --batch_size 256 \
+    --seed 42 \
+    --img_size 75 \
+    --img_projection --txt_projection \
+    --classifier_name "resnet18" \
+    --classifier_checkpoint_path "logs/CelebA/resnet18/classifier/checkpoint_29.pth" \
+    --clip_model_name 'ViT-B/32' \
+    --prompt_path "data/CelebA/CelebA_CLIP_ViT-B_32_text_embeddings.pth" \
+    --n_promt_ctx 16 \
+    --num_epochs 10 \
+    --optimizer 'sgd' \
+    --learning_rate 0.1 \
+    --val_freq 1 \
+    --prefix '' \
+    --proj_clip \
+    --projection_dim 512 \
+    --teacher_temp 2 \
+    --student_temp 1 \
+    --weight_img_loss 1 \
+    --weight_txt_loss 1 \
+    --num_gpus 1 \
+    --num_nodes 1
+
 
 '''

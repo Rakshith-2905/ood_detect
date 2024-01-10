@@ -221,8 +221,8 @@ def generate_metadata(data_path, datasets=['celeba', 'waterbirds', 'civilcomment
     }
     for dataset in datasets:
         dataset_metadata_generators[dataset](data_path)
-        # Split the validation set into a validation and distill set
-        create_distill_samples(data_paths[dataset], split_percent=0.50, root_partition=1)
+        # Split the validation set into a validation and failure set
+        create_failure_samples(data_paths[dataset], split_percent=0.50, root_partition=1)
 
 
 def generate_metadata_celeba(data_path):
@@ -703,9 +703,9 @@ def generate_metadata_cmnist(data_path):
     pass
 
 
-def create_distill_samples(file_path, split_percent=0.50, root_partition=1):
+def create_failure_samples(file_path, split_percent=0.50, root_partition=1):
     """
-    Reads a file, splits % of samples in the root partition into distill split, and saves the updated DataFrame.
+    Reads a file, splits % of samples in the root partition into failure split, and saves the updated DataFrame.
     Args:
         file_path (str): Path to the file to be updated.
         split_percent (float): Percentage of samples to be moved to the new split.
@@ -713,6 +713,7 @@ def create_distill_samples(file_path, split_percent=0.50, root_partition=1):
     """
     # Read the data
     df = pd.read_csv(file_path)
+    df.to_csv(file_path.replace('.csv', '_original.csv'), index=False)
 
     root_samples = df[df['split'] == root_partition]
     sample_size = int(len(root_samples) * split_percent)
@@ -723,9 +724,8 @@ def create_distill_samples(file_path, split_percent=0.50, root_partition=1):
     # Update the split value to '3' for the sampled data
     df.loc[sampled.index, 'split'] = 3
 
-    new_file_path = file_path.replace('.csv', '_distill_split.csv')
     # Save the updated DataFrame
-    df.to_csv(new_file_path, index=False)
+    df.to_csv(file_path, index=False)
     
 
 if __name__ == "__main__":
