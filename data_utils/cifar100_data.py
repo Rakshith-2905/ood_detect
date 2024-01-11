@@ -51,30 +51,6 @@ class CIFAR100Filtered(CIFAR100):
                 # Remap the targets
                 self.targets = [self.new_targets_map[target] for target in self.targets]
 
-class CIFAR10C(torch.utils.data.Dataset):
-    def __init__(self, corruption='gaussian_blur', transform=None,clip_transform=None,level=0):
-        numpy_path = f'data/CIFAR-10-C/{corruption}.npy'
-        t = 10000
-        self.transform = transform
-        self.clip_transform = clip_transform
-        self.data_ = np.load(numpy_path)[level*10000:(level+1)*10000,:,:,:]
-        self.data = self.data_[:t,:,:,:]
-        self.targets_ = np.load('data/CIFAR-10-C/labels.npy')
-        self.targets = self.targets_[:t]
-        self.np_PIL = transforms.Compose([transforms.ToPILImage()])
-
-    def __len__(self):
-        return self.data.shape[0]
-
-    def __getitem__(self, idx):
-        image_ = self.data[idx,:,:,:]
-        if self.transform:
-            image = self.transform(image_)
-            image_to_clip = self.clip_transform(self.np_PIL(image_))
-        targets = self.targets[idx]
-        return image, targets, image_to_clip
-
-
 def get_CIFAR100_loaders(batch_size=512,train_shuffle=True, data_dir='./data', select_indices=None, retain_orig_ids=False,    
                         train_transform=None, test_transform=None, return_dataset=False):
     

@@ -122,6 +122,8 @@ def validate(data_loader, clip_model, classifier,
 
         # Project the text embeddings
         if text_projector:
+            projector_dtype = text_projector.dtype
+            text_encodings_raw = text_encodings_raw.to(projector_dtype)
             text_encodings = text_projector(text_encodings_raw)
         else:
             text_encodings = text_encodings_raw
@@ -217,6 +219,8 @@ def validate_feat(data_loader, clip_model, classifier,
 
         # Project the text embeddings
         if text_projector:
+            projector_dtype = text_projector.dtype
+            text_encodings_raw = text_encodings_raw.to(projector_dtype)
             text_encodings = text_projector(text_encodings_raw)
         else:
             text_encodings = text_encodings_raw
@@ -396,10 +400,17 @@ def main(args):
     fabric.print(output_message)
 
     if fabric.is_global_zero:
-        # Save the output to a text file
-        output_file_path = os.path.join(args.save_dir, "test_results.txt")
-        with open(output_file_path, "a") as file:
-            file.write(output_message + "\n")
+
+        # convert the output to a dictionary
+        output_dict = {'val_base_acc': val_base_acc, 'val_plumber_acc': val_plumber_acc,
+                        'test_base_acc': test_base_acc, 'test_plumber_acc': test_plumber_acc}
+
+        # Save the output to a csv file
+        csv_file = os.path.join(args.save_dir, f"test_task_distillation_{args.prefix}.csv")
+        with open(csv_file, 'w') as f:
+            w = csv.writer(f)
+            w.writerow(output_dict.keys())
+            w.writerow(output_dict.values())
 
 
 if __name__ == "__main__":

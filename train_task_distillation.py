@@ -36,7 +36,8 @@ import random
 import pickle
 
 from data_utils.domainnet_data import DomainNetDataset, get_data_from_saved_files
-from data_utils.cifar100_data import CIFAR100C, CIFAR100Filtered, CIFAR10C
+from data_utils.cifar100_data import CIFAR100C, CIFAR100Filtered, get_CIFAR100_loaders
+from data_utils.cifar10_data import CIFAR10C, CIFAR10TwoTransforms
 from data_utils.celebA_dataset import FilteredCelebADataset, get_celebA_datatransforms
 from data_utils import subpop_bench
 
@@ -215,8 +216,8 @@ def get_save_dir(args):
 
     projector_name += "_proj" if is_proj else ""
     projector_name += "_img_prompt" if args.img_prompting else ""
-    projector_name += "_dist_LP" if args.cls_txt_prompts and args.is_dist_prompt else ""
-    projector_name += "_cls_LP" if args.cls_txt_prompts and not args.is_dist_prompt else ""
+    projector_name += "_dataset_LP" if args.dataset_txt_prompt else ""
+    projector_name += "_cls_LP" if args.cls_txt_prompts else ""
 
     if not args.save_dir:
         classifier_dir = os.path.dirname(os.path.dirname(args.classifier_checkpoint_path))
@@ -326,6 +327,8 @@ def train_one_epoch(data_loader, clip_model, classifier,
 
         # Project the text embeddings
         if text_projector:
+            projector_dtype = text_projector.dtype
+            text_encodings_raw = text_encodings_raw.to(projector_dtype)
             text_encodings = text_projector(text_encodings_raw)
         else:
             text_encodings = text_encodings_raw
@@ -431,6 +434,8 @@ def validate(data_loader, clip_model, classifier,
 
         # Project the text embeddings
         if text_projector:
+            projector_dtype = text_projector.dtype
+            text_encodings_raw = text_encodings_raw.to(projector_dtype)
             text_encodings = text_projector(text_encodings_raw)
         else:
             text_encodings = text_encodings_raw
@@ -534,10 +539,12 @@ def train_one_epoch_feat(data_loader, clip_model, classifier,
 
         # Learnable prompts for the text prompts
         if clip_prompted_txt_enc:
-            text_encodings = clip_prompted_txt_enc(class_prompts)
+            text_encodings_raw = clip_prompted_txt_enc(class_prompts)
 
         # Project the text embeddings
         if text_projector:
+            projector_dtype = text_projector.dtype
+            text_encodings_raw = text_encodings_raw.to(projector_dtype)
             text_encodings = text_projector(text_encodings_raw)
         else:
             text_encodings = text_encodings_raw
@@ -639,6 +646,8 @@ def validate_feat(data_loader, clip_model, classifier,
 
         # Project the text embeddings
         if text_projector:
+            projector_dtype = text_projector.dtype
+            text_encodings_raw = text_encodings_raw.to(projector_dtype)
             text_encodings = text_projector(text_encodings_raw)
         else:
             text_encodings = text_encodings_raw
@@ -829,6 +838,7 @@ def main(args):
 
     # Create optimizer for text projection
     optimizer_txt_proj = None
+    schuduler_text_proj = None
     if args.txt_projection:
         if args.optimizer == 'adam':
             optimizer_txt_proj = torch.optim.Adam(text_projector.parameters(), lr=args.learning_rate)
@@ -857,12 +867,7 @@ def main(args):
         "optimizer_txt_prompt": optimizer_txt_prompt,
         "optimizer_img_prompt": optimizer_img_prompt
     }
-    scheduler_dict = {
-        "scheduler_img_proj": scheduler_img_proj,
-        "scheduler_txt_proj": scheduler_txt_proj
-    }
-        
-
+    
     # Loss function
     criterion = SimpleDINOLoss(student_temp=args.student_temp, teacher_temp=args.teacher_temp)
 
