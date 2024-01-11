@@ -51,12 +51,16 @@ class VisualTransformer(nn.Module):
         x = self.encoder(x)
         return x
 
-class PromptedCLIPImageEncoder(VisualTransformer):
+class PromptedCLIPImageEncoder(nn.Module):
     def __init__(self, clip_model, prompt_initiation='random', 
                  dropout=0.0, num_tokens=16, prompt_dim=768, device='cpu'):
-        super(PromptedCLIPImageEncoder, self).__init__(clip_model)
+        super().__init__()
 
-        
+        for param in clip_model.parameters():
+            param.requires_grad = False
+
+        self.VisualTransformer = VisualTransformer(clip_model)
+
         patch_size = _pair((16, 16))
 
         num_tokens = num_tokens
@@ -65,30 +69,31 @@ class PromptedCLIPImageEncoder(VisualTransformer):
         self.prompt_dropout = Dropout(dropout)
 
         prompt_dim = 768
-        self.prompt_proj = nn.Identity()
 
+        self.dtype = clip_model.dtype
         # initiate prompt:
         if prompt_initiation == "random":
             val = math.sqrt(6. / float(3 * reduce(mul, patch_size, 1) + prompt_dim))  # noqa
 
-            self.prompt_embeddings = nn.Parameter(torch.zeros(
-                1, num_tokens, prompt_dim)).to(device)  # (1, n_prompt, prompt_dim)
+            self.prompt_embeddings = nn.Parameter(torch.zeros(1, num_tokens, prompt_dim, dtype=self.dtype), requires_grad=True)  # (1, n_prompt, prompt_dim)
             # xavier_uniform initialization
             nn.init.uniform_(self.prompt_embeddings.data, -val, val)
+
+            print("Prompt embeddings are randomly initialized")
         else:
             raise ValueError("Other initiation scheme is not supported")
-
+        
     def incorporate_prompt(self, x):
         """
         The input is tensor image
         """
         B = x.shape[0]
-        x = self.embed_image(x) # (batch_size, cls_token + n_patches, hidden_dim) output after positional embedding
+        x = self.VisualTransformer.embed_image(x) # (batch_size, cls_token + n_patches, hidden_dim) output after positional embedding
 
         # incorporate prompt into the input features after cls token and before patches
         x = torch.cat((
                 x[:, :1, :],
-                self.prompt_dropout(self.prompt_proj(self.prompt_embeddings).expand(B, -1, -1)),
+                self.prompt_dropout(self.prompt_embeddings).expand(B, -1, -1),
                 x[:, 1:, :]
             ), dim=1)
         # (batch_size, cls_token + n_prompt + n_patches, hidden_dim)
@@ -101,7 +106,7 @@ class PromptedCLIPImageEncoder(VisualTransformer):
         embedding_output = self.incorporate_prompt(image_input.type(self.dtype))
 
         # Encode the image features
-        encoded = self.encoder(embedding_output.type(self.dtype))
+        encoded = self.VisualTransformer.encoder(embedding_output.type(self.dtype))
 
         return encoded
 
@@ -220,14 +225,13 @@ if __name__ == "__main__":
     clip_model, preprocess = clip.load("ViT-B/32", device=device)    
     clip_model.eval()
 
-
     CLIP_image_encoder = VisualTransformer(clip_model)
 
     visual_prompter = PromptedCLIPImageEncoder(clip_model, num_tokens=8, device=device).to(device)
     text_prompter = PromptedCLIPTextEncoder(clip_model, num_classes=2, is_dist_prompt=False, device=device).to(device)
-
+    
     # Load and preprocess the image
-    image = preprocess(Image.open("donkey.jpg")).unsqueeze(0).to(device)
+    image = preprocess(Image.open("models/donkey.jpg")).unsqueeze(0).to(device)
     text = clip.tokenize(["a photo of a donkey", "a photo of a horse"]).to(device)
     with torch.no_grad():
         image_features = CLIP_image_encoder(image)
