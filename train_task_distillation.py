@@ -37,7 +37,7 @@ import pickle
 
 from data_utils.domainnet_data import DomainNetDataset, get_data_from_saved_files
 from data_utils.cifar100_data import CIFAR100C, CIFAR100Filtered, get_CIFAR100_loaders
-from data_utils.cifar10_data import CIFAR10C, CIFAR10TwoTransforms
+from data_utils.cifar10_data import CIFAR10C, CIFAR10TwoTransforms, get_CIFAR10_dataloader
 from data_utils.celebA_dataset import FilteredCelebADataset, get_celebA_datatransforms
 from data_utils import subpop_bench
 
@@ -63,20 +63,30 @@ def get_dataset(data_name, train_transforms, test_transforms, clip_transform, da
                                         split='test', transform=test_transforms, transform2=clip_transform)
         class_names = train_dataset.class_names
 
-    elif data_name == 'cifar10':
-        selected_classes = [0,1,2]
-        train_dataset = CIFAR10TwoTransforms(root=f'{data_dir}/cifar10', train=True, transform1=train_transforms, transform2=clip_transform, selected_classes=selected_classes)
-        val_dataset = CIFAR10TwoTransforms(root=f'{data_dir}/cifar10', train=False, transform1=test_transforms, transform2=clip_transform, selected_classes=selected_classes)
+    # elif data_name == 'cifar10':
+    #     selected_classes = [0,1,2]
+    #     train_dataset = CIFAR10TwoTransforms(root=f'{data_dir}/cifar10', train=True, transform1=train_transforms, transform2=clip_transform, selected_classes=selected_classes)
+    #     val_dataset = CIFAR10TwoTransforms(root=f'{data_dir}/cifar10', train=False, transform1=test_transforms, transform2=clip_transform, selected_classes=selected_classes)
 
-        # class_names = ['airplane', 'automobile', 'bird']
-        class_names = ['airplane', 'automobile', 'bird', 'cat', 'deer', 'dog', 'frog', 'horse', 'ship', 'truck']
+    #     # class_names = ['airplane', 'automobile', 'bird']
+    #     class_names = ['airplane', 'automobile', 'bird', 'cat', 'deer', 'dog', 'frog', 'horse', 'ship', 'truck']
     
-    elif data_name =="cifar10_full":
+    # elif data_name =="cifar10_full":
         
-        train_dataset = CIFAR10TwoTransforms(root=f'{data_dir}/cifar10', train=True, transform1=train_transforms, transform2=clip_transform,selected_classes= None)
-        val_dataset = CIFAR10TwoTransforms(root=f'{data_dir}/cifar10', train=False, transform1=test_transforms, transform2=clip_transform,selected_classes= None)
-        class_names= train_dataset.class_names
-    
+    #     train_dataset = CIFAR10TwoTransforms(root=f'{data_dir}/cifar10', train=True, transform1=train_transforms, transform2=clip_transform,selected_classes= None)
+    #     val_dataset = CIFAR10TwoTransforms(root=f'{data_dir}/cifar10', train=False, transform1=test_transforms, transform2=clip_transform,selected_classes= None)
+    #     class_names= train_dataset.class_names
+
+    elif data_name == 'cifar10':
+        train_dataset, val_dataset, test_dataset, _, class_names = get_CIFAR10_dataloader(data_dir='./data',    
+                                                                    train_transform=None, test_transform=None, clip_transform=clip_transform,
+                                                                    subsample_trainset=False, return_dataset=True)
+
+    elif data_name == 'cifar10-limited':
+        train_dataset, val_dataset, test_dataset, _, class_names = get_CIFAR10_dataloader(data_dir='./data',    
+                                                                    train_transform=None, test_transform=None, clip_transform=clip_transform,
+                                                                    subsample_trainset=True, return_dataset=True)
+
     elif data_name == 'cifar10-c':
         not_needed = CIFAR10TwoTransforms(root=f'{data_dir}/cifar10', train=False, transform1=test_transforms, transform2=clip_transform,selected_classes= None)
         class_names= not_needed.class_names
@@ -312,14 +322,14 @@ def train_one_epoch(data_loader, clip_model, classifier,
 
         clip_image_embeddings = clip_image_embeddings.type_as(classifier_embeddings)
 
-        # Project the image embeddings
+        # Project the image embeddings else use the clip_image embeddings
         if img_projector:
             if args.proj_clip: # this is PLUMBER
                 proj_embeddings = img_projector(clip_image_embeddings) # (batch_size, projection_dim)
             else: # this is LIMBER
                 proj_embeddings = img_projector(classifier_embeddings) # (batch_size, projection_dim)
         else:
-            proj_embeddings = classifier_embeddings
+            proj_embeddings = clip_image_embeddings
 
         # Learnable prompts for the text prompts
         if clip_prompted_txt_enc:
@@ -426,7 +436,7 @@ def validate(data_loader, clip_model, classifier,
             else: # this is LIMBER
                 proj_embeddings = img_projector(classifier_embeddings) # (batch_size, projection_dim)
         else:
-            proj_embeddings = classifier_embeddings
+            proj_embeddings = clip_image_embeddings
 
         # Learnable prompts for the text prompts
         if clip_prompted_txt_enc:
@@ -535,7 +545,7 @@ def train_one_epoch_feat(data_loader, clip_model, classifier,
             else: # this is LIMBER
                 proj_embeddings = img_projector(classifier_embeddings) # (batch_size, projection_dim)
         else:
-            proj_embeddings = classifier_embeddings
+            proj_embeddings = clip_image_embeddings
 
         # Learnable prompts for the text prompts
         if clip_prompted_txt_enc:
@@ -638,7 +648,7 @@ def validate_feat(data_loader, clip_model, classifier,
             else: # this is LIMBER
                 proj_embeddings = img_projector(classifier_embeddings) # (batch_size, projection_dim)
         else:
-            proj_embeddings = classifier_embeddings
+            proj_embeddings = clip_image_embeddings
 
         # Learnable prompts for the text prompts
         if clip_prompted_txt_enc:
@@ -699,7 +709,7 @@ def build_classifier(classifier_name, num_classes, pretrained=False, checkpoint_
     elif classifier_name in ['resnet18', 'resnet50']:
         classifier = CustomResNet(classifier_name, num_classes=num_classes, use_pretrained=pretrained)
     elif classifier_name == 'SimpleCNN':
-        classifier = SimpleCNN()
+        classifier = SimpleCNN(num_classes=num_classes)
     elif classifier_name == 'Resnet18_cifar_10':
         classifier = ResNet18()
         classifier.test_transform = transforms.Compose([
@@ -714,7 +724,7 @@ def build_classifier(classifier_name, num_classes, pretrained=False, checkpoint_
     if checkpoint_path:
 
         if classifier_name == 'SimpleCNN':
-            classifier.load_state_dict(torch.load(checkpoint_path))
+            classifier.load_state_dict(torch.load(checkpoint_path)['model_state_dict'])
         elif classifier_name == 'Resnet18_cifar_10':
             classifier = torch.nn.DataParallel(classifier)
 

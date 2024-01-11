@@ -114,16 +114,15 @@ def validate(data_loader, clip_model, classifier,
             else: # this is LIMBER
                 proj_embeddings = img_projector(classifier_embeddings) # (batch_size, projection_dim)
         else:
-            proj_embeddings = classifier_embeddings
+            proj_embeddings = clip_image_embeddings
 
         # Learnable prompts for the text prompts
         if clip_prompted_txt_enc:
             text_encodings_raw = clip_prompted_txt_enc(class_prompts)
+            text_encodings_raw = text_encodings_raw.type(torch.float32)
 
         # Project the text embeddings
         if text_projector:
-            projector_dtype = text_projector.dtype
-            text_encodings_raw = text_encodings_raw.to(projector_dtype)
             text_encodings = text_projector(text_encodings_raw)
         else:
             text_encodings = text_encodings_raw
@@ -219,8 +218,8 @@ def validate_feat(data_loader, clip_model, classifier,
 
         # Project the text embeddings
         if text_projector:
-            projector_dtype = text_projector.dtype
-            text_encodings_raw = text_encodings_raw.to(projector_dtype)
+            # projector_dtype = text_projector.dtype
+            # text_encodings_raw = text_encodings_raw.to(projector_dtype)
             text_encodings = text_projector(text_encodings_raw)
         else:
             text_encodings = text_encodings_raw
@@ -298,6 +297,7 @@ def main(args):
         fabric.print(f"Constructed text emb projection PLUMBER with projection dim: {args.projection_dim} and is_mlp: {args.is_mlp}")
         text_projector = fabric.to_device(text_projector)
         text_projector.load_state_dict(checkpoint['text_projector'])
+
     ########################### Load the dataset ############################
 
     if args.use_saved_features:
@@ -401,12 +401,12 @@ def main(args):
 
     if fabric.is_global_zero:
 
-        # convert the output to a dictionary
-        output_dict = {'val_base_acc': val_base_acc, 'val_plumber_acc': val_plumber_acc,
-                        'test_base_acc': test_base_acc, 'test_plumber_acc': test_plumber_acc}
+        # convert the output to a dictionary, make the tensors to scalars
+        output_dict = {'val_base_acc': val_base_acc.item(), 'val_plumber_acc': val_plumber_acc.item(),
+                        'test_base_acc': test_base_acc.item(), 'test_plumber_acc': test_plumber_acc.item()}
 
         # Save the output to a csv file
-        csv_file = os.path.join(args.save_dir, f"test_task_distillation_{args.prefix}.csv")
+        csv_file = os.path.join(args.save_dir, f"test_task_distillation.csv")
         with open(csv_file, 'w') as f:
             w = csv.writer(f)
             w.writerow(output_dict.keys())
