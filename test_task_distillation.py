@@ -286,13 +286,14 @@ def main(args):
             img_projector = ProjectionHead(input_dim=classifier.feature_dim, output_dim=args.projection_dim,is_mlp=args.is_mlp)
             fabric.print(f"Constructed img emb projection LIMBER with projection dim: {args.projection_dim} and is_mlp: {args.is_mlp}")
         img_projector = fabric.to_device(img_projector)
-        img_projector.load_state_dict(checkpoint['img_projector_state_dict'])
+        img_projector.load_state_dict(checkpoint['img_projector'])
 
     text_projector = None
     if args.txt_projection:
         text_projector = ProjectionHead(input_dim=args.projection_dim, output_dim=args.projection_dim,is_mlp=args.is_mlp)
         fabric.print(f"Constructed text emb projection PLUMBER with projection dim: {args.projection_dim} and is_mlp: {args.is_mlp}")
         text_projector = fabric.to_device(text_projector)
+        text_projector.load_state_dict(checkpoint['text_projector'])
     ########################### Load the dataset ############################
 
     if args.use_saved_features:
@@ -338,6 +339,7 @@ def main(args):
         clip_prompted_txt_enc = PromptedCLIPTextEncoder(clip_model, n_ctx=args.n_promt_ctx, num_classes=len(class_names), 
                                                     device=fabric.device, is_dist_prompt=False)
         clip_prompted_txt_enc = fabric.to_device(clip_prompted_txt_enc)
+        clip_prompted_txt_enc.load_state_dict(checkpoint['clip_prompted_txt_enc'])
 
         class_prompts = [f"This is a photo of a {class_name}" for class_name in class_names]
         fabric.print(f"Constructed CLIP Class specific Prompted Text Encoder with {len(class_names)} classes")
@@ -347,6 +349,7 @@ def main(args):
         clip_prompted_txt_enc = PromptedCLIPTextEncoder(clip_model, n_ctx=args.n_promt_ctx, num_classes=len(class_names),
                                                     device=fabric.device, is_dist_prompt=True)
         clip_prompted_txt_enc = fabric.to_device(clip_prompted_txt_enc)
+        clip_prompted_txt_enc.load_state_dict(checkpoint['clip_prompted_txt_enc'])
         
         class_prompts = [f"This is a photo of a {class_name}" for class_name in class_names]
         fabric.print(f"Constructed CLIP Dataset specific Prompted Text Encoder with {len(class_names)} classes")
@@ -356,6 +359,7 @@ def main(args):
         # Create the prompted CLIP model
         clip_prompted_img_enc = PromptedCLIPImageEncoder(clip_model, num_tokens=args.n_promt_ctx, device=fabric.device)
         clip_prompted_img_enc = fabric.to_device(clip_prompted_img_enc)
+        clip_prompted_img_enc.load_state_dict(checkpoint['clip_prompted_img_enc'])
 
         fabric.print(f"Constructed CLIP Prompted Image Encoder")
 

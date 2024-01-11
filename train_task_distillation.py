@@ -138,11 +138,13 @@ def get_dataset(data_name, train_transforms, test_transforms, clip_transform, da
                                                 transform=train_transforms,
                                                 transform1=clip_transform,
                                                 split='failure',
-                                                num_images=31015,
                                                 class_attr=class_attr,
+                                                num_images=7180,
                                                 imbalance_attr=imbalance_attr,
                                                 imbalance_percent={1: [50], 0:[50]} ,
-                                                ignore_attrs=ignore_attrs)
+                                                ignore_attrs=ignore_attrs,
+                                                mask=mask,
+                                                mask_region=mask_region)
     
         class_names = ["old person", "young person"]
         
