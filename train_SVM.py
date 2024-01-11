@@ -100,11 +100,12 @@ def evaulate(data_loader, clip_model, classifier,
             else: # this is LIMBER
                 proj_embeddings = img_projector(classifier_embeddings) # (batch_size, projection_dim)
         else:
-            proj_embeddings = classifier_embeddings
+            proj_embeddings = clip_image_embeddings
 
         # Learnable prompts for the text prompts
         if clip_prompted_txt_enc:
             text_encodings_raw = clip_prompted_txt_enc(class_prompts)
+            text_encodings_raw = text_encodings_raw.type(torch.float32)
 
         # Project the text embeddings
         if text_projector:
@@ -390,6 +391,9 @@ def main(args):
 
     failure_features = features_labels_dict['failure_dataset'][0]['proj_features']
     failure_labels = features_labels_dict['failure_dataset'][1]['classifier_not_correct'] 
+
+    # Subsample the features and labels
+    failure_features, failure_labels = subsample_features_labels(failure_features, failure_labels)
     
     test_features = features_labels_dict['test_dataset'][0]['proj_features']
     test_failure_labels = features_labels_dict['test_dataset'][1]['classifier_not_correct']
@@ -420,66 +424,6 @@ def main(args):
 
     print(f'Failure Detector PLUMBER Test Accuracy: {svm_accuracy * 100:.2f}%')
 
-    failure_features = features_labels_dict['failure_dataset'][0]['clip_features']
-    failure_labels = features_labels_dict['failure_dataset'][1]['classifier_not_correct'] 
-    
-    test_features = features_labels_dict['test_dataset'][0]['clip_features']
-    test_failure_labels = features_labels_dict['test_dataset'][1]['classifier_not_correct']
-    
-    print(f"Number of failure cases: {sum(failure_labels)}")
-    print(f"Number of success cases: {len(failure_labels) - sum(failure_labels)}")
-    # Start the timer
-    start_time = time.time()
-    # Train the SVM
-    svm_model = svm.SVC(kernel='rbf', probability=True)
-    svm_model.fit(failure_features, failure_labels)
-
-
-    # Get the prediction probabilities on the test set
-    svm_preds_proba = svm_model.predict_proba(test_features)[:, 1]
-
-    # Evaluate the SVM
-    svm_preds = svm_model.predict(test_features)
-    svm_accuracy = accuracy_score(svm_preds, test_failure_labels)
-
-
-    # Calculate and print the duration
-    duration = time.time() - start_time
-    print(f"SVM fitting completed in {duration:.2f} seconds")
-
-    print(f'Failure Detector CLIP Test Accuracy: {svm_accuracy * 100:.2f}%')
-
-    failure_features = features_labels_dict['failure_dataset'][0]['classifier_features']
-    failure_labels = features_labels_dict['failure_dataset'][1]['classifier_not_correct'] 
-    
-    test_features = features_labels_dict['test_dataset'][0]['classifier_features']
-    test_failure_labels = features_labels_dict['test_dataset'][1]['classifier_not_correct']
-    
-    print(f"Number of failure cases: {sum(failure_labels)}")
-    print(f"Number of success cases: {len(failure_labels) - sum(failure_labels)}")
-
-    # Start the timer
-    start_time = time.time()
-    # Train the SVM
-    svm_model = svm.SVC(kernel='rbf', probability=True)
-    svm_model.fit(failure_features, failure_labels)
-
-
-    # Get the prediction probabilities on the test set
-    svm_preds_proba = svm_model.predict_proba(test_features)[:, 1]
-
-    # Evaluate the SVM
-    svm_preds = svm_model.predict(test_features)
-    svm_accuracy = accuracy_score(svm_preds, test_failure_labels)
-
-
-    # Calculate and print the duration
-    duration = time.time() - start_time
-    print(f"SVM fitting completed in {duration:.2f} seconds")
-    
-    print(f'Failure Detector CLIP Test Accuracy: {svm_accuracy * 100:.2f}%')
-
-    # Log the metrics
 
     # compute_and_plot_metrics(test_failure_labels, svm_preds, svm_preds_proba, log_dir=args.save_dir)
     

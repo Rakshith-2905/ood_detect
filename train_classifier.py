@@ -12,6 +12,7 @@ from tqdm import tqdm
 
 from models.resnet import CustomResNet
 from data_utils.domainnet_data import DomainNetDataset, get_domainnet_loaders
+from data_utils.cifar10_data import get_CIFAR10_dataloader
 from data_utils.celebA_dataset import get_celebA_dataloader
 
 from train_task_distillation import get_dataset, build_classifier
@@ -132,7 +133,11 @@ def main(args):
 
         loaders, class_names = get_celebA_dataloader(args.batch_size, class_attr, imbalance_attr, imbalance_percent, 
                                                      ignore_attrs, img_size=args.image_size, mask=False, mask_region=None)
-        
+    elif args.dataset_name == 'cifar10-limited':
+        loaders, class_names = get_CIFAR10_dataloader(batch_size=args.batch_size, data_dir=args.data_path, subsample_trainset=True)
+    elif args.dataset_name == 'cifar10':
+        loaders, class_names = get_CIFAR10_dataloader(batch_size=args.batch_size, data_dir=args.data_path, subsample_trainset=False)
+   
 
     train_loader, val_loader = loaders['train'], loaders['val']
 
@@ -290,7 +295,7 @@ if __name__ == "__main__":
     parser.add_argument('--optimizer', type=str, choices=['adam', 'sgd'], default='adam', help='Optimizer to use')
     parser.add_argument('--scheduler', type=str, choices=['MultiStepLR', 'cosine', 'No'], default='MultiStepLR', help='Scheduler to use')
     parser.add_argument('--learning_rate', type=float, default=0.001, help='Learning rate for the optimizer')
-    parser.add_argument('--classifier_model', type=str, choices=['resnet18', 'resnet50', 'vit_b_16', 'swin_b'], default='resnet18', help='Type of classifier model to use')
+    parser.add_argument('--classifier_model', type=str, choices=['resnet18', 'resnet50', 'vit_b_16', 'swin_b', 'SimpleCNN'], default='resnet18', help='Type of classifier model to use')
     parser.add_argument('--use_pretrained', action='store_true', help='Use pretrained weights for ResNet')
     parser.add_argument('--resume', action='store_true', help='Resume training from checkpoint')
     parser.add_argument('--checkpoint_path', type=str, help='Path to checkpoint to resume training from')
@@ -306,15 +311,15 @@ if __name__ == "__main__":
 """
 Sample command to run:
 python train_classifier.py \
-        --dataset_name CelebA \
+        --dataset_name cifar10 \
         --domain None \
         --data_path ./data \
-        --image_size 75 \
+        --image_size 224 \
         --batch_size 512 \
         --seed 42 \
         --num_epochs 30 \
         --learning_rate 0.001 \
-        --classifier_model resnet18 \
+        --classifier_model SimpleCNN \
         --use_pretrained
 
 

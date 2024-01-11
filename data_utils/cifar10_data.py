@@ -7,6 +7,9 @@ import os
 import argparse
 import numpy as np
 
+import ssl
+ssl._create_default_https_context = ssl._create_unverified_context
+
 class CIFAR10TwoTransforms(Dataset):
     def __init__(self, root, train, transform1, transform2, selected_classes=None):
         self.original_dataset = torchvision.datasets.CIFAR10(root=root, train=train, download=True, transform=None)
@@ -58,28 +61,24 @@ class CIFAR10C(torch.utils.data.Dataset):
         return image, targets, image_to_clip
 
 def get_CIFAR10_dataloader(batch_size=512, data_dir='./data', selected_classes=None,    
-                        train_transform=None, test_transform=None, subsample_trainset=True):
+                        train_transform=None, test_transform=None, clip_transform=None, subsample_trainset=True, return_dataset=False):
 
     if train_transform is None:
         train_transform = transforms.Compose([
-                transforms.RandomResizedCrop(224),
-                transforms.RandomHorizontalFlip(),
                 transforms.ToTensor(),
                 transforms.Normalize(mean=[0.485, 0.456, 0.406],
                                     std=[0.229, 0.224, 0.225]),
             ])
     if test_transform is None:
         test_transform = transforms.Compose([
-                transforms.Resize(256),
-                transforms.CenterCrop(224),
                 transforms.ToTensor(),
                 transforms.Normalize(mean=[0.485, 0.456, 0.406],
                                     std=[0.229, 0.224, 0.225]),
             ])
 
-    temp_train_dataset = CIFAR10TwoTransforms(root=data_dir, train=True, transform1=test_transform, transform2=None, 
+    temp_train_dataset = CIFAR10TwoTransforms(root=data_dir, train=True, transform1=test_transform, transform2=clip_transform, 
                                               selected_classes=selected_classes)
-    test_dataset = CIFAR10TwoTransforms(root=data_dir, train=False, transform1=test_transform, transform2=None, 
+    test_dataset = CIFAR10TwoTransforms(root=data_dir, train=False, transform1=test_transform, transform2=clip_transform, 
                                         selected_classes=selected_classes)
 
     # Split trainset into train, val
@@ -100,6 +99,8 @@ def get_CIFAR10_dataloader(batch_size=512, data_dir='./data', selected_classes=N
     val_dataset, failure_dataset = torch.utils.data.random_split(temp_valset, [val_size, failure_size], 
                                                                  generator=torch.Generator().manual_seed(42))
 
+    if return_dataset:
+        return train_dataset, val_dataset, test_dataset, failure_dataset, temp_train_dataset.class_names
 
     # DataLoader
     train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, num_workers=2)
@@ -116,3 +117,19 @@ def get_CIFAR10_dataloader(batch_size=512, data_dir='./data', selected_classes=N
 
     return loaders, temp_train_dataset.class_names
 
+
+if __name__ == "__main__":
+
+    loaders, class_names = get_CIFAR10_dataloader(batch_size=512, data_dir='./data', selected_classes=None, 
+                                                    train_transform=None, test_transform=None, subsample_trainset=False)                 
+    print(class_names)
+    print(len(loaders['train'].dataset))
+    print(len(loaders['val'].dataset))
+    print(len(loaders['failure'].dataset))
+    print(len(loaders['test'].dataset))
+
+    for i, (images, labels) in enumerate(loaders['train']):
+        print(images.shape)
+        print(labels.shape)
+        break
+    

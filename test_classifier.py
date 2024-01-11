@@ -11,6 +11,7 @@ import matplotlib.pyplot as plt
 from tqdm import tqdm
 
 from models.resnet import CustomResNet
+from data_utils.cifar10_data import get_CIFAR10_dataloader
 from data_utils.domainnet_data import DomainNetDataset, get_domainnet_loaders
 from data_utils.celebA_dataset import get_celebA_dataloader
 
@@ -101,7 +102,12 @@ def main(args):
 
         loaders, class_names = get_celebA_dataloader(args.batch_size, class_attr, imbalance_attr, imbalance_percent, 
                                                      ignore_attrs, img_size=args.image_size, mask=False, mask_region=None)
-        
+    elif args.dataset_name == 'cifar10-limited':
+        loaders, class_names = get_CIFAR10_dataloader(batch_size=args.batch_size, data_dir=args.data_path, subsample_trainset=True)
+    elif args.dataset_name == 'cifar10':
+        loaders, class_names = get_CIFAR10_dataloader(batch_size=args.batch_size, data_dir=args.data_path, subsample_trainset=False)
+   
+
 
     train_loader, val_loader, test_loader = loaders['train'], loaders['val'], loaders['test']
 
@@ -160,7 +166,7 @@ if __name__ == "__main__":
     parser.add_argument('--seed', type=int, default=42, help='Seed for reproducibility')
     parser.add_argument('--learning_rate', type=float, default=0.001, help='Learning rate for the optimizer')
     parser.add_argument('--use_pretrained', action='store_true', help='Use pretrained weights for ResNet')
-    parser.add_argument('--classifier_model', type=str, choices=['resnet18', 'resnet50', 'vit_b_16', 'swin_b'], default='resnet18', help='Type of classifier model to use')
+    parser.add_argument('--classifier_model', type=str, choices=['resnet18', 'resnet50', 'vit_b_16', 'swin_b', 'SimpleCNN'], default='resnet18', help='Type of classifier model to use')
     parser.add_argument('--checkpoint_path', type=str, help='Path to checkpoint to resume training from')
 
     args = parser.parse_args()
@@ -174,13 +180,13 @@ if __name__ == "__main__":
 """
 Sample command to run:
 python test_classifier.py \
-        --dataset_name CelebA \
+        --dataset_name cifar10 \
         --data_path ./data \
-        --image_size 75 \
+        --image_size 224 \
         --batch_size 512 \
         --seed 42 \
-        --classifier_model resnet18 \
-        --checkpoint_path logs/CelebA/resnet18/classifier/checkpoint_29.pth
+        --classifier_model SimpleCNN \
+        --checkpoint_path logs/cifar10/SimpleCNN/classifier/checkpoint_29.pth
 
 
 """
