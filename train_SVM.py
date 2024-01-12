@@ -25,6 +25,7 @@ import pickle
 import logging
 import matplotlib.pyplot as plt
 import seaborn as sns
+import json
 
 from sklearn import svm
 from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, roc_auc_score, matthews_corrcoef, confusion_matrix, roc_curve, auc, precision_recall_curve, average_precision_score
@@ -33,6 +34,10 @@ from train_task_distillation import build_classifier, get_CLIP_text_encodings, g
 from models.projector import ProjectionHead
 from models.prompted_CLIP import PromptedCLIPTextEncoder, PromptedCLIPImageEncoder
 from utils_proj import SimpleDINOLoss, compute_accuracy, compute_similarities, plot_grad_flow
+
+from models import svm_wrapper
+
+
 
 def seed_everything(seed):
     random.seed(seed)
@@ -62,8 +67,9 @@ def evaulate(data_loader, clip_model, classifier,
 
     set_eval_mode(img_projector, text_projector, clip_prompted_txt_enc, clip_prompted_img_enc)
 
-    classifier_not_correct = []
-    proj_not_correct = []
+    gt_labels = []
+    classifier_preds = []
+    proj_preds = []
 
     classifier_features = []
     clip_features = []
@@ -81,19 +87,17 @@ def evaulate(data_loader, clip_model, classifier,
         
         classifier_logits, classifier_embeddings = classifier(images_batch, return_features=True) # (batch_size, embedding_dim)
 
-        classifier_features.extend(classifier_embeddings.cpu().numpy())
+        clip_raw_embeddings = clip_model.encode_image(images_clip_batch).float() # (batch_size, embedding_dim)
 
         # Learnable Image Prompting
         if clip_prompted_img_enc:
             clip_image_embeddings = clip_prompted_img_enc(images_clip_batch) # (batch_size, embedding_dim)
-            clip_features.extend(clip_model.encode_image(images_clip_batch).cpu().numpy())
         else:
             clip_image_embeddings = clip_model.encode_image(images_clip_batch) # (batch_size, embedding_dim)
-            clip_features.extend(clip_model.encode_image(images_clip_batch).cpu().numpy())
 
         clip_image_embeddings = clip_image_embeddings.type_as(classifier_embeddings)
 
-        # Project the image embeddings
+        # Project the image embeddings if no projection use the clip embeddings
         if img_projector:
             if args.proj_clip: # this is PLUMBER
                 proj_embeddings = img_projector(clip_image_embeddings) # (batch_size, projection_dim)
@@ -130,10 +134,17 @@ def evaulate(data_loader, clip_model, classifier,
         total_base_model_acc += batch_base_model_acc
         total_plumber_acc += batch_plumber_acc  
 
-        # Save the features and the failure labels
-        # 1 if prediction is incorrect(Failure), 0 otherwise
-        classifier_not_correct.extend((probs_from_classifier.argmax(dim=-1) != labels).cpu().numpy())
-        proj_not_correct.extend((probs_from_proj.argmax(dim=-1) != labels).cpu().numpy())
+        # # Save the features and the failure labels
+        # # 1 if prediction is incorrect(Failure), 0 otherwise
+        # classifier_not_correct.extend((probs_from_classifier.argmax(dim=-1) != labels).cpu().numpy())
+        # proj_not_correct.extend((probs_from_proj.argmax(dim=-1) != labels).cpu().numpy())
+
+        classifier_preds.extend(probs_from_classifier.argmax(dim=-1).cpu().numpy())
+        proj_preds.extend(probs_from_proj.argmax(dim=-1).cpu().numpy())
+        gt_labels.extend(labels.cpu().numpy())
+
+        classifier_features.extend(classifier_embeddings.cpu().numpy())
+        clip_features.extend(clip_raw_embeddings.cpu().numpy())
         proj_features.extend(proj_embeddings.cpu().numpy())
 
 
@@ -146,110 +157,15 @@ def evaulate(data_loader, clip_model, classifier,
         'clip_features': clip_features,
         'proj_features': proj_features
     }
-    failure_labels = {
-        'classifier_not_correct': classifier_not_correct,
-        'proj_not_correct': proj_not_correct
+    predictions = {
+        'gt_labels': gt_labels,
+        'classifier_preds': classifier_preds,
+        'proj_preds': proj_preds
     }
 
-    return total_base_model_acc, total_plumber_acc, features, failure_labels
+    return total_base_model_acc, total_plumber_acc, features, predictions
 
-def subsample_features_labels(features, labels):
-    # Convert to numpy arrays
-    features = np.array(features)
-    labels = np.array(labels)
-
-    # Find the indices of the failure and success cases
-    failure_indices = np.where(labels == 1)[0]
-    success_indices = np.where(labels == 0)[0]
-
-    # Count the number of failures and successes
-    num_failures = len(failure_indices)
-    num_successes = len(success_indices)
-
-    # If there are more successes than failures, undersample the successes
-    # Otherwise, undersample the failures
-    if num_successes > num_failures:
-        undersample_indices = np.random.choice(success_indices, size=num_failures, replace=False)
-        failure_indices = np.random.choice(failure_indices, size=num_failures, replace=False)
-        indices = np.concatenate([undersample_indices, failure_indices])
-        print(f"Local Subpop: Subsampling performed. Reduced the number of successes from {num_successes} to {num_failures}.")
-    else:
-        undersample_indices = np.random.choice(failure_indices, size=num_successes, replace=False)
-        success_indices = np.random.choice(success_indices, size=num_successes, replace=False)
-        indices = np.concatenate([undersample_indices, success_indices])
-        print(f"Local Subpop: Subsampling performed. Reduced the number of failures from {num_failures} to {num_successes}.")
-
-    # Use the chosen indices to select the features and labels
-    subsampled_features = features[indices]
-    subsampled_labels = labels[indices]
-
-    print(f"Local Subpop: The total number of samples has been reduced from {len(labels)} to {len(subsampled_labels)}.")
-
-    return list(subsampled_features), list(subsampled_labels)
-
-def compute_and_plot_metrics(true_labels, preds, preds_proba, log_dir):
-    # Ensure the logging directory exists
-    os.makedirs(log_dir, exist_ok=True)
-
-    # Set up logging
-    logging.basicConfig(filename=os.path.join(log_dir, 'metrics.log'), level=logging.INFO)
-    
-    # Compute confusion matrix
-    cm = confusion_matrix(true_labels, preds)
-
-    # Plot confusion matrix
-    plt.figure(figsize=(7,5))
-    sns.heatmap(cm, annot=True, fmt=".0f", linewidths=.5, square=True, cmap='Blues')
-    plt.ylabel('True label')
-    plt.xlabel('Predicted label')
-    plt.title('failure_Confusion Matrix')
-    plt.savefig(os.path.join(log_dir, 'failure_confusion_matrix.png'))
-    plt.show()
-
-    # Compute metrics
-    accuracy = accuracy_score(true_labels, preds)
-    precision = precision_score(true_labels, preds)
-    recall = recall_score(true_labels, preds)
-    f1 = f1_score(true_labels, preds)
-    auc_roc = roc_auc_score(true_labels, preds_proba)
-    mcc = matthews_corrcoef(true_labels, preds) # Matthews correlation coefficient
-
-    # Print and log metrics
-    metrics = f'Accuracy: {accuracy*100:.2f}%, Precision: {precision*100:.2f}%, Recall: {recall*100:.2f}%, F1 Score: {f1*100:.2f}%, AUC-ROC: {auc_roc*100:.2f}%, MCC: {mcc*100:.2f}%'
-    print(metrics)
-    logging.info(metrics)
-
-    # Compute ROC curve and ROC area
-    fpr, tpr, _ = roc_curve(true_labels, preds_proba)
-    roc_auc = auc(fpr, tpr)
-
-    # Plot ROC curve
-    plt.figure()
-    plt.plot(fpr, tpr, label='ROC curve (area = %0.2f)' % roc_auc)
-    plt.plot([0, 1], [0, 1], 'k--')
-    plt.xlim([0.0, 1.0])
-    plt.ylim([0.0, 1.05])
-    plt.xlabel('False Positive Rate')
-    plt.ylabel('True Positive Rate')
-    plt.title('Receiver Operating Characteristic')
-    plt.legend(loc="lower right")
-    plt.savefig(os.path.join(log_dir, 'roc_curve.png'))
-    plt.show()
-
-    # Precision-Recall curve
-    precision, recall, _ = precision_recall_curve(true_labels, preds_proba)
-    average_precision = average_precision_score(true_labels, preds_proba)
-
-    plt.figure(figsize=(8,6))
-    plt.plot(recall, precision, label='PR curve (area = %0.2f)' % average_precision)
-    plt.xlabel('Recall')
-    plt.ylabel('Precision')
-    plt.title('Precision-Recall Curve')
-    plt.legend(loc="lower right")
-    plt.savefig(os.path.join(log_dir, 'precision_recall_curve.png'))
-    plt.show()
-
-def get_failure_data(args):
+def get_features_preds(args):
 
     # Load the CLIP model
     clip_model, clip_transform = clip.load(args.clip_model_name)
@@ -356,14 +272,21 @@ def get_failure_data(args):
     # Loss function
     criterion = SimpleDINOLoss(student_temp=args.student_temp, teacher_temp=args.teacher_temp)
 
-    val_base_acc, val_plumber_acc, val_features, val_failure_labels = evaulate(
+    train_base_acc, train_plumber_acc, train_features, train_preds = evaulate(
+                                                                train_loader, clip_model, classifier,
+                                                                img_projector, text_projector,
+                                                                text_encodings, class_prompts,
+                                                                clip_prompted_txt_enc, clip_prompted_img_enc,
+                                                                criterion, 0)
+
+    val_base_acc, val_plumber_acc, val_features, val_preds = evaulate(
                                                                 failure_loader, clip_model, classifier,
                                                                 img_projector, text_projector,
                                                                 text_encodings, class_prompts,
                                                                 clip_prompted_txt_enc, clip_prompted_img_enc,
                                                                 criterion, 0)
     
-    test_base_acc, test_plumber_acc, test_features, test_failure_labels = evaulate(
+    test_base_acc, test_plumber_acc, test_features, test_preds = evaulate(
                                                                 test_loader, clip_model, classifier,
                                                                 img_projector, text_projector,
                                                                 text_encodings, class_prompts,
@@ -372,64 +295,90 @@ def get_failure_data(args):
     
                         
     output_message = f"Val Base Acc: {val_base_acc:.2f}, Val Plumber Acc: {val_plumber_acc:.2f}, Test Base Acc: {test_base_acc:.2f}, Test Plumber Acc: {test_plumber_acc:.2f}"
-    print(output_message)
+    
+    return {
+        'train': [train_features, train_preds],
+        'val': [val_features, val_preds],
+        'test': [test_features, test_preds]
+    }
 
-    return {'failure_dataset': [val_features, val_failure_labels], 'test_dataset': [test_features, test_failure_labels]}
+
+def compute_and_plot_metrics(metric_dict, log_dir):
+    # Ensure the logging directory exists
+    os.makedirs(log_dir, exist_ok=True)
+
+    # Compute confusion matrix
+    cm = metric_dict['confusion_matrix']
+
+    # Plot confusion matrix
+    plt.figure(figsize=(7,5))
+    sns.heatmap(cm, annot=True, fmt=".0f", linewidths=.5, square=True, cmap='Blues')
+    plt.ylabel('True label')
+    plt.xlabel('Predicted label')
+    plt.title('failure_Confusion Matrix')
+    plt.savefig(os.path.join(log_dir, 'failure_confusion_matrix.png'))
+    plt.show()
+
+    true_labels = metric_dict['ytrue']
+    preds = metric_dict['ypred']
+    # Compute metrics
+    accuracy = accuracy_score(true_labels, preds)
+    precision = precision_score(true_labels, preds)
+    recall = recall_score(true_labels, preds)
+    f1 = f1_score(true_labels, preds) # Matthews correlation coefficient
+
+    # Print and log metrics
+    metrics = f'{args.svm_features}\tAccuracy: {accuracy*100:.2f}%, Precision: {precision*100:.2f}%, Recall: {recall*100:.2f}%, F1 Score: {f1*100:.2f}%'
+    print(metrics, "\n\n")
+    with open(os.path.join(log_dir, 'metrics.txt'), 'a') as f:
+        f.write(metrics)
+        f.write("\n")
 
 def main(args):
     
-    # Load the saved features and labels or create them
+    # # Load the saved features and labels or create them
     if os.path.exists(os.path.join(args.save_dir, 'features', 'features_labels_dict.pkl')):
         with open(os.path.join(args.save_dir, 'features', 'features_labels_dict.pkl'), 'rb') as f:
-            features_labels_dict = pickle.load(f)
+            features_pred_dict = pickle.load(f)
     else:
-        features_labels_dict = get_failure_data(args)
+        features_pred_dict = get_features_preds(args)
         # Save the features and the failure labels
         os.makedirs(os.path.join(args.save_dir, 'features'), exist_ok=True)
         with open(os.path.join(args.save_dir, 'features', 'features_labels_dict.pkl'), 'wb') as f:
-            pickle.dump(features_labels_dict, f)
-
-    failure_features = features_labels_dict['failure_dataset'][0]['proj_features']
-    failure_labels = features_labels_dict['failure_dataset'][1]['classifier_not_correct'] 
-
-    # Subsample the features and labels
-    failure_features, failure_labels = subsample_features_labels(failure_features, failure_labels)
+            pickle.dump(features_pred_dict, f)
     
-    test_features = features_labels_dict['test_dataset'][0]['proj_features']
-    test_failure_labels = features_labels_dict['test_dataset'][1]['classifier_not_correct']
-    
-    print(f"Number of failure cases: {sum(failure_labels)}")
-    print(f"Number of success cases: {len(failure_labels) - sum(failure_labels)}")
-    print(f"Number of failure cases in test set: {sum(test_failure_labels)}")
-    print(f"Number of success cases in test set: {len(test_failure_labels) - sum(test_failure_labels)}")
+    train_features = features_pred_dict['train'][0][args.svm_features]
+    train_labels = features_pred_dict['train'][1]['gt_labels']
+    train_preds = features_pred_dict['train'][1]['proj_preds']
+
+    val_features = features_pred_dict['val'][0][args.svm_features]
+    val_labels = np.asarray(features_pred_dict['val'][1]['gt_labels'])
+    val_preds = np.asarray(features_pred_dict['val'][1]['proj_preds'])
+
+    test_features = features_pred_dict['test'][0][args.svm_features]
+    test_labels = np.asarray(features_pred_dict['test'][1]['gt_labels'])
+    test_preds = np.asarray(features_pred_dict['test'][1]['proj_preds'])
+
+    svm_fitter = svm_wrapper.SVMFitter()
+    svm_fitter.set_preprocess(train_features)
+    cv_scores = svm_fitter.fit(preds=val_preds, ys=val_labels, latents=val_features)
+
+    out_mask, out_decision, metric_dict = svm_fitter.predict(preds=test_preds, ys=test_labels, latents=test_features, compute_metrics=True)
+
+    # Compute and plot metrics
+    compute_and_plot_metrics(metric_dict, args.save_dir)
+
+    # new_metric_dict = {
+    #     'test_acc': metric_dict['accuracy'],
+    #     'balanced_accuracy': metric_dict['balanced_accuracy'],
+    #     'indiv_accs': metric_dict['indiv_accs'],
+    # }
 
 
-    # Start the timer
-    start_time = time.time()
-    # Train the SVM
-    svm_model = svm.SVC(kernel='rbf', probability=True)
-    svm_model.fit(failure_features, failure_labels)
-
-    # Get the prediction probabilities on the test set
-    svm_preds_proba = svm_model.predict_proba(test_features)[:, 1]
-
-    # Evaluate the SVM
-    svm_preds = svm_model.predict(test_features)
-    svm_accuracy = accuracy_score(svm_preds, test_failure_labels)
-
-
-    # Calculate and print the duration
-    duration = time.time() - start_time
-    print(f"SVM fitting completed in {duration:.2f} seconds")
-
-    print(f'Failure Detector PLUMBER Test Accuracy: {svm_accuracy * 100:.2f}%')
-
-
-    # compute_and_plot_metrics(test_failure_labels, svm_preds, svm_preds_proba, log_dir=args.save_dir)
-    
-    # # Save the SVM model
-    # with open(os.path.join(args.save_dir, 'svm_model.pkl'), 'wb') as f:
-    #     pickle.dump(svm_model, f)
+    # # Save the results as a json file
+    # os.makedirs(os.path.join(args.save_dir, 'results'), exist_ok=True)
+    # with open(os.path.join(args.save_dir, 'results', 'results.json'), 'w') as f:
+    #     json.dump(metric_dict, f)
 
 
 if __name__ == "__main__":
@@ -480,6 +429,8 @@ if __name__ == "__main__":
     parser.add_argument('--num_nodes', type=int, default=1, help='Number of nodes for DDP')
     parser.add_argument('--template_num', type=int, default=0, help='CLIP text prompt number')
 
+    parser.add_argument('--svm_features', type=str, default='proj_features', choices=['proj_features', 'clip_features', 'classifier_features'], help='Features to use for SVM')
+
     args = parser.parse_args()
     device='cuda' if torch.cuda.is_available() else 'cpu'
     args.device = device
@@ -496,7 +447,7 @@ if __name__ == "__main__":
     main(args)
 
 '''
-python train_SVM.py \
+python temp_svm.py \
     --data_dir "./data/" \
     --domain_name 'real' \
     --dataset_name "CelebA" \
@@ -508,7 +459,7 @@ python train_SVM.py \
     --img_projection --txt_projection \
     --classifier_name "resnet18" \
     --classifier_checkpoint_path "logs/CelebA/resnet18/classifier/checkpoint_29.pth" \
-    --step1_checkpoint_path "logs/CelebA/resnet18/plumber_img_text_proj/_clsEpoch_29_bs_256_lr_0.1_teT_2.0_sT_1.0_imgweight_1.0_txtweight_1.0_is_mlp_False/step_1/best_projector_weights.pth" \
+    --step1_checkpoint_path "logs/CelebA/resnet18/plumber_img_text_proj/_clsEpoch_29_bs_128_lr_0.1_teT_2.0_sT_1.0_imgweight_1.0_txtweight_1.0_is_mlp_False/step_1/best_projector_weights.pth" \
     --clip_model_name 'ViT-B/32' \
     --prompt_path "data/CelebA/CelebA_CLIP_ViT-B_32_text_embeddings.pth" \
     --n_promt_ctx 16 \

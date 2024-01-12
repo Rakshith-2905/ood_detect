@@ -99,7 +99,7 @@ prompts/text_embeddings.pth
 *.pt
 *.out
 ./bash_files/*
-*.sh
+
 *.ckpt
 *.pkl
 *.txt
