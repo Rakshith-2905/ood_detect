@@ -119,6 +119,53 @@ def get_CIFAR10_dataloader(batch_size=512, data_dir='./data', selected_classes=N
     return loaders, temp_train_dataset.class_names
 
 
+def get_CIFAR10C_dataloader(batch_size=512, data_dir='./data', corruption='gaussian_blur', severity=3,
+                        train_transform=None, test_transform=None, clip_transform=None, return_dataset=False):
+
+    # TODO:Change the mean and std to the ones for CIFAR-10-C #Mean : [0.491 0.482 0.446]   STD: [0.247 0.243 0.261]
+    if train_transform is None:
+        train_transform = transforms.Compose([
+                transforms.ToTensor(),
+                transforms.Normalize(mean=[0.485, 0.456, 0.406],
+                                    std=[0.229, 0.224, 0.225]),
+            ])
+    if test_transform is None:
+        test_transform = transforms.Compose([
+                transforms.ToTensor(),
+                transforms.Normalize(mean=[0.485, 0.456, 0.406],
+                                    std=[0.229, 0.224, 0.225]),
+            ])
+
+
+    train_dataset = CIFAR10C(corruption=corruption, transform=train_transform,
+                             clip_transform=clip_transform,level=severity)
+    val_dataset = train_dataset
+    failure_dataset = train_dataset
+    test_dataset = train_dataset
+
+    class_names = ['airplane', 'automobile', 'bird', 'cat', 'deer', 'dog', 'frog', 'horse', 'ship','truck']                                           
+
+    if return_dataset:
+        return train_dataset, val_dataset, test_dataset, failure_dataset, class_names
+
+    # DataLoader
+    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, num_workers=2)
+    val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=True, num_workers=2)
+    failure_loader = DataLoader(failure_dataset, batch_size=batch_size, shuffle=True, num_workers=2)
+    test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False, num_workers=2)
+
+    loaders = {
+        'train': train_loader,
+        'val': val_loader,
+        'failure': failure_loader,
+        'test': test_loader
+    }
+
+    return loaders, class_names
+
+
+
+
 if __name__ == "__main__":
 
     loaders, class_names = get_CIFAR10_dataloader(batch_size=512, data_dir='./data', selected_classes=None, 

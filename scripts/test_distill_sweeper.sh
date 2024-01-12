@@ -82,14 +82,14 @@ weight_img_loss=(1.0)
 weight_txt_loss=(1.0)
 
 
-dataset_name='CelebA' # (CelebA, Waterbirds, cifar10, cifar10-limited)
+dataset_name='cifar10-c' # (CelebA, Waterbirds, cifar10, cifar10-limited, cifar10-c)
 classifier_name='resnet18' # (resnet18, SimpleCNN)
 num_epochs=10
 data_dir='./data/'
 classifier_checkpoint_path="logs/${dataset_name}/${classifier_name}/classifier/checkpoint_29.pth"
 prompt_path="data/${dataset_name}/${dataset_name}_CLIP_ViT-B_32_text_embeddings.pth"
-img_size=75
-num_classes=2
+img_size=224
+num_classes=10
 # Class level or dataset level text prompts
 txt_prompt_type="class" # Options: class, dataset
 
