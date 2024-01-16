@@ -5,6 +5,7 @@ import torch
 from pathlib import Path
 from PIL import Image, ImageFile
 import matplotlib.pyplot as plt
+import json
 
 from torchvision import transforms
 from transformers import BertTokenizer, AutoTokenizer, DistilBertTokenizer, GPT2Tokenizer
@@ -393,7 +394,7 @@ class ImagenetBG(SubpopDataset):
 
 class BaseImageDataset(SubpopDataset):
 
-    def __init__(self, metadata, split, train_attr='yes', subsample_type=None, duplicates=None):
+    def __init__(self, metadata, split, transform1, train_attr='yes', subsample_type=None, duplicates=None):
         transform = transforms.Compose([
             transforms.Resize(256),
             transforms.CenterCrop(224),
@@ -401,7 +402,8 @@ class BaseImageDataset(SubpopDataset):
             transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225]),
         ])
         self.data_type = "images"
-        super().__init__('/', split, metadata, transform, train_attr, subsample_type, duplicates)
+        self.transform1 = transform
+        super().__init__('./', split, metadata, transform, transform1, train_attr, subsample_type, duplicates)
 
     def transform(self, x):
         if self.__class__.__name__ in ['MIMICNoFinding', 'CXRMultisite'] and 'MIMIC-CXR-JPG' in x:
@@ -419,9 +421,14 @@ class NICOpp(BaseImageDataset):
     CHECKPOINT_FREQ = 1000 
     INPUT_SHAPE = (3, 224, 224,)
 
-    def __init__(self, data_path, split, hparams, train_attr='yes', subsample_type=None, duplicates=None):
+    def __init__(self, data_path, split, hparams, transform1,  train_attr='yes', subsample_type=None, duplicates=None):
         metadata = os.path.join(data_path, "nicopp", "metadata.csv")
-        super().__init__(metadata, split, train_attr, subsample_type, duplicates)
+
+        # Load the class names from the dg_label_id_mapping.json file, the keys are the class names
+        with open(os.path.join(data_path, "nicopp", "dg_label_id_mapping.json")) as f:
+            self.class_names = list(json.load(f).keys())
+
+        super().__init__(metadata, split, transform1, train_attr, subsample_type, duplicates)
 
 class MIMICNoFinding(BaseImageDataset):
     N_STEPS = 20001
@@ -429,9 +436,9 @@ class MIMICNoFinding(BaseImageDataset):
     N_WORKERS = 16
     INPUT_SHAPE = (3, 224, 224,)
 
-    def __init__(self, data_path, split, hparams, train_attr='yes', subsample_type=None, duplicates=None):
+    def __init__(self, data_path, split, hparams, transform1, train_attr='yes', subsample_type=None, duplicates=None):
         metadata = os.path.join(data_path, "MIMIC-CXR-JPG", 'subpop_bench_meta', "metadata_no_finding.csv")
-        super().__init__(metadata, split, train_attr, subsample_type, duplicates)
+        super().__init__(metadata, split, transform1, train_attr, subsample_type, duplicates)
 
 class CheXpertNoFinding(BaseImageDataset):
     N_STEPS = 20001
@@ -439,9 +446,9 @@ class CheXpertNoFinding(BaseImageDataset):
     N_WORKERS = 16
     INPUT_SHAPE = (3, 224, 224,)
 
-    def __init__(self, data_path, split, hparams, train_attr='yes', subsample_type=None, duplicates=None):
+    def __init__(self, data_path, split, hparams, transform1, train_attr='yes', subsample_type=None, duplicates=None):
         metadata = os.path.join(data_path, "chexpert", 'subpop_bench_meta', "metadata_no_finding.csv")
-        super().__init__(metadata, split, train_attr, subsample_type, duplicates)
+        super().__init__(metadata, split, transform1, train_attr, subsample_type, duplicates)
 
 class CXRMultisite(BaseImageDataset):
     N_STEPS = 20001
@@ -456,9 +463,9 @@ class CXRMultisite(BaseImageDataset):
     }
     EVAL_SPLITS = ['te', 'deploy']
 
-    def __init__(self, data_path, split, hparams, train_attr='yes', subsample_type=None, duplicates=None):
+    def __init__(self, data_path, split, hparams, transform1, train_attr='yes', subsample_type=None, duplicates=None):
         metadata = os.path.join(data_path, "MIMIC-CXR-JPG", 'subpop_bench_meta', "metadata_multisite.csv")
-        super().__init__(metadata, split, train_attr, subsample_type, duplicates)
+        super().__init__(metadata, split, transform1, train_attr, subsample_type, duplicates)
 
 class MIMICNotes(SubpopDataset):
     N_STEPS = 10001
@@ -489,24 +496,24 @@ class BREEDSBase(BaseImageDataset):
     EVAL_SPLITS = ['te', 'zs']
 
 class Living17(BREEDSBase):
-    def __init__(self, data_path, split, hparams, train_attr='no', subsample_type=None, duplicates=None):
+    def __init__(self, data_path, split, hparams, transform1, train_attr='no', subsample_type=None, duplicates=None):
         metadata = os.path.join(data_path, "breeds", "metadata_living17.csv")
-        super().__init__(metadata, split, train_attr, subsample_type, duplicates)
+        super().__init__(metadata, split, transform1, train_attr, subsample_type, duplicates)
 
 class Entity13(BREEDSBase):
-    def __init__(self, data_path, split, hparams, train_attr='no', subsample_type=None, duplicates=None):
+    def __init__(self, data_path, split, hparams, transform1, train_attr='no', subsample_type=None, duplicates=None):
         metadata = os.path.join(data_path, "breeds", "metadata_entity13.csv")
-        super().__init__(metadata, split, train_attr, subsample_type, duplicates)
+        super().__init__(metadata, split, transform1, train_attr, subsample_type, duplicates)
 
 class Entity30(BREEDSBase):
-    def __init__(self, data_path, split, hparams, train_attr='no', subsample_type=None, duplicates=None):
+    def __init__(self, data_path, split, hparams, transform1, train_attr='no', subsample_type=None, duplicates=None):
         metadata = os.path.join(data_path, "breeds", "metadata_entity30.csv")
-        super().__init__(metadata, split, train_attr, subsample_type, duplicates)
+        super().__init__(metadata, split, transform1, train_attr, subsample_type, duplicates)
 
 class Nonliving26(BREEDSBase):
-    def __init__(self, data_path, split, hparams, train_attr='no', subsample_type=None, duplicates=None):
+    def __init__(self, data_path, split, hparams, transform1, train_attr='no', subsample_type=None, duplicates=None):
         metadata = os.path.join(data_path, "breeds", "metadata_nonliving26.csv")
-        super().__init__(metadata, split, train_attr, subsample_type, duplicates)
+        super().__init__(metadata, split, transform1, train_attr, subsample_type, duplicates)
 
 class CustomDataLoader:
     def __init__(self, dataset, weights, batch_size, num_workers):
