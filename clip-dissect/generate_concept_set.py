@@ -2,6 +2,7 @@ import requests
 import json
 import os
 from openai import OpenAI
+from tqdm import tqdm
 import ssl
 ssl._create_default_https_context = ssl._create_unverified_context
 
@@ -44,14 +45,17 @@ def get_attributes(class_name, previous_attributes, PROMPT):
 
 def main():
     
+    data_name = 'NICOpp_att'
     # Read the prompt template from file json
     with open('prompt_templates.json', 'r') as f:
-        prompt_template = json.load(f)['NICOpp']
+        prompt_template = json.load(f)[data_name]
         
     # classes = ['airplane', 'automobile', 'bird', 'cat', 'deer', 'dog', 'frog', 'horse', 'ship', 'truck' ]
-    classes = ['car', 'flower', 'chair', 'truck', 'tiger', 'wheat', 'seal', 'wolf', 'lion', 'dolphin', 'lifeboat', 'corn', 'fishing rod', 'owl', 'sunflower', 'cow', 'bird', 'clock', 'shrimp', 'goose', 'airplane', 'rabbit', 'hot air balloon', 'lizard', 'hat', 'spider', 'motorcycle', 'tortoise', 'dog', 'crocodile', 'elephant', 'gun', 'fox', 'bus', 'cat', 'sailboat', 'giraffe', 'cactus', 'pumpkin', 'train', 'ship', 'helicopter', 'bicycle', 'racket', 'squirrel', 'bear', 'scooter', 'mailbox', 'horse', 'pineapple', 'frog', 'football', 'ostrich', 'tent', 'kangaroo', 'monkey', 'crab', 'sheep', 'butterfly', 'umbrella']
+    # classes = ['car', 'flower', 'chair', 'truck', 'tiger', 'wheat', 'seal', 'wolf', 'lion', 'dolphin', 'lifeboat', 'corn', 'fishing rod', 'owl', 'sunflower', 'cow', 'bird', 'clock', 'shrimp', 'goose', 'airplane', 'rabbit', 'hot air balloon', 'lizard', 'hat', 'spider', 'motorcycle', 'tortoise', 'dog', 'crocodile', 'elephant', 'gun', 'fox', 'bus', 'cat', 'sailboat', 'giraffe', 'cactus', 'pumpkin', 'train', 'ship', 'helicopter', 'bicycle', 'racket', 'squirrel', 'bear', 'scooter', 'mailbox', 'horse', 'pineapple', 'frog', 'football', 'ostrich', 'tent', 'kangaroo', 'monkey', 'crab', 'sheep', 'butterfly', 'umbrella']
+    classes = ['autumn',  'dim',  'grass',  'outdoor',  'rock',  'water']
     concept_set = {}
-    for class_name in classes:
+    # Iterate over all the classes
+    for class_name in tqdm(classes):
         attributes_collected = set()
         for _ in range(5):
 
@@ -63,9 +67,9 @@ def main():
                     attributes_collected.add(item_cleaned)
 
         concept_set[class_name] = list(attributes_collected)
-
-    with open('attributes.json', 'w') as f:
-        json.dump(concept_set, f, indent=4)
+        
+        with open(f'{data_name}_att_concepts.json', 'w') as f:
+            json.dump(concept_set, f, indent=4)
 
 if __name__ == "__main__":
     main()
