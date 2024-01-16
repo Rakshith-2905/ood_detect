@@ -58,7 +58,8 @@ class SubpopDataset:
     }
     EVAL_SPLITS = ['te']     # Default, subclasses may override
 
-    def __init__(self, root, split, metadata, transform, transform1= None, train_attr='yes', subsample_type=None, duplicates=None):
+    def __init__(self, root, split, metadata, transform, transform1= None, train_attr='yes', subsample_type=None, duplicates=None, 
+                 sample_by_attributes=None):
         df = pd.read_csv(metadata)
         df = df[df["split"] == (self.SPLITS[split])]
 
@@ -76,6 +77,9 @@ class SubpopDataset:
         if duplicates is not None:
             self.duplicate(duplicates)
 
+        if sample_by_attributes is not None:
+            self.sample_by_attributes(sample_by_attributes)
+
     def _count_groups(self):
         self.weights_g, self.weights_y = [], []
         self.num_attributes = len(set(self.a))
@@ -90,6 +94,22 @@ class SubpopDataset:
         for i in self.idx:
             self.weights_g.append(len(self) / self.group_sizes[self.num_attributes * self.y[i] + self.a[i]])
             self.weights_y.append(len(self) / self.class_sizes[self.y[i]])
+
+    def sample_by_attributes(self, selected_attributes):
+        """
+        Filters the dataset to include samples only from the specified attributes.
+
+        Args:
+            selected_attributes (list): A list of attributes to include in the sample.
+        """
+        # Filter index based on selected attributes
+        filtered_idx = [i for i in self.idx if self.a[i] in selected_attributes]
+
+        # Update the dataset indices to the filtered indices
+        self.idx = filtered_idx
+
+        # Recount groups and class sizes after filtering
+        self._count_groups()
 
     def subsample(self, subsample_type):
         assert subsample_type in {"group", "class"}
@@ -394,7 +414,7 @@ class ImagenetBG(SubpopDataset):
 
 class BaseImageDataset(SubpopDataset):
 
-    def __init__(self, metadata, split, transform1, train_attr='yes', subsample_type=None, duplicates=None):
+    def __init__(self, metadata, split, transform1, train_attr='yes', subsample_type=None, duplicates=None, sample_by_attributes=None):
         transform = transforms.Compose([
             transforms.Resize(256),
             transforms.CenterCrop(224),
@@ -403,7 +423,7 @@ class BaseImageDataset(SubpopDataset):
         ])
         self.data_type = "images"
         self.transform1 = transform
-        super().__init__('./', split, metadata, transform, transform1, train_attr, subsample_type, duplicates)
+        super().__init__('./', split, metadata, transform, transform1, train_attr, subsample_type, duplicates, sample_by_attributes)
 
     def transform(self, x):
         if self.__class__.__name__ in ['MIMICNoFinding', 'CXRMultisite'] and 'MIMIC-CXR-JPG' in x:
@@ -421,14 +441,14 @@ class NICOpp(BaseImageDataset):
     CHECKPOINT_FREQ = 1000 
     INPUT_SHAPE = (3, 224, 224,)
 
-    def __init__(self, data_path, split, hparams, transform1,  train_attr='yes', subsample_type=None, duplicates=None):
+    def __init__(self, data_path, split, hparams, transform1,  train_attr='yes', subsample_type=None, duplicates=None, sample_by_attributes=None):
         metadata = os.path.join(data_path, "nicopp", "metadata.csv")
 
         # Load the class names from the dg_label_id_mapping.json file, the keys are the class names
         with open(os.path.join(data_path, "nicopp", "dg_label_id_mapping.json")) as f:
             self.class_names = list(json.load(f).keys())
 
-        super().__init__(metadata, split, transform1, train_attr, subsample_type, duplicates)
+        super().__init__(metadata, split, transform1, train_attr, subsample_type, duplicates, sample_by_attributes)
 
 class MIMICNoFinding(BaseImageDataset):
     N_STEPS = 20001
