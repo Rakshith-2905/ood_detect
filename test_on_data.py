@@ -120,7 +120,7 @@ def main(args):
                                 ])
     # Create the data loader and wrap them with Fabric
     train_dataset, val_dataset, test_dataset, failure_dataset, class_names = get_dataset(args.dataset_name, train_transform, train_transform, 
-                                                            data_dir=args.data_dir, clip_transform=clip_transform, img_size=args.img_size, return_failure_set=True)
+                                                            data_dir=args.data_dir, clip_transform=clip_transform, img_size=args.img_size, return_failure_set=True, sample_by_attributes=[1,2,3])
     
     class_prompts = [f"This is a photo of a {class_name}" for class_name in class_names]
     
@@ -258,7 +258,7 @@ python test_on_data.py \
     --seed 42 \
     --img_size 224 \
     --img_projection --txt_projection  \
-    --checkpoint_path "logs/NICOpp/shift_detection/plumber_img_text_proj/_bs_256_lr_0.1_teT_2.0_sT_1.0_imgweight_1.0_txtweight_1.0_is_mlp_False/projector_weights_final.pth" \
+    --checkpoint_path "logs/NICOpp/shift_detection/att_123/plumber_img_text_proj/_bs_256_lr_0.1_teT_2.0_sT_1.0_imgweight_1.0_txtweight_1.0_is_mlp_False/best_projector_weights.pth" \
     --classifier_name 'resnet18' \
     --clip_model_name 'ViT-B/32' \
     --prompt_path "data/NICOpp/NICOpp_CLIP_ViT-B_32_text_embeddings.pth" \
