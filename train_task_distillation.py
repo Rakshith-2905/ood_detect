@@ -35,11 +35,14 @@ import numpy as np
 import random
 import pickle
 
+from data_utils.ZSL_dataloaders.prepare_data import get_zsl_datasets, prepare_expansive_data, prepare_gtsrb_fraction_data
+
 from data_utils.domainnet_data import DomainNetDataset, get_data_from_saved_files
 from data_utils.cifar100_data import CIFAR100C, CIFAR100Filtered, get_CIFAR100_loaders
 from data_utils.cifar10_data import CIFAR10C, CIFAR10TwoTransforms, get_CIFAR10_dataloader, get_CIFAR10C_dataloader
 from data_utils.celebA_dataset import FilteredCelebADataset, get_celebA_datatransforms
 from data_utils import subpop_bench
+from data_utils.imagenet_dataset import ImageNetTwoTransforms, get_imagenet_loaders
 
 from models.resnet import CustomClassifier, CustomResNet
 from models.projector import ProjectionHead
@@ -52,31 +55,17 @@ from models.prompted_CLIP import PromptedCLIPTextEncoder, PromptedCLIPImageEncod
 def get_dataset(data_name, train_transforms, test_transforms, clip_transform, data_dir='../data', 
                 train_attr='yes', img_size=75, return_failure_set=False, sample_by_attributes=None):
 
-    if data_name == 'imagenet':
-        train_dataset = dset.ImageFolder(root=f'{data_dir}/imagenet_train_examples', transform=train_transforms)
-        val_dataset = dset.ImageFolder(root=f'{data_dir}/imagenet_val_examples', transform=test_transforms)
-        class_names = train_dataset.classes
-
+    if 'imagenet' in data_name.lower():
+        train_dataset, val_dataset, test_dataset, failure_dataset, class_names = get_imagenet_loaders(batch_size=512, data_dir='./data',
+                                                                    train_transform=train_transforms, test_transform=test_transforms, clip_transform=clip_transform,
+                                                                    subsample_trainset=False, return_dataset=True, data_type=data_name)
+    
     elif data_name == 'domainnet':
         train_dataset = DomainNetDataset(root_dir=data_dir, domain=args.domain_name, \
                                         split='train', transform=train_transforms, transform2=clip_transform)
         val_dataset = DomainNetDataset(root_dir=data_dir, domain=args.domain_name, \
                                         split='test', transform=test_transforms, transform2=clip_transform)
         class_names = train_dataset.class_names
-
-    # elif data_name == 'cifar10':
-    #     selected_classes = [0,1,2]
-    #     train_dataset = CIFAR10TwoTransforms(root=f'{data_dir}/cifar10', train=True, transform1=train_transforms, transform2=clip_transform, selected_classes=selected_classes)
-    #     val_dataset = CIFAR10TwoTransforms(root=f'{data_dir}/cifar10', train=False, transform1=test_transforms, transform2=clip_transform, selected_classes=selected_classes)
-
-    #     # class_names = ['airplane', 'automobile', 'bird']
-    #     class_names = ['airplane', 'automobile', 'bird', 'cat', 'deer', 'dog', 'frog', 'horse', 'ship', 'truck']
-    
-    # elif data_name =="cifar10_full":
-        
-    #     train_dataset = CIFAR10TwoTransforms(root=f'{data_dir}/cifar10', train=True, transform1=train_transforms, transform2=clip_transform,selected_classes= None)
-    #     val_dataset = CIFAR10TwoTransforms(root=f'{data_dir}/cifar10', train=False, transform1=test_transforms, transform2=clip_transform,selected_classes= None)
-    #     class_names= train_dataset.class_names
 
     elif data_name == 'cifar10':
         train_dataset, val_dataset, test_dataset, failure_dataset, class_names = get_CIFAR10_dataloader(data_dir='./data',    
@@ -158,6 +147,13 @@ def get_dataset(data_name, train_transforms, test_transforms, clip_transform, da
                                                 mask_region=mask_region)
     
         class_names = ["old person", "young person"]
+        
+    elif data_name.lower() in ["gtsrb", "svhn", "dtd", "oxfordpets",  "food101", "eurosat", "sun397", "ucf101", "stanfordcars", "flowers102"]:
+        dataset_dict, class_names = get_zsl_datasets(data_name, data_path=args.data_path, preprocess=clip_transform)
+        train_dataset = dataset_dict['train']
+        test_dataset = dataset_dict['test']
+        val_dataset = test_dataset
+        failure_dataset = test_dataset
         
     else:
         raise ValueError(f"Invalid dataset name: {data_name}")

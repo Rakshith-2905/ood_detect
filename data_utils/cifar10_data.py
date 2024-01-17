@@ -62,6 +62,18 @@ class CIFAR10C(torch.utils.data.Dataset):
 
 def get_CIFAR10_dataloader(batch_size=512, data_dir='./data', selected_classes=None,    
                         train_transform=None, test_transform=None, clip_transform=None, subsample_trainset=True, return_dataset=False):
+    """
+    Returns the dataloaders for CIFAR-10 dataset
+    Args:
+        batch_size: batch size for the dataloaders
+        data_dir: directory to store the data
+        selected_classes: list of classes to select from the dataset
+        train_transform: transform to apply to the trainset
+        test_transform: transform to apply to the testset
+        clip_transform: transform to apply to the clipset
+        subsample_trainset: whether to subsample the trainset to 20% of the original size
+        return_dataset: whether to return the dataset objects instead of the dataloaders
+    """
 
     # TODO:Change the mean and std to the ones for CIFAR-10-C #Mean : [0.491 0.482 0.446]   STD: [0.247 0.243 0.261]
     if train_transform is None:
@@ -118,7 +130,6 @@ def get_CIFAR10_dataloader(batch_size=512, data_dir='./data', selected_classes=N
 
     return loaders, temp_train_dataset.class_names
 
-
 def get_CIFAR10C_dataloader(batch_size=512, data_dir='./data', corruption='gaussian_blur', severity=3,
                         train_transform=None, test_transform=None, clip_transform=None, return_dataset=False):
 
@@ -162,9 +173,6 @@ def get_CIFAR10C_dataloader(batch_size=512, data_dir='./data', corruption='gauss
     }
 
     return loaders, class_names
-
-
-
 
 if __name__ == "__main__":
 
