@@ -66,7 +66,7 @@ generate_extra_params() {
             model_type="plumber_text_proj"
         ;;
         "N")
-            extra_params+=" $([ "$txt_prompt_type" = "class" ] && echo "--cls_txt_prompts --txt_projection" || echo "--dataset_txt_prompt --txt_projection")"
+            extra_params+=" $([ "$txt_prompt_type" = "class" ] && echo "--cls_txt_prompts" || echo "--dataset_txt_prompt")"
             model_type="$([ "$txt_prompt_type" = "class" ] && echo "plumber_cls_LP" || echo "plumber_dataset_LP")"
         ;;
         "O")
@@ -107,11 +107,12 @@ num_classes=60
 txt_prompt_type="dataset" # Options: class, dataset
 
 # List for attributes
-atts=(5)
+atts=(4)
 
 # types=("A" "B" "C" "D" "E" "F" "G" "H" "I", "J", "K", "L")
 
 types=("A" "B" "C" "E" "J" "K" "L" "M" "N" "O")
+
 
 gt_concept_set='clip-dissect/NICOpp_att_concepts.json'
 concept_set='clip-dissect/concepts/niccopp_concepts_att.txt'

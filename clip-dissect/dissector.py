@@ -141,27 +141,6 @@ def precision(gt_concept_set, pred_concepts):
 
     return precision 
 
-# Function to encode text into BERT embeddings
-def bert_encode(text, model, tokenizer):
-    input_ids = tokenizer.encode(text, add_special_tokens=True)
-    input_ids = torch.tensor([input_ids])
-    with torch.no_grad():
-        output = model(input_ids)
-    return output[0].mean(dim=1).numpy()
-
-def doc_similarity(gt_concept_lists, pred_concepts):
-    # Load pre-trained model and tokenizer
-    tokenizer = BertTokenizer.from_pretrained('bert-base-uncased')
-    model = BertModel.from_pretrained('bert-base-uncased', output_hidden_states=True)
-    # Encode all documents
-    predicted_doc_embedding = bert_encode(pred_concepts, model, tokenizer)
-    ground_truth_embeddings = [bert_encode(doc, model, tokenizer) for doc in gt_concept_lists]
-
-    # Calculate cosine similarities
-    cosine_similarities = [cosine_similarity([predicted_doc_embedding], [gt_embedding])[0][0] for gt_embedding in ground_truth_embeddings]
-
-    print("BERT-based Cosine Similarities:\n", cosine_similarities)
-
 def main(args):
     
     args.pool_mode = 'avg'
@@ -228,16 +207,21 @@ def main(args):
                                                     class_names, K=K, L=L, target_layer=target_name, 
                                                     save_dir=log_path, display=True)
 
+        score_att = {}
+        for att in attributes:
+            precision_score = precision(att_concept_json[att], all_top_words)
+            score_att[att] = precision_score
+        
+        print(f"Precision score for all attributes: {score_att}")
+        # # Save the precision score as a csv file with layer name and precision score
+        # precision_save_path = f"{log_path}/precision.csv"
+        # with open(precision_save_path, 'a') as f:
+        #     f.write(f"{target_name},{precision_score}\n")
 
-        precision_score = precision(gt_att_concept, all_top_words)
-
-        similarities = doc_similarity(gt_att_all_concepts, all_top_words)
-        assert False
-
-        # Save the precision score as a csv file with layer name and precision score
-        precision_save_path = f"{log_path}/precision.csv"
-        with open(precision_save_path, 'a') as f:
-            f.write(f"{target_name},{precision_score}\n")
+        # Save the score_att as a json file
+        score_att_save_path = f"{log_path}/score_att.json"
+        with open(score_att_save_path, 'w') as f:
+            json.dump(score_att, f, indent=4)
 
         # convert word_frequency to json
         word_frequency = dict(word_frequency)
