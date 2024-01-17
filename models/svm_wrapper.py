@@ -88,6 +88,14 @@ class SVMFitter:
                                                       mean=svm_stats['mean'],
                                                       std=svm_stats['std'])
 
+def get_caption_scores(plumber, captions, reference_caption, svm_fitter, target_c):
+    caption_latent = plumber.encode_text_batch(captions)
+    reference_latent = plumber.encode_text_batch([reference_caption])[0]
+    latent = caption_latent - reference_latent
+    ys = (torch.ones(len(latent))*target_c).long()
+    _, decisions = svm_fitter.predict(ys=ys, latents=latent, compute_metrics=False)
+    return decisions, caption_latent
+    
 def inv_norm(ds_mean, ds_std):
     if ds_std is None:
         return (lambda x: x)

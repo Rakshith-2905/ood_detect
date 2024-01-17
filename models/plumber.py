@@ -2,7 +2,9 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import torchvision.transforms as transforms
+from torch.cuda.amp import autocast
 import clip
+from tqdm import tqdm
 
 from models.projector import ProjectionHead
 from models.prompted_CLIP import PromptedCLIPTextEncoder, PromptedCLIPImageEncoder
@@ -327,6 +329,36 @@ class PLUMBER(nn.Module):
         
         return logits
 
+    def encode_text_batch(self, text_list, batch_size=256):
+        """
+        Encode text using CLIP model
+        Args:
+            text_list: List of text strings
+        Returns:
+            text_encodings: Tensor of shape [batch_size, proj_dim]
+        """
+        text_encodings = []
+        with torch.no_grad():
+            with autocast():
+                for i in tqdm(range(0, len(text_list), batch_size)):
+                    print(text_list[i:i+batch_size])
+                    assert False
+                    text_encodings_raw = self.encode_text(text_list[i:i+batch_size])
+                    text_encodings.append(text_encodings_raw.float().cpu())
+        text_encodings = torch.cat(text_encodings)
+        return text_encodings
+    
+    def encode_images_batch(self, dataloader):
+        clip_activations = []
+        with torch.no_grad():
+            with autocast():
+                for batch in tqdm(dataloader):
+                    x = batch[0]
+                    x = x.to(self.device)
+                    image_features = self.clip_model.encode_image(x)
+                    clip_activations.append(image_features.cpu())
+        out = torch.cat(clip_activations).float()
+        return out
 
 if __name__ == "__main__":
 

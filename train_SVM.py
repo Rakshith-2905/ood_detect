@@ -36,7 +36,8 @@ from models.prompted_CLIP import PromptedCLIPTextEncoder, PromptedCLIPImageEncod
 from utils_proj import SimpleDINOLoss, compute_accuracy, compute_similarities, plot_grad_flow
 
 from models import svm_wrapper
-
+from models.plumber import PLUMBER
+from data_utils.FD_caption_set import get_caption_set
 
 
 def seed_everything(seed):
@@ -302,7 +303,6 @@ def get_features_preds(args):
         'test': [test_features, test_preds]
     }
 
-
 def compute_and_plot_metrics(metric_dict, log_dir):
     # Ensure the logging directory exists
     os.makedirs(log_dir, exist_ok=True)
@@ -333,6 +333,41 @@ def compute_and_plot_metrics(metric_dict, log_dir):
     with open(os.path.join(log_dir, 'metrics.txt'), 'a') as f:
         f.write(metrics)
         f.write("\n")
+
+failure_caption_data_name_map = {
+    'cifar10': 'CIFAR',
+    'cifar10-limited': 'CIFAR',
+    'celeba': 'CELEBA',
+    'cifar100': 'CIFAR100',
+    'imagenet': 'IMAGENET',
+}
+def caption_failure_modes(args, svm_fitter, plumber):
+    data_name = failure_caption_data_name_map[args.dataset_name]
+    captions = get_caption_set(data_name)
+
+    clip_model, clip_transform = clip.load(args.clip_model_name)
+
+    train_dataset, val_dataset, test_dataset, failure_dataset, class_names = get_dataset(args.dataset_name, None, None, 
+                                                                data_dir=args.data_dir, clip_transform=clip_transform, img_size=args.img_size, return_failure_set=True)
+    print(f"Using {args.dataset_name} dataset")
+
+    selected_captions = []
+    for target_c in range(len(class_names)):
+        target_c_name = class_names[target_c]
+        caption_set = captions[target_c_name]['all']
+        reference = captions['reference'][target_c]
+        decisions, _ = svm_wrapper.get_caption_scores(plumber=plumber,
+                                                      captions=caption_set,
+                                                      reference_caption=reference,
+                                                      svm_fitter=svm_fitter,
+                                                      target_c=target_c)
+        selected_captions.append((
+            caption_set[np.argmin(decisions)],
+            caption_set[np.argmax(decisions)], decisions))
+    
+    print(f"Selected captions for {args.dataset_name} dataset")
+    print(selected_captions)
+    assert False
 
 def main(args):
     
@@ -366,7 +401,17 @@ def main(args):
     out_mask, out_decision, metric_dict = svm_fitter.predict(preds=test_preds, ys=test_labels, latents=test_features, compute_metrics=True)
 
     # Compute and plot metrics
-    compute_and_plot_metrics(metric_dict, args.save_dir)
+    # compute_and_plot_metrics(metric_dict, args.save_dir)
+
+    plumber = PLUMBER(args.clip_model_name, args.num_classes, 
+                      img_projection=args.img_projection, txt_projection=args.txt_projection, 
+                      img_prompting=args.img_prompting, cls_txt_prompts=args.cls_txt_prompts, 
+                      dataset_txt_prompt=args.dataset_txt_prompt, is_mlp=args.is_mlp, device=args.device)
+    
+    if args.step1_checkpoint_path:
+        plumber.load_checkpoint(args.step1_checkpoint_path)
+
+    caption_failure_modes(args, svm_fitter, plumber)
 
     # new_metric_dict = {
     #     'test_acc': metric_dict['accuracy'],
