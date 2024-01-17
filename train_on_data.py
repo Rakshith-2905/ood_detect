@@ -127,9 +127,8 @@ def train_one_epoch(data_loader, plumber,
         normalized_text_encodings = normalized_text_encodings.type_as(normalized_proj_embeddings)
 
         # T100 is the logits scale from CLIP
-        logits_per_img = 100*normalized_proj_embeddings @ normalized_text_encodings.t() # (batch_size, num_classes)
+        logits_per_img = 100*normalized_proj_embeddings @ normalized_text_encodings.t() # (batch_size, batch_size)
         logits_per_text = logits_per_img.t()
-
         
         # We want to maximize the diagonal entries of the logits matrix while minimizing the off-diagonal entries
         # labels are indexes to the diagonal entries of the logits matrix
@@ -279,11 +278,13 @@ def main(args):
         text_encodings= torch.load(args.prompt_path)
         if text_encodings.shape[0] != len(class_names):
             raise Exception("Text encodings shape does not match the number of classes")
+        text_encodings = fabric.to_device(text_encodings)
 
         fabric.print(f"Loaded CLIP {args.clip_model_name} text encodings from {args.prompt_path}, {text_encodings.shape}")
     except:
         text_encodings = get_CLIP_text_encodings(clip_model, class_names, args.prompt_path)
         fabric.print(f"Saved CLIP {args.clip_model_name} text encodings to {args.prompt_path}")
+        text_encodings = fabric.to_device(text_encodings)
 
     
 
@@ -357,7 +358,6 @@ if __name__ == "__main__":
     parser.add_argument('--data_dir', type=str, default='/usr/workspace/KDML/DomainNet', help='Path to the data directory')
     parser.add_argument('--domain_name', type=str, default='clipart', help='Domain to use for training')
     parser.add_argument('--dataset_name', type=str, default='imagenet', help='Name of the dataset')
-    # list of int for the attributes to use
     parser.add_argument('--attributes', nargs='+', type=int, default=None, help='Attributes to use for training')
     parser.add_argument('--num_classes', type=int, default=345, help='Number of classes in the dataset')
     parser.add_argument('--train_on_testset', action='store_true', help='Whether to train on the test set or not')
@@ -441,12 +441,12 @@ python train_on_data.py \
     --data_dir "./data/" \
     --domain_name 'real' \
     --dataset_name "NICOpp" \
-    --attributes 1 2 3 \
+    --attributes 5 \
     --num_classes 60 \
     --batch_size 256 \
     --seed 42 \
     --img_size 224 \
-    --img_projection --txt_projection  \
+    --img_prompting --cls_txt_prompts  \
     --classifier_name 'resnet18' \
     --clip_model_name 'ViT-B/32' \
     --prompt_path "data/NICOpp/NICOpp_CLIP_ViT-B_32_text_embeddings.pth" \

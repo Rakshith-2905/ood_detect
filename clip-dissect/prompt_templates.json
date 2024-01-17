@@ -1,1 +1,3 @@
-{"NICOpp":"Generate a list of 100 distinct two-word phrases that describe both the inherent visual characteristics of a {class_name} and its interaction with various settings. The phrases should encompass {class_name}-specific elements like shape, color, and texture, as well as environmental aspects from autumn, dim lighting, grassy areas, outdoors, rocky terrain, and water. Ensure the phrases are concise, visually descriptive, and capture the essence of a {class_name} in multiple contexts."}
+{"NICOpp":"List 100 distinct two-word phrases that describe visual characteristics like(shape, color, texture), domain-related attributes, conventional background and general photo elements of a {class_name}.Make sure the phrases are not long descriptions.",
+"NICOpp_att":"List 100 distinct two-word phrases that describe visual characteristics, conventional background and general photo elements of a {class_name}.Make sure the phrases are not long descriptions."
+}

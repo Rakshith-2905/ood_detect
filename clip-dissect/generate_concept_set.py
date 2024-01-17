@@ -5,6 +5,12 @@ from openai import OpenAI
 import ssl
 ssl._create_default_https_context = ssl._create_unverified_context
 
+import nltk
+from nltk.corpus import stopwords
+
+# Download the list of stop words
+nltk.download('stopwords')
+
 
 # Read the api key from file
 with open('api_key.txt', 'r') as f:
@@ -67,5 +73,43 @@ def main():
     with open('attributes.json', 'w') as f:
         json.dump(concept_set, f, indent=4)
 
+
+def merge_niccopp():
+    with open('NICOpp_att_concepts.json', 'r') as f:
+        niccopp_att = json.load(f)
+    with open('NICOpp_cls_concepts.json', 'r') as f:
+        niccopp_cls = json.load(f)
+
+    nicoopp_concept_set = []
+    # Merge all the class concepts values into a single list
+    niccopp_cls = list(set([item for sublist in niccopp_cls.values() for item in sublist]))
+    
+    attributes = ['autumn', 'dim', 'grass', 'outdoor', 'rock', 'water']
+    # select these attributes 
+    for att in attributes:
+        nicoopp_concept_set.extend(niccopp_att[att])
+    
+    # Load English stop words
+    stop_words = set(stopwords.words('english'))
+
+    # Load the 20K concepts from concepts/20k.txt
+    with open('concepts/20k.txt', 'r') as f:
+        concepts_20k = f.read().splitlines()
+
+    # Remove the stopwords from the 20K concepts
+    concepts_20k = [w for w in concepts_20k if not w in stop_words]
+
+    # # add the 20K concepts to the niccopp_concepts
+    # nicoopp_concept_set.extend(concepts_20k)
+
+    nicoopp_concept_set = list(set(nicoopp_concept_set))
+    # save the concepts as text file
+    with open('concepts/niccopp_concepts_att.txt', 'w') as f:
+        f.write('\n'.join(nicoopp_concept_set))
+
+
+    
+
 if __name__ == "__main__":
-    main()
+    # main()
+    merge_niccopp()

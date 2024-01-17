@@ -120,7 +120,9 @@ def main(args):
                                 ])
     # Create the data loader and wrap them with Fabric
     train_dataset, val_dataset, test_dataset, failure_dataset, class_names = get_dataset(args.dataset_name, train_transform, train_transform, 
-                                                            data_dir=args.data_dir, clip_transform=clip_transform, img_size=args.img_size, return_failure_set=True, sample_by_attributes=[1,2,3])
+                                                                                        data_dir=args.data_dir, clip_transform=clip_transform, 
+                                                                                        img_size=args.img_size, return_failure_set=True, 
+                                                                                        sample_by_attributes=args.attributes)
     
     class_prompts = [f"This is a photo of a {class_name}" for class_name in class_names]
     
@@ -170,6 +172,7 @@ if __name__ == "__main__":
     parser.add_argument('--data_dir', type=str, default='/usr/workspace/KDML/DomainNet', help='Path to the data directory')
     parser.add_argument('--domain_name', type=str, default='clipart', help='Domain to use for training')
     parser.add_argument('--dataset_name', type=str, default='imagenet', help='Name of the dataset')
+    parser.add_argument('--attributes', nargs='+', type=int, default=None, help='Attributes to use for training')
     parser.add_argument('--num_classes', type=int, default=345, help='Number of classes in the dataset')
     parser.add_argument('--train_on_testset', action='store_true', help='Whether to train on the test set or not')
     parser.add_argument('--use_saved_features',action = 'store_true', help='Whether to use saved features or not')
@@ -253,6 +256,7 @@ python test_on_data.py \
     --data_dir "./data/" \
     --domain_name 'real' \
     --dataset_name "NICOpp" \
+    --attributes 1 2 3 \
     --num_classes 60 \
     --batch_size 256 \
     --seed 42 \

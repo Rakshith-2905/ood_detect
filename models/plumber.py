@@ -40,30 +40,32 @@ class PLUMBER(nn.Module):
 
         print("\n\n Constructing PLUMBER \n")
 
+        projection_dim = clip_model.visual.output_dim
         # Initialize image projector
         self.img_projector = None
         if img_projection:
-            projection_dim = clip_model.visual.output_dim
             self.img_projector = ProjectionHead(input_dim=projection_dim, output_dim=projection_dim, is_mlp=is_mlp)
+            self.img_projector = self.img_projector.to(device)
             print(f"Constructed image emb projection with is_mlp: {is_mlp}")
 
         # Initialize text projector
         self.text_projector = None
         if txt_projection:
             self.text_projector = ProjectionHead(input_dim=projection_dim, output_dim=projection_dim, is_mlp=is_mlp)
+            self.text_projector = self.text_projector.to(device)
             print(f"Constructed text emb projection with is_mlp: {is_mlp}")
 
         # Initialize text encoder
         self.clip_prompted_txt_enc = None
         if cls_txt_prompts or dataset_txt_prompt:
             self.clip_prompted_txt_enc = PromptedCLIPTextEncoder(clip_model, num_classes=num_classes, 
-                                                                 is_dist_prompt=dataset_txt_prompt)
+                                                                 is_dist_prompt=dataset_txt_prompt, device=device)
             print(f"Constructed CLIP {'Class' if cls_txt_prompts else 'Dataset'} specific Prompted Text Encoder with {num_classes} classes")
 
         # Initialize image encoder
         self.clip_prompted_img_enc = None
         if img_prompting:
-            self.clip_prompted_img_enc = PromptedCLIPImageEncoder(clip_model)
+            self.clip_prompted_img_enc = PromptedCLIPImageEncoder(clip_model, device=device)
             print(f"Constructed CLIP Prompted Image Encoder")
 
         print("\nPLUMBER Constructed \n")
@@ -83,8 +85,10 @@ class PLUMBER(nn.Module):
         Args:
             checkpoint_path: Path to checkpoint
         """
-        checkpoint = torch.load(checkpoint_path, map_location=self.device)
 
+        self.checkpoint_path = checkpoint_path
+        checkpoint = torch.load(checkpoint_path, map_location=self.device)
+        print(f"\n\n")
         if self.img_projector:
             self.img_projector.load_state_dict(checkpoint['img_projector'])
             print(f"Loaded image projector from checkpoint: {checkpoint_path}")
@@ -97,6 +101,17 @@ class PLUMBER(nn.Module):
         if self.clip_prompted_img_enc:
             self.clip_prompted_img_enc.load_state_dict(checkpoint['clip_prompted_img_enc'])
             print(f"Loaded CLIP Prompted Image Encoder from checkpoint: {checkpoint_path}")
+
+        print("\nCheckpoint Loaded \n")
+
+    def reset(self):
+        """
+        Reset model parameters
+        """
+        print("\n\n Resetting model parameters \n")
+        self.load_checkpoint(self.checkpoint_path)
+
+        print("\nModel parameters reset \n")
 
     def save_checkpoint(self, checkpoint_path):
         """
@@ -257,8 +272,7 @@ class PLUMBER(nn.Module):
             clip_image_embeddings = self.clip_prompted_img_enc(images)
         else:
             clip_image_embeddings = self.clip_model.encode_image(images)
-            # Convert to float
-            clip_image_embeddings = clip_image_embeddings.float()
+        clip_image_embeddings = clip_image_embeddings.float()
 
         if self.img_projector:
             proj_embeddings = self.img_projector(clip_image_embeddings)
@@ -282,7 +296,7 @@ class PLUMBER(nn.Module):
             # Tokenize text
             text_list = self.tokenize(text_list).to(self.device)
             text_encodings_raw = self.clip_model.encode_text(text_list)
-            text_encodings_raw = text_encodings_raw.float()
+        text_encodings_raw = text_encodings_raw.float()
         # If text projector is present, project the text embeddings
         if self.text_projector:
             text_encodings = self.text_projector(text_encodings_raw)

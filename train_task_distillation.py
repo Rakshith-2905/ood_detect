@@ -49,7 +49,8 @@ from models.resnet_cifar import ResNet18
 from models.prompted_CLIP import PromptedCLIPTextEncoder, PromptedCLIPImageEncoder
 
 
-def get_dataset(data_name, train_transforms, test_transforms, clip_transform, data_dir='../data', train_attr=None, img_size=75, return_failure_set=False):
+def get_dataset(data_name, train_transforms, test_transforms, clip_transform, data_dir='../data', 
+                train_attr='yes', img_size=75, return_failure_set=False, sample_by_attributes=None):
 
     if data_name == 'imagenet':
         train_dataset = dset.ImageFolder(root=f'{data_dir}/imagenet_train_examples', transform=train_transforms)
@@ -96,10 +97,10 @@ def get_dataset(data_name, train_transforms, test_transforms, clip_transform, da
     elif data_name in subpop_bench.DATASETS:
         dataset_class = subpop_bench.get_dataset_class(data_name)
         hparams = {} # TODO: Add hparams need it for CMNIST
-        train_dataset = dataset_class(data_dir, 'tr', hparams, clip_transform, train_attr=train_attr)
-        val_dataset = dataset_class(data_dir, 'va', hparams, clip_transform)
-        test_dataset = dataset_class(data_dir, 'te', hparams, clip_transform)
-        failure_dataset = dataset_class(data_dir, 'failure', hparams, clip_transform, train_attr=train_attr)
+        train_dataset = dataset_class(data_dir, 'tr', hparams, clip_transform, train_attr=train_attr, sample_by_attributes=sample_by_attributes)
+        val_dataset = dataset_class(data_dir, 'va', hparams, clip_transform, sample_by_attributes=sample_by_attributes)
+        test_dataset = dataset_class(data_dir, 'te', hparams, clip_transform, sample_by_attributes=sample_by_attributes)
+        failure_dataset = dataset_class(data_dir, 'failure', hparams, clip_transform, train_attr=train_attr, sample_by_attributes=sample_by_attributes)
 
         class_names = train_dataset.class_names
     
