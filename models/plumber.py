@@ -5,6 +5,7 @@ import torchvision.transforms as transforms
 from torch.cuda.amp import autocast
 import clip
 from tqdm import tqdm
+from copy import deepcopy
 
 from models.projector import ProjectionHead
 from models.prompted_CLIP import PromptedCLIPTextEncoder, PromptedCLIPImageEncoder
@@ -47,6 +48,7 @@ class PLUMBER(nn.Module):
         self.img_projector = None
         if img_projection:
             self.img_projector = ProjectionHead(input_dim=projection_dim, output_dim=projection_dim, is_mlp=is_mlp)
+            self.img_projector_orig_state = self.img_projector.state_dict()
             self.img_projector = self.img_projector.to(device)
             print(f"Constructed image emb projection with is_mlp: {is_mlp}")
 
@@ -54,6 +56,7 @@ class PLUMBER(nn.Module):
         self.text_projector = None
         if txt_projection:
             self.text_projector = ProjectionHead(input_dim=projection_dim, output_dim=projection_dim, is_mlp=is_mlp)
+            self.text_projector_orig_state = self.text_projector.state_dict()
             self.text_projector = self.text_projector.to(device)
             print(f"Constructed text emb projection with is_mlp: {is_mlp}")
 
@@ -62,12 +65,14 @@ class PLUMBER(nn.Module):
         if cls_txt_prompts or dataset_txt_prompt:
             self.clip_prompted_txt_enc = PromptedCLIPTextEncoder(clip_model, num_classes=num_classes, 
                                                                  is_dist_prompt=dataset_txt_prompt, device=device)
+            self.clip_prompted_txt_enc_orig_state = self.clip_prompted_txt_enc.state_dict()
             print(f"Constructed CLIP {'Class' if cls_txt_prompts else 'Dataset'} specific Prompted Text Encoder with {num_classes} classes")
 
         # Initialize image encoder
         self.clip_prompted_img_enc = None
         if img_prompting:
             self.clip_prompted_img_enc = PromptedCLIPImageEncoder(clip_model, device=device)
+            self.clip_prompted_img_enc_orig_state = self.clip_prompted_img_enc.state_dict()
             print(f"Constructed CLIP Prompted Image Encoder")
 
         print("\nPLUMBER Constructed \n")
@@ -111,9 +116,40 @@ class PLUMBER(nn.Module):
         Reset model parameters
         """
         print("\n\n Resetting model parameters \n")
-        self.load_checkpoint(self.checkpoint_path)
+        if self.img_projector:
+            self.img_projector.load_state_dict(self.img_projector_orig_state)
+            print(f"Loaded Initial image projector state")
+        if self.text_projector:
+            self.text_projector.load_state_dict(self.text_projector_orig_state)
+            print(f"Loaded Initial text projector state")
+        if self.clip_prompted_txt_enc:
+            self.clip_prompted_txt_enc.load_state_dict(self.clip_prompted_txt_enc_orig_state)
+            print(f"Loaded Initial CLIP Prompted Text Encoder state")
+        if self.clip_prompted_img_enc:
+            self.clip_prompted_img_enc.load_state_dict(self.clip_prompted_img_enc_orig_state)
+            print(f"Loaded Initial CLIP Prompted Image Encoder state")
 
-        print("\nModel parameters reset \n")
+        print("\nParameters reset \n")
+
+    def reset_optimizer(self):
+        """
+        Reset model optimizers
+        """
+        print("\n\n Resetting Optimizer \n")
+        if self.img_projector:
+            self.optimizer_img_proj.load_state_dict(self.optimizer_img_proj_orig_state)
+            print(f"Loaded Initial image projector optimizer")
+        if self.text_projector:
+            self.optimizer_text_proj.load_state_dict(self.optimizer_text_proj_orig_state)
+            print(f"Loaded Initial text projector optimizer")
+        if self.clip_prompted_txt_enc:
+            self.optimizer_txt_prompt.load_state_dict(self.optimizer_txt_prompt_orig_state)
+            print(f"Loaded Initial CLIP Prompted Text Encoder optimizer")
+        if self.clip_prompted_img_enc:
+            self.optimizer_img_prompt.load_state_dict(self.optimizer_img_prompt_orig_state)
+            print(f"Loaded Initial CLIP Prompted Image Encoder optimizer")
+
+        print("\nOptimizers reset \n")
 
     def save_checkpoint(self, checkpoint_path):
         """
@@ -148,10 +184,13 @@ class PLUMBER(nn.Module):
         if self.img_projector:
             if optimizer_name == 'adam':
                 self.optimizer_img_proj = torch.optim.Adam(self.img_projector.parameters(), lr=learning_rate)
+                self.optimizer_img_proj_orig_state = deepcopy(self.optimizer_img_proj.state_dict())
             elif optimizer_name == 'sgd':
                 self.optimizer_img_proj = torch.optim.SGD(self.img_projector.parameters(), lr=learning_rate, momentum=0.9)
+                self.optimizer_img_proj_orig_state = deepcopy(self.optimizer_img_proj.state_dict())
             elif optimizer_name == 'adamw':
                 self.optimizer_img_proj = torch.optim.AdamW(self.img_projector.parameters(), lr=learning_rate)
+                self.optimizer_img_proj_orig_state = deepcopy(self.optimizer_img_proj.state_dict())
 
             print(f"Constructed optimizer for image projector: {optimizer_name} with lr: {learning_rate}")
         
@@ -159,21 +198,26 @@ class PLUMBER(nn.Module):
         if self.text_projector:
             if optimizer_name == 'adam':
                 self.optimizer_txt_proj = torch.optim.Adam(self.text_projector.parameters(), lr=learning_rate)
+                self.optimizer_txt_proj_orig_state = deepcopy(self.optimizer_txt_proj.state_dict())
             elif optimizer_name == 'sgd':
                 self.optimizer_txt_proj = torch.optim.SGD(self.text_projector.parameters(), lr=learning_rate, momentum=0.9)
+                self.optimizer_txt_proj_orig_state = deepcopy(self.optimizer_txt_proj.state_dict())
             elif optimizer_name == 'adamw':
                 self.optimizer_txt_proj = torch.optim.AdamW(self.text_projector.parameters(), lr=learning_rate)
+                self.optimizer_txt_proj_orig_state = deepcopy(self.optimizer_txt_proj.state_dict())
 
             print(f"Constructed optimizer for text projector: {optimizer_name} with lr: {learning_rate}")
         
         self.optimizer_txt_prompt = None
         if self.clip_prompted_txt_enc:
             self.optimizer_txt_prompt = torch.optim.SGD([p for p in self.clip_prompted_txt_enc.parameters() if p.requires_grad], lr=0.1)
+            self.optimizer_txt_prompt_orig_state = deepcopy(self.optimizer_txt_prompt.state_dict())
             print(f"Constructed optimizer for text prompt: SGD with lr: 0.1")
 
         self.optimizer_img_prompt = None
         if self.clip_prompted_img_enc:
             self.optimizer_img_prompt = torch.optim.SGD([p for p in self.clip_prompted_img_enc.parameters() if p.requires_grad], lr=0.1)
+            self.optimizer_img_prompt_orig_state = deepcopy(self.optimizer_img_prompt.state_dict())
             print(f"Constructed optimizer for image prompt: SGD with lr: 0.1")
 
         self.optimizers_dict = {
