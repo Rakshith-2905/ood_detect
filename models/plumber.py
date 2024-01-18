@@ -77,6 +77,37 @@ class PLUMBER(nn.Module):
 
         print("\nPLUMBER Constructed \n")
 
+        # Initialize dictionary to store activations
+        self.activations = {}
+        self.hook_handles = []
+
+    def _hook_fn(self, layer_name):
+        """
+        Define a hook function that will be called by PyTorch during forward pass.
+        """
+        def hook(model, input, output):
+            self.activations[layer_name] = output.detach()
+        return hook
+
+    def register_hooks(self, layer_names):
+        """
+        Register hooks to specified layers.
+        Args:
+            layer_names (list of tuples): List of tuples containing (layer, layer_name).
+                                          `layer` is the layer object and `layer_name` is a string.
+        """
+        for layer, layer_name in layer_names:
+            handle = layer.register_forward_hook(self._hook_fn(layer_name))
+            self.hook_handles.append(handle)
+
+    def remove_hooks(self):
+        """
+        Remove all registered hooks.
+        """
+        for handle in self.hook_handles:
+            handle.remove()
+        self.hook_handles = []
+
     def un_normalize(self, images):
         for t in self.preprocess.transforms:
             if isinstance(t, transforms.Normalize):
@@ -299,7 +330,7 @@ class PLUMBER(nn.Module):
             self.clip_prompted_txt_enc.eval()
         if self.clip_prompted_img_enc:
             self.clip_prompted_img_enc.eval()
-        
+
     def encode_images(self, images):
         """
         Encode images using CLIP model
