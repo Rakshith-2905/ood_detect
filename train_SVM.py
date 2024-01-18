@@ -51,6 +51,9 @@ def get_save_dir(args):
     save_dir = os.path.dirname(args.step1_checkpoint_path)
     save_dir = os.path.join(save_dir, 'failure_detector')
 
+    if args.dataset_name in ['cifar10-c', 'cifar100-c']:
+        save_dir = os.path.join(save_dir, f'{args.dataset_name}_{args.severity}')
+
     return save_dir
 
 @torch.no_grad()
@@ -400,18 +403,18 @@ def main(args):
 
     out_mask, out_decision, metric_dict = svm_fitter.predict(preds=test_preds, ys=test_labels, latents=test_features, compute_metrics=True)
 
-    # Compute and plot metrics
-    # compute_and_plot_metrics(metric_dict, args.save_dir)
+    ## Compute and plot metrics
+    compute_and_plot_metrics(metric_dict, args.save_dir)
 
-    plumber = PLUMBER(args.clip_model_name, args.num_classes, 
-                      img_projection=args.img_projection, txt_projection=args.txt_projection, 
-                      img_prompting=args.img_prompting, cls_txt_prompts=args.cls_txt_prompts, 
-                      dataset_txt_prompt=args.dataset_txt_prompt, is_mlp=args.is_mlp, device=args.device)
+    # plumber = PLUMBER(args.clip_model_name, args.num_classes, 
+    #                   img_projection=args.img_projection, txt_projection=args.txt_projection, 
+    #                   img_prompting=args.img_prompting, cls_txt_prompts=args.cls_txt_prompts, 
+    #                   dataset_txt_prompt=args.dataset_txt_prompt, is_mlp=args.is_mlp, device=args.device)
     
-    if args.step1_checkpoint_path:
-        plumber.load_checkpoint(args.step1_checkpoint_path)
+    # if args.step1_checkpoint_path:
+    #     plumber.load_checkpoint(args.step1_checkpoint_path)
 
-    caption_failure_modes(args, svm_fitter, plumber)
+    # caption_failure_modes(args, svm_fitter, plumber)
 
     # new_metric_dict = {
     #     'test_acc': metric_dict['accuracy'],

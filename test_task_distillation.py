@@ -310,7 +310,9 @@ def main(args):
     else:
         # Create the data loader and wrap them with Fabric
         train_dataset, val_dataset, test_dataset, failure_dataset, class_names = get_dataset(args.dataset_name, train_transform, test_transform, 
-                                                                data_dir=args.data_dir, clip_transform=clip_transform, img_size=args.img_size, return_failure_set=True)
+                                                                data_dir=args.data_dir, clip_transform=clip_transform, 
+                                                                img_size=args.img_size, return_failure_set=True,
+                                                                domain_name=args.domain_name, severity=args.severity)
         fabric.print(f"Using {args.dataset_name} dataset")
 
     train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True, num_workers=8, pin_memory=True)
@@ -397,6 +399,8 @@ def main(args):
 
     output_message = f"Validation Base Acc: {val_base_acc:.4f}, Validation PLUMBER Acc: {val_plumber_acc:.4f}, \n Test Base Acc: {test_base_acc:.4f}, Test PLUMBER Acc: {test_plumber_acc:.4f}"
     
+    if args.dataset_name in ['cifar10-c', 'cifar100-c']:
+        output_message = f"Corruption: {args.domain_name}, Severity: {args.severity}, " + output_message
     fabric.print(output_message)
 
     if fabric.is_global_zero:
@@ -404,6 +408,13 @@ def main(args):
         # convert the output to a dictionary, make the tensors to scalars
         output_dict = {'val_base_acc': val_base_acc.item(), 'val_plumber_acc': val_plumber_acc.item(),
                         'test_base_acc': test_base_acc.item(), 'test_plumber_acc': test_plumber_acc.item()}
+
+        if args.dataset_name in ['cifar10-c', 'cifar100-c']:
+            save_path = os.path.join(args.save_dir, f"test_task_distillation_corruption.txt")
+            with open(save_path, 'a') as f:
+                f.write(output_message)
+                f.write('\n')
+                return
 
         # Save the output to a csv file
         csv_file = os.path.join(args.save_dir, f"test_task_distillation.csv")

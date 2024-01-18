@@ -53,7 +53,7 @@ from models.prompted_CLIP import PromptedCLIPTextEncoder, PromptedCLIPImageEncod
 
 
 def get_dataset(data_name, train_transforms, test_transforms, clip_transform, data_dir='../data', 
-                train_attr='yes', img_size=75, return_failure_set=False, sample_by_attributes=None):
+                train_attr='yes', img_size=75, return_failure_set=False, sample_by_attributes=None, domain_name=None, severity=None):
 
     if 'imagenet' in data_name.lower():
         train_dataset, val_dataset, test_dataset, failure_dataset, class_names = get_imagenet_loaders(batch_size=512, data_dir='./data',
@@ -79,7 +79,7 @@ def get_dataset(data_name, train_transforms, test_transforms, clip_transform, da
 
     elif data_name == 'cifar10-c':
         train_dataset, val_dataset, test_dataset, failure_dataset, class_names = get_CIFAR10C_dataloader(data_dir='./data',
-                                                                    corruption=args.domain_name, severity=args.severity,
+                                                                    corruption=domain_name, severity=severity,
                                                                     train_transform=None, test_transform=None, clip_transform=clip_transform,
                                                                     return_dataset=True)
 
