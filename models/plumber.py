@@ -43,7 +43,7 @@ class PLUMBER(nn.Module):
 
         print("\n\n Constructing PLUMBER \n")
 
-        projection_dim = clip_model.visual.output_dim
+        projection_dim = clip_model.visual.output_dim 
         # Initialize image projector
         self.img_projector = None
         if img_projection:
