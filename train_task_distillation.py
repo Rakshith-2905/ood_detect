@@ -149,7 +149,7 @@ def get_dataset(data_name, train_transforms, test_transforms, clip_transform, da
         class_names = ["old person", "young person"]
         
     elif data_name.lower() in ["gtsrb", "svhn", "dtd", "oxfordpets",  "food101", "eurosat", "sun397", "ucf101", "stanfordcars", "flowers102"]:
-        dataset_dict, class_names = get_zsl_datasets(data_name, data_path=args.data_path, preprocess=clip_transform)
+        dataset_dict, class_names = get_zsl_datasets(data_name, data_path=args.data_path, preprocess=test_transforms)
         train_dataset = dataset_dict['train']
         test_dataset = dataset_dict['test']
         val_dataset = test_dataset
