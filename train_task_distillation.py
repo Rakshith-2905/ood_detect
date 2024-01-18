@@ -37,8 +37,8 @@ import pickle
 
 from data_utils.ZSL_dataloaders.prepare_data import get_zsl_datasets, prepare_expansive_data, prepare_gtsrb_fraction_data
 
-from data_utils.domainnet_data import DomainNetDataset, get_data_from_saved_files
-from data_utils.cifar100_data import CIFAR100C, CIFAR100Filtered, get_CIFAR100_loaders
+from data_utils.domainnet_data import DomainNetDataset, get_data_from_saved_files, get_domainnet_loaders
+from data_utils.cifar100_data import CIFAR100C, CIFAR100TwoTransforms, get_CIFAR100_dataloader, get_CIFAR100C_dataloader
 from data_utils.cifar10_data import CIFAR10C, CIFAR10TwoTransforms, get_CIFAR10_dataloader, get_CIFAR10C_dataloader
 from data_utils.celebA_dataset import FilteredCelebADataset, get_celebA_datatransforms
 from data_utils import subpop_bench
@@ -61,11 +61,9 @@ def get_dataset(data_name, train_transforms, test_transforms, clip_transform, da
                                                                     subsample_trainset=False, return_dataset=True, data_type=data_name)
     
     elif data_name == 'domainnet':
-        train_dataset = DomainNetDataset(root_dir=data_dir, domain=args.domain_name, \
-                                        split='train', transform=train_transforms, transform2=clip_transform)
-        val_dataset = DomainNetDataset(root_dir=data_dir, domain=args.domain_name, \
-                                        split='test', transform=test_transforms, transform2=clip_transform)
-        class_names = train_dataset.class_names
+        train_dataset, val_dataset, test_dataset, failure_dataset, class_names = get_domainnet_loaders(args.domain_name, data_dir='data/domainnet_v1.0', 
+                                                                    train_transform=None, test_transform=None, clip_transform=clip_transform,
+                                                                    subsample_trainset=False, return_dataset=True)
 
     elif data_name == 'cifar10':
         train_dataset, val_dataset, test_dataset, failure_dataset, class_names = get_CIFAR10_dataloader(data_dir='./data',    
@@ -82,6 +80,23 @@ def get_dataset(data_name, train_transforms, test_transforms, clip_transform, da
                                                                     corruption=domain_name, severity=severity,
                                                                     train_transform=None, test_transform=None, clip_transform=clip_transform,
                                                                     return_dataset=True)
+
+    elif data_name == 'cifar100':
+        
+        train_dataset, val_dataset, test_dataset, failure_dataset, class_names = get_CIFAR100_dataloader(data_dir='./data',  
+                                                                    selected_classes=None, retain_orig_ids=False , 
+                                                                    train_transform=None, test_transform=None, clip_transform=clip_transform,
+                                                                    subsample_trainset=False, return_dataset=True)
+    
+    elif data_name == 'cifar100-90cls':
+
+        # Randomly select 90 numbers from 0-99 without replacement use seed
+        random.seed(42)
+        selected_classes = random.sample(range(100), 90)
+        train_dataset, val_dataset, test_dataset, failure_dataset, class_names = get_CIFAR100_dataloader(data_dir='./data',  
+                                                                            selected_classes=selected_classes, retain_orig_ids=True , 
+                                                                            train_transform=None, test_transform=None, clip_transform=clip_transform,
+                                                                            subsample_trainset=False, return_dataset=True)
 
     elif data_name in subpop_bench.DATASETS:
         dataset_class = subpop_bench.get_dataset_class(data_name)
