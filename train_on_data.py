@@ -113,22 +113,29 @@ def train_one_epoch(data_loader, plumber,
 
         plumber.zero_grad()
 
-        # Subselect the prompts and text encodings for the current batch
-        batch_prompts = [class_prompts[label] for label in labels]
-        batch_text_encodings_raw = text_encodings_raw[labels]
 
         image_encodings = plumber.encode_images(images_clip_batch)
-        text_encodings = plumber.encode_text(batch_prompts, batch_text_encodings_raw)
+        text_encodings_class = plumber.encode_text(class_prompts, text_encodings_raw)
             
+        
+        # Subselect the prompts and text encodings for the current batch
+        batch_prompts = [class_prompts[label] for label in labels]
+        text_encodings = text_encodings_class[labels]
+
         normalized_proj_embeddings = F.normalize(image_encodings, dim=-1)
-        normalized_text_encodings = F.normalize(text_encodings, dim=-1)# (num_classes, projection_dim)
+        normalized_text_encodings = F.normalize(text_encodings, dim=-1)# (batch_size, projection_dim)
+        normalized_text_encodings_class = F.normalize(text_encodings_class, dim=-1)# (num_classes, projection_dim)
 
         # make the text embeddings to the same data type as image embeddings
         normalized_text_encodings = normalized_text_encodings.type_as(normalized_proj_embeddings)
+        normalized_text_encodings_class = normalized_text_encodings_class.type_as(normalized_proj_embeddings)
 
         # T100 is the logits scale from CLIP
         logits_per_img = 100*normalized_proj_embeddings @ normalized_text_encodings.t() # (batch_size, batch_size)
         logits_per_text = logits_per_img.t()
+        
+        # Logits for the class prompts (class level classification of images and class prompts)
+        logits_per_img_class = 100*normalized_proj_embeddings @ normalized_text_encodings_class.t() # (batch_size, num_classes)
         
         # We want to maximize the diagonal entries of the logits matrix while minimizing the off-diagonal entries
         # labels are indexes to the diagonal entries of the logits matrix
@@ -142,7 +149,7 @@ def train_one_epoch(data_loader, plumber,
 
         plumber.optimizer_step()
 
-        probs_from_plumber = F.softmax(logits_per_img, dim=-1)
+        probs_from_plumber = F.softmax(logits_per_img_class, dim=-1)
 
         batch_plumber_acc = compute_accuracy(probs_from_plumber, labels)
 
@@ -177,29 +184,34 @@ def validate(data_loader, plumber,
         data_loader, total=len(data_loader), desc=f"Validating Epoch {epoch+1}"
     )
     
+    
     for images_batch, labels, images_clip_batch in pbar:
 
         images_batch = fabric.to_device(images_batch)
         images_clip_batch = fabric.to_device(images_clip_batch)
         labels = fabric.to_device(labels)
 
-                # Subselect the prompts and text encodings for the current batch
-        batch_prompts = [class_prompts[label] for label in labels]
-        batch_text_encodings_raw = text_encodings_raw[labels]
-
         image_encodings = plumber.encode_images(images_clip_batch)
-        text_encodings = plumber.encode_text(batch_prompts, batch_text_encodings_raw)
-            
+        text_encodings_class = plumber.encode_text(class_prompts, text_encodings_raw)
+        
+        # Subselect the prompts and text encodings for the current batch
+        batch_prompts = [class_prompts[label] for label in labels]
+        text_encodings = text_encodings_class[labels]
+
         normalized_proj_embeddings = F.normalize(image_encodings, dim=-1)
-        normalized_text_encodings = F.normalize(text_encodings, dim=-1)# (num_classes, projection_dim)
+        normalized_text_encodings = F.normalize(text_encodings, dim=-1)# (batch_size, projection_dim)
+        normalized_text_encodings_class = F.normalize(text_encodings_class, dim=-1)# (num_classes, projection_dim)
 
         # make the text embeddings to the same data type as image embeddings
         normalized_text_encodings = normalized_text_encodings.type_as(normalized_proj_embeddings)
+        normalized_text_encodings_class = normalized_text_encodings_class.type_as(normalized_proj_embeddings)
 
         # T100 is the logits scale from CLIP
-        logits_per_img = 100*normalized_proj_embeddings @ normalized_text_encodings.t() # (batch_size, num_classes)
+        logits_per_img = 100*normalized_proj_embeddings @ normalized_text_encodings.t() # (batch_size, batch_size)
         logits_per_text = logits_per_img.t()
-
+        
+        # Logits for the class prompts (class level classification of images and class prompts)
+        logits_per_img_class = 100*normalized_proj_embeddings @ normalized_text_encodings_class.t() # (batch_size, num_classes)
         
         # We want to maximize the diagonal entries of the logits matrix while minimizing the off-diagonal entries
         # labels are indexes to the diagonal entries of the logits matrix
@@ -209,7 +221,7 @@ def validate(data_loader, plumber,
         loss_text = F.cross_entropy(logits_per_text, pseudo_labels)
         loss = loss_image*args.weight_img_loss + loss_text*args.weight_txt_loss
 
-        probs_from_plumber = F.softmax(logits_per_img, dim=-1)
+        probs_from_plumber = F.softmax(logits_per_img_class, dim=-1)
 
         batch_plumber_acc = compute_accuracy(probs_from_plumber, labels)
 
