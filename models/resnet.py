@@ -6,7 +6,7 @@ import torchvision
 from torchvision.models import resnet18, resnet34, resnet50, resnet101, resnet152, swin_b, vit_b_16
 from torchvision.models.segmentation import deeplabv3_resnet50, deeplabv3_resnet101, DeepLabV3_ResNet50_Weights, DeepLabV3_ResNet101_Weights
 from torchvision.models.segmentation import fcn_resnet50, fcn_resnet101, FCN_ResNet50_Weights, FCN_ResNet101_Weights
-
+import clip
 
 from torchvision.models.feature_extraction import get_graph_node_names, create_feature_extractor
 from torchvision import transforms
@@ -19,7 +19,7 @@ class CustomFeatureModel(nn.Module):
     def __init__(self, model_name, use_pretrained=False):
         super(CustomFeatureModel, self).__init__()
 
-        self.transform = transforms.Compose([
+        self.train_transform = transforms.Compose([
                             transforms.RandomResizedCrop(224),
                             transforms.RandomHorizontalFlip(),
                             transforms.ToTensor(),
@@ -50,6 +50,8 @@ class CustomFeatureModel(nn.Module):
 
             self.model.load_state_dict(modified_checkpoint, strict=False) #https://huggingface.co/madrylab/robust-imagenet-models/resolve/main/resnet50_l2_eps0.1.ckpt
 
+            # Get the last FC layer into a seperate variable
+            self.last_layer = self.model.fc
             # Remoce the last FC layer
             self.model = nn.Sequential(*list(self.model.children())[:-1])
         
@@ -74,8 +76,13 @@ class CustomFeatureModel(nn.Module):
         self.feature_dim = self.model(torch.zeros(1, 3, 224, 224)).shape[-1]
     
     @torch.no_grad()
-    def forward(self, x):
-        return self.model(x)
+    def forward(self, x, return_features=False):
+
+        features = self.model(x)
+        if return_features:
+            return self.last_layer(features), features
+        else:
+            return self.last_layer(features)
 
 class CustomSegmentationModel(nn.Module):
     def __init__(self, model_name, use_pretrained=False):
@@ -110,7 +117,7 @@ class CustomSegmentationModel(nn.Module):
                                             std=[0.229, 0.224, 0.225])                
                     ])
 
-        self.transform = transforms.Compose([
+        self.train_transform = transforms.Compose([
                             transforms.Resize((520,520)),
                             transforms.ToTensor(),
                             transforms.Normalize(mean=[0.485, 0.456, 0.406],
@@ -124,8 +131,6 @@ class CustomSegmentationModel(nn.Module):
         #TODO: add the feature dimension
         self.feature_dim = 8192
         
-
-    
     def preprocess_pil(self, images):
         # check if images is a list, then preprocess each image
         if isinstance(images, list):
@@ -292,8 +297,8 @@ if __name__ == "__main__":
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    # model = CustomFeatureModel(model_name='resnetv2_101x1_bit.goog_in21k', use_pretrained=True)
-    model = CustomClassifier(model_name='swin_b', use_pretrained=True)
+    model = CustomFeatureModel(model_name='resnet50_adv_l2_0.1', use_pretrained=True)
+    # model = CustomClassifier(model_name='swin_b', use_pretrained=True)
     # features = model(torch.zeros(1, 3, 224, 224))
     # print(features.shape)
     # print(model.feature_dim)

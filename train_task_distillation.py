@@ -44,7 +44,7 @@ from data_utils.celebA_dataset import FilteredCelebADataset, get_celebA_datatran
 from data_utils import subpop_bench
 from data_utils.imagenet_dataset import ImageNetTwoTransforms, get_imagenet_loaders
 
-from models.resnet import CustomClassifier, CustomResNet
+from models.resnet import CustomClassifier, CustomResNet, CustomFeatureModel
 from models.projector import ProjectionHead
 from simple_classifier import SimpleCNN, CIFAR10TwoTransforms
 from utils_proj import SimpleDINOLoss, compute_accuracy, compute_similarities, plot_grad_flow
@@ -53,7 +53,8 @@ from models.prompted_CLIP import PromptedCLIPTextEncoder, PromptedCLIPImageEncod
 
 
 def get_dataset(data_name, train_transforms, test_transforms, clip_transform, data_dir='../data', 
-                train_attr='yes', img_size=75, return_failure_set=False, sample_by_attributes=None, domain_name=None, severity=None):
+                train_attr='yes', img_size=75, return_failure_set=False, 
+                sample_by_attributes=None, domain_name=None, severity=None):
 
     if 'imagenet' in data_name.lower():
         train_dataset, val_dataset, test_dataset, failure_dataset, class_names = get_imagenet_loaders(batch_size=512, data_dir='./data',
@@ -61,9 +62,9 @@ def get_dataset(data_name, train_transforms, test_transforms, clip_transform, da
                                                                     subsample_trainset=False, return_dataset=True, data_type=data_name)
     
     elif data_name == 'domainnet':
-        train_dataset, val_dataset, test_dataset, failure_dataset, class_names = get_domainnet_loaders(args.domain_name, data_dir='data/domainnet_v1.0', 
-                                                                    train_transform=None, test_transform=None, clip_transform=clip_transform,
-                                                                    subsample_trainset=False, return_dataset=True)
+        train_dataset, val_dataset, test_dataset, failure_dataset, class_names = get_domainnet_loaders(domain_name=domain_name, data_dir=data_dir, 
+                                                                        train_transform=None, test_transform=None, clip_transform=clip_transform,
+                                                                        subsample_trainset=False, return_dataset=True)
 
     elif data_name == 'cifar10':
         train_dataset, val_dataset, test_dataset, failure_dataset, class_names = get_CIFAR10_dataloader(data_dir='./data',    
@@ -85,7 +86,7 @@ def get_dataset(data_name, train_transforms, test_transforms, clip_transform, da
         
         train_dataset, val_dataset, test_dataset, failure_dataset, class_names = get_CIFAR100_dataloader(data_dir='./data',  
                                                                     selected_classes=None, retain_orig_ids=False , 
-                                                                    train_transform=None, test_transform=None, clip_transform=clip_transform,
+                                                                    train_transform=train_transforms, test_transform=test_transforms, clip_transform=clip_transform,
                                                                     subsample_trainset=False, return_dataset=True)
     
     elif data_name == 'cifar100-90cls':
@@ -254,14 +255,13 @@ def get_save_dir(args):
     return os.path.join(save_dir, save_dir_details, 'step_1')
 
 @torch.no_grad()
-def get_CLIP_text_encodings(clip_model, texts, save_path=None):
+def get_CLIP_text_encodings(clip_model, texts, save_path=None, device='cuda'):
 
     os.makedirs(os.path.dirname(save_path), exist_ok=True)
     # append "This is a photo of a" to the beginning of each class name
     texts = [f"This is a photo of a {text}" for text in texts]
     with torch.no_grad():
-        text_tokens = clip.tokenize(texts)
-        text_tokens = fabric.to_device(text_tokens)
+        text_tokens = clip.tokenize(texts).to(device)
         text_encodings = clip_model.encode_text(text_tokens).float()
     # text_encoding_save_path = os.path.join(os.getcwd(), "imagenet_classes_text_encodings.pt")
     torch.save(text_encodings,save_path )
@@ -421,7 +421,7 @@ def validate(data_loader, clip_model, classifier,
     total_base_model_acc = 0
     total_plumber_acc = 0
     pbar = progbar_wrapper(
-        data_loader, total=len(data_loader), desc=f"Training Epoch {epoch+1}"
+        data_loader, total=len(data_loader), desc=f"Validating Epoch {epoch+1}"
     )
     
     for images_batch, labels, images_clip_batch in pbar:
@@ -717,6 +717,8 @@ def build_classifier(classifier_name, num_classes, pretrained=False, checkpoint_
     # TODO: Verify each of the models and the transforms
     if classifier_name in ['vit_b_16', 'swin_b']:
         classifier = CustomClassifier(classifier_name, use_pretrained=pretrained)
+    elif classifier_name in ['resnet50_adv_l2_0.1']:
+        classifier = CustomFeatureModel(classifier_name, use_pretrained=pretrained)
     elif classifier_name in ['resnet18', 'resnet50']:
         classifier = CustomResNet(classifier_name, num_classes=num_classes, use_pretrained=pretrained)
     elif classifier_name == 'SimpleCNN':
@@ -731,7 +733,8 @@ def build_classifier(classifier_name, num_classes, pretrained=False, checkpoint_
             transforms.ToTensor(),
             transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010)),
         ])
-
+    else:
+        raise ValueError(f"Invalid classifier name: {classifier_name}")
     if checkpoint_path:
 
         if classifier_name == 'SimpleCNN':
@@ -744,6 +747,7 @@ def build_classifier(classifier_name, num_classes, pretrained=False, checkpoint_
         else:
             classifier.load_state_dict(torch.load(checkpoint_path)['model_state_dict'])
             # fabric.print(f"Loaded {classifier_name} from {checkpoint_path}")
+    
     train_transform = classifier.train_transform
     test_transform = classifier.test_transform
 
@@ -788,7 +792,8 @@ def main(args):
     else:
         # Create the data loader and wrap them with Fabric
         train_dataset, val_dataset, class_names = get_dataset(args.dataset_name, train_transform, test_transform, 
-                                                                data_dir=args.data_dir, clip_transform=clip_transform, img_size=args.img_size)
+                                                                data_dir=args.data_dir, clip_transform=clip_transform, 
+                                                                img_size=args.img_size, domain_name=args.domain_name)
         fabric.print(f"Using {args.dataset_name} dataset")
 
     train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True, num_workers=8, pin_memory=True)
