@@ -171,7 +171,7 @@ class PLUMBER(nn.Module):
             self.optimizer_img_proj.load_state_dict(self.optimizer_img_proj_orig_state)
             print(f"Loaded Initial image projector optimizer")
         if self.text_projector:
-            self.optimizer_text_proj.load_state_dict(self.optimizer_text_proj_orig_state)
+            self.optimizer_txt_proj.load_state_dict(self.optimizer_txt_proj_orig_state)
             print(f"Loaded Initial text projector optimizer")
         if self.clip_prompted_txt_enc:
             self.optimizer_txt_prompt.load_state_dict(self.optimizer_txt_prompt_orig_state)
