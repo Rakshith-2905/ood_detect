@@ -133,7 +133,7 @@ def get_CIFAR10_dataloader(batch_size=512, data_dir='./data', selected_classes=N
 def get_CIFAR10C_dataloader(batch_size=512, data_dir='./data', corruption='gaussian_blur', severity=3,
                         train_transform=None, test_transform=None, clip_transform=None, return_dataset=False):
 
-    #NOTE: We use CIFAR10 as the trainset, Val failure set and CIFAR10-C as the testset
+    #NOTE: We use CIFAR10 as the trainset, Val, failure set and CIFAR10-C as the testset
 
     # TODO:Change the mean and std to the ones for CIFAR-10-C #Mean : [0.491 0.482 0.446]   STD: [0.247 0.243 0.261]
     if train_transform is None:

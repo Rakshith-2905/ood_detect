@@ -5,7 +5,22 @@ generate_extra_params() {
     local txt_prompt_type=$2
     local extra_params=""
     local model_type=""
-
+    # Mapping of 'type' to 'model_type' when 'txt_prompt_type' is set to "class":
+    # A -> plumber_img_prompt_cls_LP
+    # B -> plumber_text_proj_img_prompt
+    # C -> plumber_text_proj_img_prompt_cls_LP
+    # D -> plumber_img_proj_cls_LP
+    # E -> plumber_img_text_proj
+    # F -> plumber_img_text_proj_cls_LP
+    # G -> plumber_img_proj_img_prompt_cls_LP
+    # H -> plumber_img_text_proj_img_prompt
+    # I -> plumber_img_text_proj_img_prompt_cls_LP
+    # J -> plumber_img_prompt
+    # K -> plumber_img_proj
+    # L -> plumber_img_proj_img_prompt
+    # M -> plumber_text_proj
+    # N -> plumber_cls_LP
+    # O -> plumber_text_proj_cls_LP
     case "$type" in
         "A") 
             extra_params="--img_prompting"
@@ -61,6 +76,19 @@ generate_extra_params() {
             extra_params="--img_projection --img_prompting"
             model_type="plumber_img_proj_img_prompt"
             ;;
+        "M")
+            extra_params=" --txt_projection"
+            model_type="plumber_text_proj"
+        ;;
+        "N")
+            extra_params+=" $([ "$txt_prompt_type" = "class" ] && echo "--cls_txt_prompts" || echo "--dataset_txt_prompt")"
+            model_type="$([ "$txt_prompt_type" = "class" ] && echo "plumber_cls_LP" || echo "plumber_dataset_LP")"
+        ;;
+        "O")
+            extra_params=" --txt_projection"
+            extra_params+=" $([ "$txt_prompt_type" = "class" ] && echo "--cls_txt_prompts --txt_projection" || echo "--dataset_txt_prompt --txt_projection")"
+            model_type="$([ "$txt_prompt_type" = "class" ] && echo "plumber_text_proj_cls_LP" || echo "plumber_text_proj_dataset_LP")"
+        ;;
         *)
             echo "Invalid type"
             return 1
@@ -72,78 +100,61 @@ generate_extra_params() {
     return 0
 }
 
-# Define arrays for parameters
-# teacher_temps=(0.5 2 5 10)
-# weight_img_loss=(0.5 1)
-# weight_txt_loss=(0.5 1 2 4 8)
-
 teacher_temps=(2.0)
 weight_img_loss=(1.0)
 weight_txt_loss=(1.0)
 
+dataset_name='imagenet' # (imagenet)
+classifier_name='resnet50_adv_l2_0.1' # (resnet50_adv_l2_0.1, vitb16, swin_b, )
+num_epochs=50
+data_dir='/usr/workspace/viv41siv'
 
-dataset_name='cifar10-c' # (CelebA, Waterbirds, cifar10, cifar10-limited, cifar10-c)
-classifier_name='resnet18' # (resnet18, SimpleCNN)
-num_epochs=10
-data_dir='./data/'
-classifier_checkpoint_path="logs/cifar10-limited/${classifier_name}/classifier/checkpoint_29.pth"
-prompt_path="data/cifar10/cifar10_CLIP_ViT-B_32_text_embeddings.pth"
-img_size=224
-num_classes=10
+prompt_path="data/${dataset_name}/${dataset_name}_CLIP_ViT-B_32_text_embeddings.pth"
+img_size=224 # 75 only for celeba
+num_classes=1000
 # Class level or dataset level text prompts
 txt_prompt_type="class" # Options: class, dataset
-svm_features="proj_features" # Options: proj_features, classifier_features, clip_features
 
-types=("A" "B" "C" "D" "E" "F" "G" "H" "I" "J" "K" "L")
-corruptions=(
-    "brightness" "frost" "gaussian_blur" "gaussian_noise"
-    "impulse_noise" "motion_blur" "pixelate"
-)
+# types=("A" "B" "C" "D" "E" "F" "G" "H" "I" "J" "K" "L" )
 
+for type in "${types[@]}"; do
+    output=$(generate_extra_params "$type" "$txt_prompt_type")
+    extra_params=$(echo "$output" | head -n 1)
+    model_type=$(echo "$output" | tail -n 1)
 
-for corr in "${corruptions[@]}"; do
-    for type in "${types[@]}"; do
-        output=$(generate_extra_params "$type" "$txt_prompt_type")
-        extra_params=$(echo "$output" | head -n 1)
-        model_type=$(echo "$output" | tail -n 1)
-
-        echo "Running type: $type with params: $extra_params and model type: $model_type for corruption: $corr"
-        
-        for a in "${teacher_temps[@]}"; do
-            for b in "${weight_img_loss[@]}"; do
-                for c in "${weight_txt_loss[@]}"; do
-
-                    step1_checkpoint_path="logs/cifar10-limited/${classifier_name}/${model_type}/_clsEpoch_29_bs_128_lr_0.1_teT_${a}_sT_1.0_imgweight_${b}_txtweight_${c}_is_mlp_False/step_1/best_projector_weights.pth"
-                    python train_SVM.py \
-                            --data_dir "$data_dir"  \
-                            --domain_name "$corr"    \
-                            --severity 3 \
-                            --dataset_name "$dataset_name"    \
-                            --train_on_testset    \
-                            --num_classes "$num_classes"  \
-                            --batch_size 128  \
-                            --seed 42    \
-                            --img_size "$img_size"  \
-                            $extra_params \
-                            --classifier_name "$classifier_name" \
-                            --classifier_checkpoint_path "$classifier_checkpoint_path" \
-                            --step1_checkpoint_path "$step1_checkpoint_path" \
-                            --clip_model_name 'ViT-B/32' \
-                            --prompt_path "$prompt_path" \
-                            --n_promt_ctx 16 \
-                            --num_epochs "$num_epochs" \
-                            --optimizer 'sgd' \
-                            --learning_rate 0.1 \
-                            --val_freq 1 \
-                            --prefix '' \
-                            --proj_clip \
-                            --projection_dim 512 \
-                            --teacher_temp $a  \
-                            --student_temp 1 \
-                            --weight_img_loss $b  \
-                            --weight_txt_loss $c \
-                            --svm_features "$svm_features" 
-                done
+    echo "Running type: $type with params: $extra_params and model type: $model_type"
+    
+    for a in "${teacher_temps[@]}"; do
+        for b in "${weight_img_loss[@]}"; do
+            for c in "${weight_txt_loss[@]}"; do
+                python merging_priors_train.py \
+                        --data_dir "$data_dir"  \
+                        --domain_name 'real'    \
+                        --dataset_name "$dataset_name"    \
+                        --attributes "$atts"  \
+                        --num_classes "$num_classes"  \
+                        --batch_size 256  \
+                        --seed 42    \
+                        --img_size "$img_size"  \
+                        $extra_params \
+                        --classifier_name "$classifier_name" \
+                        --classifier_checkpoint_path "$classifier_checkpoint_path" \
+                        --clip_model_name 'ViT-B/32' \
+                        --prompt_path "$prompt_path" \
+                        --n_promt_ctx 16 \
+                        --num_epochs "$num_epochs" \
+                        --optimizer 'sgd' \
+                        --learning_rate 0.1 \
+                        --val_freq 1 \
+                        --prefix '' \
+                        --proj_clip \
+                        --projection_dim 512 \
+                        --teacher_temp $a  \
+                        --student_temp 1 \
+                        --weight_img_loss $b  \
+                        --weight_txt_loss $c \
+                        --num_gpus 1 \
+                        --num_nodes 1 
             done
         done
     done

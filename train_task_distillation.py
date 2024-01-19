@@ -57,7 +57,7 @@ def get_dataset(data_name, train_transforms, test_transforms, clip_transform, da
                 sample_by_attributes=None, domain_name=None, severity=None):
 
     if 'imagenet' in data_name.lower():
-        train_dataset, val_dataset, test_dataset, failure_dataset, class_names = get_imagenet_loaders(batch_size=512, data_dir='./data',
+        train_dataset, val_dataset, test_dataset, failure_dataset, class_names = get_imagenet_loaders(batch_size=512, data_dir=data_dir,
                                                                     train_transform=train_transforms, test_transform=test_transforms, clip_transform=clip_transform,
                                                                     subsample_trainset=False, return_dataset=True, data_type=data_name)
     
