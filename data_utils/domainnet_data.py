@@ -50,6 +50,7 @@ class DomainNetDataset(Dataset):
             mean=[-0.485/0.229, -0.456/0.224, -0.406/0.225],
             std=[1/0.229, 1/0.224, 1/0.225]
         )
+        return inv_normalize(images)
 
 def get_data_from_saved_files(save_dir, batch_size=32, train_shuffle=True, return_dataset=False,dataset_name='domainnet'):
 
@@ -83,54 +84,83 @@ def get_data_from_saved_files(save_dir, batch_size=32, train_shuffle=True, retur
 
     return train_loader, test_loader
 
-def get_domainnet_loaders(domain_name,batch_size=512,train_shuffle=True, data_dir='data/domainnet_v1.0'):
-    imagenet_train_transform = transforms.Compose([
-            transforms.RandomResizedCrop(224),
-            transforms.RandomHorizontalFlip(),
-            transforms.ToTensor(),
-            transforms.Normalize(mean=[0.485, 0.456, 0.406],
-                                 std=[0.229, 0.224, 0.225]),
-        ])
+def get_domainnet_loaders(domain_name, batch_size=512, data_dir='data/', 
+                          train_transform=None, test_transform=None, clip_transform=None, 
+                          subsample_trainset=False, return_dataset=False):
+    
+    if train_transform is None:
+        train_transform = transforms.Compose([
+                transforms.RandomResizedCrop(224),
+                transforms.RandomHorizontalFlip(),
+                transforms.ToTensor(),
+                transforms.Normalize(mean=[0.485, 0.456, 0.406],
+                                    std=[0.229, 0.224, 0.225]),
+            ])
+    if test_transform is None:
+        test_transform = transforms.Compose([
+                transforms.Resize(256),
+                transforms.CenterCrop(224),
+                transforms.ToTensor(),
+                transforms.Normalize(mean=[0.485, 0.456, 0.406],
+                                    std=[0.229, 0.224, 0.225]),
 
-    imagenet_test_transform = transforms.Compose([
-            transforms.Resize(256),
-            transforms.CenterCrop(224),
-            transforms.ToTensor(),
-            transforms.Normalize(mean=[0.485, 0.456, 0.406],
-                                 std=[0.229, 0.224, 0.225]),
+            ])
+    
+    data_dir = os.path.join(data_dir, 'domainnet_v1.0')
+    temp_train_dataset = DomainNetDataset(root_dir=data_dir, domain=domain_name,
+                                    split='train', transform=train_transform, transform2=clip_transform)
+    test_dataset= DomainNetDataset(root_dir=data_dir, domain=domain_name, 
+                                    split='test', transform=test_transform, transform2=clip_transform)
+    # Split trainset into train, val
+    val_size = int(0.20 * len(temp_train_dataset))
+    train_size = len(temp_train_dataset) - val_size
+    train_dataset, temp_valset = torch.utils.data.random_split(temp_train_dataset, [train_size, val_size], 
+                                                               generator=torch.Generator().manual_seed(42))
+    
+    # random subsample trainset to 20% of original size
+    if subsample_trainset:
+        train_size = int(0.20 * len(train_dataset))
+        train_dataset, _ = torch.utils.data.random_split(train_dataset, [train_size, len(train_dataset)-train_size], 
+                                                         generator=torch.Generator().manual_seed(42))
 
-        ])
-    domain_train = DomainNetDataset(root_dir=data_dir, domain=domain_name, \
-                                    split='train', transform=imagenet_train_transform)
-    domain_test= DomainNetDataset(root_dir=data_dir, domain=domain_name, \
-                                    split='test', transform=imagenet_test_transform)
-    train_loader = torch.utils.data.DataLoader(domain_train, batch_size=batch_size, shuffle=train_shuffle, num_workers=8)
-    test_loader = torch.utils.data.DataLoader(domain_test, batch_size=batch_size, shuffle=False, num_workers=8)
-    loaders={}
-    loaders['train']=train_loader
-    loaders['test']=test_loader
-    class_names = domain_train.targets
-    return loaders, class_names
+    # Split the valset into val and failure
+    failure_size = int(0.50 * len(temp_valset))
+    val_size = len(temp_valset) - failure_size
+    val_dataset, failure_dataset = torch.utils.data.random_split(temp_valset, [val_size, failure_size], 
+                                                                 generator=torch.Generator().manual_seed(42))
+
+    if return_dataset:
+        return train_dataset, val_dataset, test_dataset, failure_dataset, temp_train_dataset.class_names
+
+    # DataLoader
+    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, num_workers=2)
+    val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=True, num_workers=2)
+    failure_loader = DataLoader(failure_dataset, batch_size=batch_size, shuffle=True, num_workers=2)
+    test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False, num_workers=2)
+
+    loaders = {
+        'train': train_loader,
+        'val': val_loader,
+        'failure': failure_loader,
+        'test': test_loader
+    }
+
+    return loaders, temp_train_dataset.class_names
 
     
 if __name__=="__main__":
-    transform_train= transforms.Compose([
-        transforms.Resize(256),
-        transforms.RandomCrop(224),
-        transforms.RandomHorizontalFlip(),
-        transforms.ToTensor(),
-        transforms.Normalize(mean=[0.485,0.456,0.406],
-                            std=[0.229,0.224,0.225])
-    ])
 
+    train_transform = None
+    test_transform = None
+    clip_transform = None
+    datasets = get_domainnet_loaders('real', batch_size=4, data_dir='data', 
+                            train_transform=train_transform, test_transform=test_transform, clip_transform=clip_transform,
+                            subsample_trainset=False, return_dataset=True)
 
-    real_train = DomainNetDataset(root_dir='data/domainnet_v1.0', domain='real', split='train', transform=transform_train)
-    print(len(real_train))
-    print(real_train.class_names)
-    assert False
-    loader = torch.utils.data.DataLoader(real_train, batch_size=4, shuffle=True, num_workers=2)
-    for i, data in enumerate(loader):
-        print(data[0].shape)
-        print(data[1].shape)
-        if i==2:
-            break
+    train_dataset, val_dataset, test_dataset, failure_dataset, class_names = datasets
+
+    print(len(train_dataset))
+    print(len(val_dataset))
+    print(len(test_dataset))
+    print(len(failure_dataset))
+    print(class_names)

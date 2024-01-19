@@ -233,7 +233,7 @@ class Waterbirds(SubpopDataset):
     CHECKPOINT_FREQ = 300
     INPUT_SHAPE = (3, 224, 224,)
 
-    def __init__(self, data_path, split, hparams, transform1, train_attr='yes', subsample_type=None, duplicates=None):
+    def __init__(self, data_path, split, hparams, transform1, train_attr='yes', subsample_type=None, duplicates=None, sample_by_attributes=None):
         root = os.path.join(data_path, "waterbirds", "waterbird_complete95_forest2water2")
         metadata = os.path.join(data_path, "waterbirds", "metadata_waterbirds.csv")
         transform = transforms.Compose([
@@ -246,7 +246,7 @@ class Waterbirds(SubpopDataset):
 
         self.class_names = ['waterbird', 'landbird']
         
-        super().__init__(root, split, metadata, transform, transform1, train_attr, subsample_type, duplicates)
+        super().__init__(root, split, metadata, transform, transform1, train_attr, subsample_type, duplicates, sample_by_attributes=[0, 1])
 
     def transform(self, x):
         return self.transform_(Image.open(x).convert("RGB"))
@@ -368,7 +368,7 @@ class MetaShift(SubpopDataset):
     CHECKPOINT_FREQ = 300 
     INPUT_SHAPE = (3, 224, 224,)
 
-    def __init__(self, data_path, split, hparams, train_attr='yes', subsample_type=None, duplicates=None):
+    def __init__(self, data_path, split, hparams, transform1, train_attr='yes', subsample_type=None, duplicates=None, sample_by_attributes=None):
         metadata = os.path.join(data_path, "metashift", "metadata_metashift.csv")
 
         transform = transforms.Compose([
@@ -378,7 +378,9 @@ class MetaShift(SubpopDataset):
             transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225]),
         ])
         self.data_type = "images"
-        super().__init__('/', split, metadata, transform, train_attr, subsample_type, duplicates)
+
+        self.class_names = ['dog', 'cat']
+        super().__init__('./', split, metadata, transform, transform1, train_attr, subsample_type, duplicates, sample_by_attributes=[0, 1])
 
     def transform(self, x):
         return self.transform_(Image.open(x).convert("RGB"))
@@ -550,13 +552,14 @@ class CustomDataLoader:
 
         # BatchSampler to group indices into batches
         self.batch_sampler = BatchSampler(
-            self.sampler, batch_size=self.batch_size, drop_last=True)
+            self.sampler, batch_size=self.batch_size, drop_last=False)
 
     def get_loader(self):
         return DataLoader(
             dataset=self.dataset,
             batch_sampler=self.batch_sampler,
             num_workers=self.num_workers,
+            drop_last=False
             # Additional parameters like pin_memory can be added if required
         )
 
@@ -591,26 +594,26 @@ if __name__ == "__main__":
 
     import __main__
 
-    datasets = vars(__main__)
+    dataset_name = vars(__main__)
 
-    data_choice = "Waterbirds"
+    data_choice = "MetaShift"
     data_dir = "./data"
-    hparams ={
-        'batch_size': 32,
-        'cmnist_flip_prob': 0.5, # 0.5 for binary, 0.1 for 3-way
-        'cmnist_spur_prob': 0.5, # 0.5 for binary, 0.1 for 3-way
-        'cmnist_attr_prob': 0.5, # 0.5 for binary, 0.1 for 3-way
-        'cmnist_label_prob': 0.5, # 0.5 for binary, 0.9 for 3-way
-        'group_balanced': False, # if attribute not available, groups degenerate to classes
-        'num_workers': 2,
-        'subsample_type': None,
-        'duplicates': None
-
+    hparams = {
+        'batch_size': 256,
+        'image_size': 224,
+        'num_workers': 4,
+        'group_balanced': None,
     }
-    train_attr = 'yes'
-    num_workers = 2
+    loaders, class_names = get_dataloader(data_choice, data_dir, hparams, train_attr='yes', 
+                                          subsample_type=None, duplicates=None)
 
-    loggers, unique_labels = get_dataloader(data_choice, data_dir, hparams, train_attr)
+    print(loaders.keys())
+    loader = loaders['val']
+    # Iterate through the train loader
+    for i, (idx, x, y, a) in enumerate(loader):
+        print(x.shape, y.shape, a.shape)
+        if i == 10:
+            break
     assert False
     if data_choice in datasets:
         train_dataset = datasets[data_choice](data_dir, 'tr', hparams, train_attr=train_attr)

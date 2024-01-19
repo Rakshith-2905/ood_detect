@@ -16,6 +16,7 @@ from data_utils.domainnet_data import DomainNetDataset, get_domainnet_loaders
 from data_utils.celebA_dataset import get_celebA_dataloader
 
 from train_task_distillation import get_dataset, build_classifier
+from train_classifier import get_dataloaders
 from data_utils import subpop_bench
 
 def plot_images(loader, title, n_rows=2, n_cols=5, mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]):
@@ -84,30 +85,10 @@ def main(args):
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
     ########################### Load Dataset ###########################
-    if args.dataset_name == 'domainnet':
-        loaders, class_names = get_domainnet_loaders(args.domain, batch_size=args.batch_size, train_shuffle=True)
-    elif args.dataset_name in subpop_bench.DATASETS:
-        hparams = {
-            'batch_size': args.batch_size,
-            'image_size': args.image_size,
-            'num_workers': 4,
-            'group_balanced': None,
-        }
-        loaders, class_names = subpop_bench.get_dataloader(args.dataset_name, args.data_path, hparams, train_attr='yes')
-    elif args.dataset_name == 'CelebA':
-        class_attr = 'Young' # attribute for binary classification
-        imbalance_attr = ['Male']
-        imbalance_percent = {1: [20], 0:[80]} # 1 = Young, 0 = Not Young; 20% of the Young data will be Male
-        ignore_attrs = []  # Example: ignore samples that are 'Bald' or 'Wearing_Earrings'
-
-        loaders, class_names = get_celebA_dataloader(args.batch_size, class_attr, imbalance_attr, imbalance_percent, 
-                                                     ignore_attrs, img_size=args.image_size, mask=False, mask_region=None)
-    elif args.dataset_name == 'cifar10-limited':
-        loaders, class_names = get_CIFAR10_dataloader(batch_size=args.batch_size, data_dir=args.data_path, subsample_trainset=True)
-    elif args.dataset_name == 'cifar10':
-        loaders, class_names = get_CIFAR10_dataloader(batch_size=args.batch_size, data_dir=args.data_path, subsample_trainset=False)
-   
-
+    
+    loaders, class_names = get_dataloaders(args.dataset_name, args.domain, args.batch_size, args.data_path, args.image_size, 
+                                           train_transform=None, test_transform=None, clip_transform=None, 
+                                           subsample_trainset=False, return_dataset=False)
 
     train_loader, val_loader, test_loader = loaders['train'], loaders['val'], loaders['test']
 
@@ -180,13 +161,13 @@ if __name__ == "__main__":
 """
 Sample command to run:
 python test_classifier.py \
-        --dataset_name cifar10 \
+        --dataset_name cifar100 \
         --data_path ./data \
         --image_size 224 \
         --batch_size 512 \
         --seed 42 \
-        --classifier_model SimpleCNN \
-        --checkpoint_path logs/cifar10/SimpleCNN/classifier/checkpoint_29.pth
+        --classifier_model resnet50 \
+        --checkpoint_path logs/cifar100/resnet50/classifier/checkpoint_29.pth
 
 
 """

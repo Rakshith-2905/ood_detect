@@ -89,7 +89,7 @@ def get_CIFAR10_dataloader(batch_size=512, data_dir='./data', selected_classes=N
                                     std=[0.229, 0.224, 0.225]),
             ])
 
-    temp_train_dataset = CIFAR10TwoTransforms(root=data_dir, train=True, transform1=test_transform, transform2=clip_transform, 
+    temp_train_dataset = CIFAR10TwoTransforms(root=data_dir, train=True, transform1=train_transform, transform2=clip_transform, 
                                               selected_classes=selected_classes)
     test_dataset = CIFAR10TwoTransforms(root=data_dir, train=False, transform1=test_transform, transform2=clip_transform, 
                                         selected_classes=selected_classes)

@@ -9,9 +9,11 @@ import argparse
 import os
 import matplotlib.pyplot as plt
 from tqdm import tqdm
+import random
 
 from models.resnet import CustomResNet
 from data_utils.domainnet_data import DomainNetDataset, get_domainnet_loaders
+from data_utils.cifar100_data import CIFAR100TwoTransforms, CIFAR100C, get_CIFAR100_dataloader
 from data_utils.cifar10_data import get_CIFAR10_dataloader
 from data_utils.celebA_dataset import get_celebA_dataloader
 
@@ -111,34 +113,98 @@ def validate(val_loader, model, criterion, device, epoch):
 
     return total_loss/total_samples, total_correct/total_samples
 
-def main(args):
-    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-
-    ########################### Load Dataset ###########################
-    if args.dataset_name == 'domainnet':
-        loaders, class_names = get_domainnet_loaders(args.domain, batch_size=args.batch_size, train_shuffle=True)
-    elif args.dataset_name in subpop_bench.DATASETS:
+def get_dataloaders(dataset_name, domain_name=None,
+                    batch_size=512, data_dir='./data', image_size=224, 
+                    train_transform=None, test_transform=None, clip_transform=None, 
+                    subsample_trainset=False, return_dataset=False):
+    
+    if dataset_name == 'domainnet':
+        loaders, class_names = get_domainnet_loaders(domain_name, batch_size=batch_size, data_dir=data_dir,
+                                                     train_transform=None, test_transform=None, clip_transform=None, 
+                                                     subsample_trainset=False, return_dataset=False)
+    elif dataset_name in subpop_bench.DATASETS:
         hparams = {
-            'batch_size': args.batch_size,
-            'image_size': args.image_size,
+            'batch_size': batch_size,
+            'image_size': image_size,
             'num_workers': 4,
             'group_balanced': None,
         }
-        loaders, class_names = subpop_bench.get_dataloader(args.dataset_name, args.data_path, hparams, train_attr='yes')
-    elif args.dataset_name == 'CelebA':
+        loaders, class_names = subpop_bench.get_dataloader(dataset_name, data_dir, hparams, train_attr='yes')
+    elif dataset_name == 'CelebA':
         class_attr = 'Young' # attribute for binary classification
         imbalance_attr = ['Male']
         imbalance_percent = {1: [20], 0:[80]} # 1 = Young, 0 = Not Young; 20% of the Young data will be Male
         ignore_attrs = []  # Example: ignore samples that are 'Bald' or 'Wearing_Earrings'
 
-        loaders, class_names = get_celebA_dataloader(args.batch_size, class_attr, imbalance_attr, imbalance_percent, 
-                                                     ignore_attrs, img_size=args.image_size, mask=False, mask_region=None)
-    elif args.dataset_name == 'cifar10-limited':
-        loaders, class_names = get_CIFAR10_dataloader(batch_size=args.batch_size, data_dir=args.data_path, subsample_trainset=True)
-    elif args.dataset_name == 'cifar10':
-        loaders, class_names = get_CIFAR10_dataloader(batch_size=args.batch_size, data_dir=args.data_path, subsample_trainset=False)
-   
+        loaders, class_names = get_celebA_dataloader(batch_size, class_attr, imbalance_attr, imbalance_percent, 
+                                                     ignore_attrs, img_size=image_size, mask=False, mask_region=None)
+    elif dataset_name == 'cifar10-limited':
+        loaders, class_names = get_CIFAR10_dataloader(batch_size=batch_size, data_dir=data_dir, 
+                                                      subsample_trainset=True)
+    elif dataset_name == 'cifar10':
+        loaders, class_names = get_CIFAR10_dataloader(batch_size=batch_size, data_dir=data_dir, subsample_trainset=False)
+    elif dataset_name == 'cifar100':
+        loaders, class_names = get_CIFAR100_dataloader(batch_size=batch_size, data_dir=data_dir, 
+                                                       selected_classes=None, retain_orig_ids=False,    
+                                                       train_transform=None, test_transform=None, clip_transform=None, 
+                                                       subsample_trainset=False, return_dataset=False)
+    elif dataset_name == 'cifar100-90cls':
+        # Randomly select 90 numbers from 0-99 without replacement use seed
+        random.seed(42)
+        selected_classes = random.sample(range(100), 90)
+        loaders, class_names = get_CIFAR100_dataloader(batch_size=batch_size, data_dir=data_dir, 
+                                                       selected_classes=selected_classes, retain_orig_ids=True,    
+                                                       train_transform=None, test_transform=None, clip_transform=None, 
+                                                       subsample_trainset=False, return_dataset=False)
+    
+    return loaders, class_names
 
+def main(args):
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+
+    # ########################### Load Dataset ###########################
+    # if args.dataset_name == 'domainnet':
+    #     loaders, class_names = get_domainnet_loaders(args.domain, batch_size=args.batch_size, data_dir=args.data_path,
+    #                                                  train_transform=None, test_transform=None, clip_transform=None, 
+    #                                                  subsample_trainset=False, return_dataset=False)
+    # elif args.dataset_name in subpop_bench.DATASETS:
+    #     hparams = {
+    #         'batch_size': args.batch_size,
+    #         'image_size': args.image_size,
+    #         'num_workers': 4,
+    #         'group_balanced': None,
+    #     }
+    #     loaders, class_names = subpop_bench.get_dataloader(args.dataset_name, args.data_path, hparams, train_attr='yes')
+    # elif args.dataset_name == 'CelebA':
+    #     class_attr = 'Young' # attribute for binary classification
+    #     imbalance_attr = ['Male']
+    #     imbalance_percent = {1: [20], 0:[80]} # 1 = Young, 0 = Not Young; 20% of the Young data will be Male
+    #     ignore_attrs = []  # Example: ignore samples that are 'Bald' or 'Wearing_Earrings'
+
+    #     loaders, class_names = get_celebA_dataloader(args.batch_size, class_attr, imbalance_attr, imbalance_percent, 
+    #                                                  ignore_attrs, img_size=args.image_size, mask=False, mask_region=None)
+    # elif args.dataset_name == 'cifar10-limited':
+    #     loaders, class_names = get_CIFAR10_dataloader(batch_size=args.batch_size, data_dir=args.data_path, subsample_trainset=True)
+    # elif args.dataset_name == 'cifar10':
+    #     loaders, class_names = get_CIFAR10_dataloader(batch_size=args.batch_size, data_dir=args.data_path, subsample_trainset=False)
+    # elif args.dataset_name == 'cifar100':
+    #     loaders, class_names = get_CIFAR100_dataloader(batch_size=args.batch_size, data_dir=args.data_path, 
+    #                                                    selected_classes=None, retain_orig_ids=False,    
+    #                                                    train_transform=None, test_transform=None, clip_transform=None, 
+    #                                                    subsample_trainset=False, return_dataset=False)
+    # elif args.dataset_name == 'cifar100-90cls':
+    #     # Randomly select 90 numbers from 0-99 without replacement use seed
+    #     random.seed(42)
+    #     selected_classes = random.sample(range(100), 90)
+    #     loaders, class_names = get_CIFAR100_dataloader(batch_size=args.batch_size, data_dir=args.data_path, 
+    #                                                    selected_classes=selected_classes, retain_orig_ids=True,    
+    #                                                    train_transform=None, test_transform=None, clip_transform=None, 
+    #                                                    subsample_trainset=False, return_dataset=False)
+    
+    loaders, class_names = get_dataloaders(args.dataset_name, args.domain, args.batch_size, args.data_path, args.image_size, 
+                                           train_transform=None, test_transform=None, clip_transform=None, 
+                                           subsample_trainset=False, return_dataset=False)
+    
     train_loader, val_loader = loaders['train'], loaders['val']
 
     print(f"Number of training samples: {len(train_loader.dataset)}")
@@ -163,11 +229,11 @@ def main(args):
     if args.optimizer == 'adam':
         optimizer = optim.Adam(model.parameters(), lr=args.learning_rate)
     elif args.optimizer == 'sgd':
-        optimizer = optim.SGD(model.parameters(), lr=args.learning_rate, momentum=0.9)
+        optimizer = optim.SGD(model.parameters(), lr=args.learning_rate, momentum=0.9, weight_decay=5e-4)
     
     # Learning rate scheduler
     if args.scheduler == 'MultiStepLR':
-        scheduler = optim.lr_scheduler.MultiStepLR(optimizer, milestones=[30, 60, 90], gamma=0.1)
+        scheduler = optim.lr_scheduler.MultiStepLR(optimizer, milestones=[60, 120, 160], gamma=0.2)
     elif args.scheduler == 'cosine':
         scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=100)
     else:
@@ -183,7 +249,7 @@ def main(args):
 
     plot_images(train_loader, title="Training Image")
     plot_images(val_loader, title="Validation Image")
-    
+
     # Save arguments if not resuming
     if not args.resume:
         with open(os.path.join(args.save_dir, 'args.txt'), 'w') as f:
@@ -311,15 +377,17 @@ if __name__ == "__main__":
 """
 Sample command to run:
 python train_classifier.py \
-        --dataset_name cifar10 \
-        --domain None \
+        --dataset_name MetaShift \
+        --domain real \
         --data_path ./data \
         --image_size 224 \
         --batch_size 512 \
         --seed 42 \
         --num_epochs 30 \
+        --optimizer sgd \
+        --scheduler MultiStepLR \
         --learning_rate 0.001 \
-        --classifier_model SimpleCNN \
+        --classifier_model resnet18 \
         --use_pretrained
 
 
