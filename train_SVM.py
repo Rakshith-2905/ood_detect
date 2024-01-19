@@ -39,7 +39,6 @@ from models import svm_wrapper
 from models.plumber import PLUMBER
 from data_utils.FD_caption_set import get_caption_set
 
-
 def seed_everything(seed):
     random.seed(seed)
     np.random.seed(seed)
@@ -147,7 +146,7 @@ def evaulate(data_loader, clip_model, classifier,
         proj_preds.extend(probs_from_proj.argmax(dim=-1).cpu().numpy())
         gt_labels.extend(labels.cpu().numpy())
 
-        classifier_features.extend(classifier_embeddings.cpu().numpy())
+        classifier_features.extend(classifier_embeddings.type(torch.float32).cpu().numpy())
         clip_features.extend(clip_raw_embeddings.cpu().numpy())
         proj_features.extend(proj_embeddings.cpu().numpy())
 
@@ -216,7 +215,9 @@ def get_features_preds(args):
     else:
         # Create the data loader and wrap them with Fabric
         train_dataset, val_dataset, test_dataset, failure_dataset, class_names = get_dataset(args.dataset_name, train_transform, test_transform, 
-                                                                data_dir=args.data_dir, clip_transform=clip_transform, img_size=args.img_size, return_failure_set=True)
+                                                                data_dir=args.data_dir, clip_transform=clip_transform, 
+                                                                img_size=args.img_size, return_failure_set=True,
+                                                                domain_name=args.domain_name, severity=args.severity)
         print(f"Using {args.dataset_name} dataset")
 
     train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True, num_workers=8, pin_memory=True)
@@ -387,15 +388,18 @@ def main(args):
     
     train_features = features_pred_dict['train'][0][args.svm_features]
     train_labels = features_pred_dict['train'][1]['gt_labels']
-    train_preds = features_pred_dict['train'][1]['proj_preds']
+    train_preds = features_pred_dict['train'][1]['classifier_preds']
 
     val_features = features_pred_dict['val'][0][args.svm_features]
     val_labels = np.asarray(features_pred_dict['val'][1]['gt_labels'])
-    val_preds = np.asarray(features_pred_dict['val'][1]['proj_preds'])
+    val_preds = np.asarray(features_pred_dict['val'][1]['classifier_preds'])
 
     test_features = features_pred_dict['test'][0][args.svm_features]
     test_labels = np.asarray(features_pred_dict['test'][1]['gt_labels'])
-    test_preds = np.asarray(features_pred_dict['test'][1]['proj_preds'])
+    test_preds = np.asarray(features_pred_dict['test'][1]['classifier_preds'])
+
+    # Number of unique values in val_preds
+    print(f"Unique values in val_preds: {np.unique(val_preds)}")
 
     svm_fitter = svm_wrapper.SVMFitter()
     svm_fitter.set_preprocess(train_features)
@@ -427,7 +431,6 @@ def main(args):
     # os.makedirs(os.path.join(args.save_dir, 'results'), exist_ok=True)
     # with open(os.path.join(args.save_dir, 'results', 'results.json'), 'w') as f:
     #     json.dump(metric_dict, f)
-
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Train ResNet on WILDS Dataset')
