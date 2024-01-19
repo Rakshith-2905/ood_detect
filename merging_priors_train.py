@@ -84,7 +84,7 @@ def progbar_wrapper(iterable, total, **kwargs):
     return iterable
       
 def train_one_epoch(data_loader, limber, 
-                    class_prompts, text_encodings_raw, criterion, epoch):
+                    class_prompts, text_encodings_raw, epoch):
 
     limber.set_train_mode()
 
@@ -161,7 +161,7 @@ def train_one_epoch(data_loader, limber,
 
 @torch.no_grad()
 def validate(data_loader, limber, 
-                    class_prompts, text_encodings_raw, criterion, epoch):
+                    class_prompts, text_encodings_raw, epoch):
 
     limber.set_eval_mode()
 
@@ -294,9 +294,6 @@ def main(args):
     optimizers_dict = limber.optimizer_init(args.optimizer, args.learning_rate)
     schedulers_dict = limber.scheduler_init()
 
-    # Loss function
-    criterion = SimpleDINOLoss(student_temp=args.student_temp, teacher_temp=args.teacher_temp)
-
     if not args.use_saved_features:
         clip_model = fabric.to_device(clip_model)
     
@@ -324,11 +321,11 @@ def main(args):
         
         train_loss, train_limber_acc, train_loss_img, train_loss_txt = train_one_epoch(
                                                                             train_loader, limber, class_prompts,
-                                                                            text_encodings, criterion, epoch)
+                                                                            text_encodings, epoch)
         if epoch % args.val_freq == 0:
             val_loss, val_limber_acc, val_loss_img, val_loss_txt = validate(
                                                                             val_loader, limber, class_prompts,
-                                                                            text_encodings, criterion, epoch)
+                                                                            text_encodings, epoch)
         
         limber.scheduler_step()
             
