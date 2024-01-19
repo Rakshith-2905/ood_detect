@@ -51,7 +51,7 @@ def get_save_dir(args):
     save_dir = os.path.join(save_dir, 'failure_detector')
 
     if args.dataset_name in ['cifar10-c', 'cifar100-c']:
-        save_dir = os.path.join(save_dir, f'{args.dataset_name}_{args.severity}')
+        save_dir = os.path.join(save_dir, f'{args.dataset_name}_{args.domain_name}_{args.severity}')
 
     return save_dir
 

@@ -133,6 +133,8 @@ def get_CIFAR10_dataloader(batch_size=512, data_dir='./data', selected_classes=N
 def get_CIFAR10C_dataloader(batch_size=512, data_dir='./data', corruption='gaussian_blur', severity=3,
                         train_transform=None, test_transform=None, clip_transform=None, return_dataset=False):
 
+    #NOTE: We use CIFAR10 as the trainset, Val failure set and CIFAR10-C as the testset
+
     # TODO:Change the mean and std to the ones for CIFAR-10-C #Mean : [0.491 0.482 0.446]   STD: [0.247 0.243 0.261]
     if train_transform is None:
         train_transform = transforms.Compose([
@@ -147,17 +149,28 @@ def get_CIFAR10C_dataloader(batch_size=512, data_dir='./data', corruption='gauss
                                     std=[0.229, 0.224, 0.225]),
             ])
 
-
-    train_dataset = CIFAR10C(corruption=corruption, transform=train_transform,
+    temp_train_dataset = CIFAR10TwoTransforms(root=data_dir, train=True, transform1=train_transform, transform2=clip_transform, 
+                                              selected_classes=None)
+    
+    test_dataset = CIFAR10C(corruption=corruption, transform=train_transform,
                              clip_transform=clip_transform,level=severity)
-    val_dataset = train_dataset
-    failure_dataset = train_dataset
-    test_dataset = train_dataset
+    
 
-    class_names = ['airplane', 'automobile', 'bird', 'cat', 'deer', 'dog', 'frog', 'horse', 'ship','truck']                                           
+    # Split trainset into train, val
+    val_size = int(0.20 * len(temp_train_dataset))
+    train_size = len(temp_train_dataset) - val_size
+    train_dataset, temp_valset = torch.utils.data.random_split(temp_train_dataset, [train_size, val_size], 
+                                                               generator=torch.Generator().manual_seed(42))
+ 
+
+    # Split the valset into val and failure
+    failure_size = int(0.50 * len(temp_valset))
+    val_size = len(temp_valset) - failure_size
+    val_dataset, failure_dataset = torch.utils.data.random_split(temp_valset, [val_size, failure_size], 
+                                                                 generator=torch.Generator().manual_seed(42))                                        
 
     if return_dataset:
-        return train_dataset, val_dataset, test_dataset, failure_dataset, class_names
+        return train_dataset, val_dataset, test_dataset, failure_dataset, temp_train_dataset.class_names
 
     # DataLoader
     train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, num_workers=2)
