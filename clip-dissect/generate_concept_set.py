@@ -51,21 +51,27 @@ def get_attributes(class_name, previous_attributes, PROMPT):
 
 def main():
     
-    data_name = 'NICOpp_att'
+    data_name = 'domainnet'
     # Read the prompt template from file json
     with open('prompt_templates.json', 'r') as f:
         prompt_template = json.load(f)[data_name]
+
+    # # Load the classes from the text file
+    # with open('data/domainnet_v1.0/class_names.txt', 'r') as f:
+    #     classes = f.read().splitlines()  
+
+    classes = ['photo', 'sketch', 'clipart', 'painting', 'infograph', 'quickdraw' ]      
         
     # classes = ['airplane', 'automobile', 'bird', 'cat', 'deer', 'dog', 'frog', 'horse', 'ship', 'truck' ]
     # classes = ['car', 'flower', 'chair', 'truck', 'tiger', 'wheat', 'seal', 'wolf', 'lion', 'dolphin', 'lifeboat', 'corn', 'fishing rod', 'owl', 'sunflower', 'cow', 'bird', 'clock', 'shrimp', 'goose', 'airplane', 'rabbit', 'hot air balloon', 'lizard', 'hat', 'spider', 'motorcycle', 'tortoise', 'dog', 'crocodile', 'elephant', 'gun', 'fox', 'bus', 'cat', 'sailboat', 'giraffe', 'cactus', 'pumpkin', 'train', 'ship', 'helicopter', 'bicycle', 'racket', 'squirrel', 'bear', 'scooter', 'mailbox', 'horse', 'pineapple', 'frog', 'football', 'ostrich', 'tent', 'kangaroo', 'monkey', 'crab', 'sheep', 'butterfly', 'umbrella']
-    classes = ['autumn',  'dim',  'grass',  'outdoor',  'rock',  'water']
+    # classes = ['autumn',  'dim',  'grass',  'outdoor',  'rock',  'water']
     concept_set = {}
     # Iterate over all the classes
     for class_name in tqdm(classes):
         attributes_collected = set()
         for _ in range(5):
 
-            PROMPT = prompt_template.format(class_name=class_name) if not attributes_collected else prompt_template.format(class_name=class_name, additional_info=f"Exclude these attributes: {', '.join(attributes_collected)}.")
+            PROMPT = prompt_template.format(class_name=class_name) if not attributes_collected else prompt_template.format(class_name=class_name, additional_info=f"Exclude these descriptions: {', '.join(attributes_collected)}.")
             response = get_attributes(class_name, list(attributes_collected), PROMPT)
             for item in response:
                 item_cleaned = item.strip().lower()
@@ -74,9 +80,8 @@ def main():
 
         concept_set[class_name] = list(attributes_collected)
         
-        with open(f'{data_name}_att_concepts.json', 'w') as f:
+        with open(f'{data_name}_domain_concepts.json', 'w') as f:
             json.dump(concept_set, f, indent=4)
-
 
 def merge_niccopp():
     with open('NICOpp_att_concepts.json', 'r') as f:
@@ -111,9 +116,6 @@ def merge_niccopp():
     with open('concepts/niccopp_concepts_att.txt', 'w') as f:
         f.write('\n'.join(nicoopp_concept_set))
 
-
-    
-
 if __name__ == "__main__":
-    # main()
-    merge_niccopp()
+    main()
+    # merge_niccopp()
