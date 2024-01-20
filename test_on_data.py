@@ -122,7 +122,7 @@ def main(args):
     train_dataset, val_dataset, test_dataset, failure_dataset, class_names = get_dataset(args.dataset_name, train_transform, train_transform, 
                                                                                         data_dir=args.data_dir, clip_transform=clip_transform, 
                                                                                         img_size=args.img_size, return_failure_set=True, 
-                                                                                        sample_by_attributes=args.attributes)
+                                                                                        sample_by_attributes=args.attributes, domain_name=args.domain_name)
     
     class_prompts = [f"This is a photo of a {class_name}" for class_name in class_names]
     
