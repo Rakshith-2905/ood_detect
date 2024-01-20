@@ -64,12 +64,15 @@ def get_save_dir(args):
     projector_name += "_cls_LP" if args.cls_txt_prompts else ""
 
     att_name = ""
-    if args.attributes:
-        att_name = "".join([str(att) for att in args.attributes])
-        att_name = f"att_{att_name}"
-    else:
-        att_name = "att_all"
+    if args.dataset_name == "NICOpp":
+        if args.attributes:
+            att_name = "".join([str(att) for att in args.attributes])
+            att_name = f"att_{att_name}"
+        else:
+            att_name = "att_all"
     
+    if args.dataset_name == 'domainnet' and args.domain_name:
+        att_name = f"{args.domain_name}"
 
     save_dir = os.path.join(args.save_dir, args.dataset_name, 'shift_detection', att_name, projector_name)
     
@@ -266,7 +269,7 @@ def main(args):
     # Create the data loader and wrap them with Fabric
     train_dataset, val_dataset, class_names = get_dataset(args.dataset_name, train_transform, train_transform, 
                                                             data_dir=args.data_dir, clip_transform=clip_transform, 
-                                                            img_size=args.img_size, sample_by_attributes=args.attributes)
+                                                            img_size=args.img_size, sample_by_attributes=args.attributes, domain_name=args.domain_name)
     
     class_prompts = [f"This is a photo of a {class_name}" for class_name in class_names]
     
