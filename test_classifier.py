@@ -81,6 +81,62 @@ def evaluate(val_loader, model, criterion, device, epoch):
 
     return total_loss/total_samples, total_correct/total_samples
 
+def get_features_preds(val_loader, model, device):
+    model.eval()
+    total_correct, total_samples = 0, len(val_loader.dataset)
+    val_features = []
+    val_preds = []
+    val_gt = []
+    # Wrap the val_loader with tqdm for progress bar
+    pbar = tqdm(val_loader, desc=f'Validating epoch:')
+    with torch.no_grad():
+        for data in pbar:
+            if args.dataset_name in subpop_bench.DATASETS:
+                inputs, labels = data[1], data[2]
+            else:
+                inputs, labels = data[0], data[1]
+
+            inputs, labels = inputs.to(device), labels.to(device)
+            outputs, classifier_embeddings = model(inputs, return_features=True)
+            
+            pred = torch.argmax(outputs, dim=-1)
+
+            val_features.append(classifier_embeddings.cpu().numpy())
+            val_preds.append(pred.cpu().numpy())
+            val_gt.append(labels.cpu().numpy())
+
+            _, predicted = outputs.max(1)
+            batch_correct = (predicted == labels).sum().item()
+            total_correct += batch_correct
+            # Set metrics for tqdm
+            pbar.set_postfix({"Epoch Acc": total_correct/total_samples})
+
+    print(f"Validation Accuracy: {total_correct/total_samples:.4f}")
+    val_features = np.concatenate(val_features, axis=0)
+    val_preds = np.concatenate(val_preds, axis=0)
+    val_gt = np.concatenate(val_gt, axis=0)
+    
+    return val_features, val_preds, val_gt
+
+def SVM_classifier(model, val_loader, test_loader, device='cuda'):
+    from sklearn import svm
+    from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, balanced_accuracy_score
+
+
+    val_features, val_preds, val_gt = get_features_preds(val_loader, model, device)
+    test_features, test_preds, test_gt = get_features_preds(test_loader, model, device)
+
+    from models import svm_wrapper
+
+    svm_fitter = svm_wrapper.SVMFitter()
+    svm_fitter.set_preprocess(val_features)
+    cv_scores = svm_fitter.fit(preds=val_preds, ys=val_gt, latents=val_features)
+
+    out_mask, out_decision, metric_dict = svm_fitter.predict(preds=test_preds, ys=test_gt, 
+                                                             latents=test_features, compute_metrics=True)
+
+    print(f"Test Accuracy: {metric_dict['accuracy']:.4f}, Balanced Accuracy: {metric_dict['balanced_accuracy']:.4f}")
+
 def main(args):
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
@@ -128,6 +184,8 @@ def main(args):
         print(f"Using {torch.cuda.device_count()} GPUs")
         model = nn.DataParallel(model)    
     
+    SVM_classifier(model, val_loader, test_loader, device)
+
     val_loss, val_acc = evaluate(test_loader, model, criterion, device, 0)
     print(f"Test Loss: {val_loss:.4f}, Test Accuracy: {val_acc:.4f}")
 
@@ -161,13 +219,12 @@ if __name__ == "__main__":
 """
 Sample command to run:
 python test_classifier.py \
-        --dataset_name cifar100 \
+        --dataset_name cifar10-limited \
         --data_path ./data \
         --image_size 224 \
         --batch_size 512 \
         --seed 42 \
-        --classifier_model resnet50 \
-        --checkpoint_path logs/cifar100/resnet50/classifier/checkpoint_29.pth
-
+        --classifier_model resnet18 \
+        --checkpoint_path logs/cifar10-limited/resnet18/classifier/checkpoint_29.pth
 
 """

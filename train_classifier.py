@@ -156,6 +156,8 @@ def get_dataloaders(dataset_name, domain_name=None,
                                                        selected_classes=selected_classes, retain_orig_ids=True,    
                                                        train_transform=None, test_transform=None, clip_transform=None, 
                                                        subsample_trainset=False, return_dataset=False)
+    else:
+        raise ValueError(f"Dataset {dataset_name} not supported")
     
     return loaders, class_names
 

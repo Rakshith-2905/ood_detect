@@ -564,7 +564,8 @@ class CustomDataLoader:
         )
 
 # Dataloader to return train and val dataloaders along with the class names
-def get_dataloader(dataset_name, data_path, hparams, transforms1=None, train_attr='yes', subsample_type=None, duplicates=None):
+def get_dataloader(dataset_name, data_path, hparams, transforms1=None, train_attr='yes', 
+                   subsample_type=None, duplicates=None):
     dataset_class = get_dataset_class(dataset_name)
     train_dataset = dataset_class(data_path, 'tr', hparams, transforms1, train_attr, subsample_type, duplicates)
     val_dataset = dataset_class(data_path, 'va', hparams, transforms1, train_attr, subsample_type, duplicates)
