@@ -22,9 +22,9 @@ class ImageNetTwoTransforms(ImageFolder):
         wnids_to_class_names = {v[0]: v[-1] for v in IN_CLASS_MAPPING.values()}
         class_names_to_wnids = {v[-1]: v[0] for v in IN_CLASS_MAPPING.values()}
 
-        self.class_names = list(class_name_to_idx.keys())
+        self.class_names = list(wnids_to_class_names.values())
 
-        if data_type == 'imagenet':
+        if data_type == 'imagenet' or data_type == 'imagenet-val':
             self.wnids = all_wnids
         elif data_type == 'imagenet_r':
             self.wnids = imagenet_r_wnids
@@ -53,42 +53,49 @@ def get_imagenet_loaders(batch_size=512, data_dir='./data',
     if data_type == 'imagenet':
         train_data_dir = os.path.join(data_dir, 'imagenet-train', 'train')
         val_data_dir = os.path.join(data_dir, 'imagenet-train', 'val')
+    elif data_type == 'imagenet-val':
+        train_data_dir = os.path.join(data_dir, 'imagenet-train', 'val')
+        val_data_dir = os.path.join(data_dir, 'imagenet-train', 'val')
     else:
         train_data_dir = os.path.join(data_dir, data_type)
         val_data_dir = os.path.join(data_dir, data_type)
 
-    temp_train_dataset = ImageNetTwoTransforms(root=train_data_dir, primary_transform=train_transform, 
-                                               secondary_transform=clip_transform, data_type=data_type)
+    # temp_train_dataset = ImageNetTwoTransforms(root=train_data_dir, split='train',primary_transform=train_transform, 
+    #                                            secondary_transform=clip_transform, data_type=data_type)
 
     if data_type == 'imagenet':
-        test_dataset = ImageNetTwoTransforms(root=val_data_dir, primary_transform=test_transform, 
+        train_dataset = ImageNetTwoTransforms(root=train_data_dir, split='train',primary_transform=train_transform, 
+                                               secondary_transform=clip_transform, data_type=data_type)
+        val_dataset = ImageNetTwoTransforms(root=val_data_dir, split='val',primary_transform=test_transform, 
                                             secondary_transform=clip_transform, data_type=data_type)
-
-        # Split trainset into train, val
-        val_size = int(0.20 * len(temp_train_dataset))
-        train_size = len(temp_train_dataset) - val_size
-        train_dataset, temp_valset = torch.utils.data.random_split(temp_train_dataset, [train_size, val_size], 
-                                                                generator=torch.Generator().manual_seed(42))
-        
-        # random subsample trainset to 20% of original size
-        if subsample_trainset:
-            train_size = int(0.20 * len(train_dataset))
-            train_dataset, _ = torch.utils.data.random_split(train_dataset, [train_size, len(train_dataset)-train_size], 
-                                                            generator=torch.Generator().manual_seed(42))
-
-        # Split the valset into val and failure
-        failure_size = int(0.50 * len(temp_valset))
-        val_size = len(temp_valset) - failure_size
-        val_dataset, failure_dataset = torch.utils.data.random_split(temp_valset, [val_size, failure_size], 
-                                                                    generator=torch.Generator().manual_seed(42))
+        test_dataset = val_dataset
+        failure_dataset = val_dataset
     else:
-        train_dataset = temp_train_dataset
-        val_dataset = temp_train_dataset
-        failure_dataset = temp_train_dataset
-        test_dataset = temp_train_dataset
+        val_dataset = ImageNetTwoTransforms(root=val_data_dir, split='val',primary_transform=test_transform, 
+                                            secondary_transform=clip_transform, data_type=data_type)
+        train_dataset = val_dataset
+        test_dataset = val_dataset
+        failure_dataset = val_dataset
+        # Split trainset into train, val
+        # val_size = int(0.20 * len(temp_train_dataset))
+        # train_size = len(temp_train_dataset) - val_size
+        # train_dataset, temp_valset = torch.utils.data.random_split(temp_train_dataset, [train_size, val_size], 
+        #                                                         generator=torch.Generator().manual_seed(42))
+        
+        # # random subsample trainset to 20% of original size
+        # if subsample_trainset:
+        #     train_size = int(0.20 * len(train_dataset))
+        #     train_dataset, _ = torch.utils.data.random_split(train_dataset, [train_size, len(train_dataset)-train_size], 
+        #                                                     generator=torch.Generator().manual_seed(42))
+
+        # # Split the valset into val and failure
+        # failure_size = int(0.50 * len(temp_valset))
+        # val_size = len(temp_valset) - failure_size
+        # val_dataset, failure_dataset = torch.utils.data.random_split(temp_valset, [val_size, failure_size], 
+        #                                                             generator=torch.Generator().manual_seed(42))
 
     if return_dataset:
-        return train_dataset, val_dataset, test_dataset, failure_dataset, temp_train_dataset.class_names
+        return train_dataset, val_dataset, test_dataset, failure_dataset, train_dataset.class_names
 
     # DataLoader
     train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, num_workers=2)
@@ -102,7 +109,7 @@ def get_imagenet_loaders(batch_size=512, data_dir='./data',
         'failure': failure_loader,
         'test': test_loader
     }
-    return loaders, temp_train_dataset.class_names
+    return loaders, train_dataset.class_names
 
 if __name__ == "__main__":
 

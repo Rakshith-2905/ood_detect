@@ -93,6 +93,7 @@ def train_one_epoch(data_loader, limber,
     total_text_loss = 0
 
     total_limber_acc = 0
+    total_classifier_acc = 0
     pbar = progbar_wrapper(
         data_loader, total=len(data_loader), desc=f"Training Epoch {epoch+1}"
     )
@@ -108,8 +109,10 @@ def train_one_epoch(data_loader, limber,
         image_encodings = limber.encode_images(images_batch)
         text_encodings_class = limber.encode_text(class_prompts, text_encodings_raw)
 
+        classifier_logits = limber.task_model(images_batch)
+
         # Subselect the prompts and text encodings for the current batch
-        batch_prompts = [class_prompts[label] for label in labels]
+        #batch_prompts = [class_prompts[label] for label in labels]
         text_encodings = text_encodings_class[labels]
             
         normalized_proj_embeddings = F.normalize(image_encodings, dim=-1)
@@ -140,10 +143,13 @@ def train_one_epoch(data_loader, limber,
         limber.optimizer_step()
 
         probs_from_limber = F.softmax(logits_per_img_class, dim=-1)
+        probs_from_classifier = F.softmax(classifier_logits,dim=-1)
 
         batch_limber_acc = compute_accuracy(probs_from_limber, labels)
+        batch_classifier_acc = compute_accuracy(probs_from_classifier, labels)
 
         total_limber_acc += batch_limber_acc
+        total_classifier_acc += batch_classifier_acc
 
         batch_loss = loss.item() 
         total_loss += batch_loss
@@ -156,8 +162,9 @@ def train_one_epoch(data_loader, limber,
     total_text_loss = fabric.all_gather(total_text_loss).mean() / len(data_loader)
     
     total_limber_acc = fabric.all_gather(total_limber_acc).mean() / len(data_loader)
+    total_classifier_acc = fabric.all_gather(total_classifier_acc).mean() / len(data_loader)
 
-    return total_loss, total_limber_acc, total_image_loss, total_text_loss
+    return total_loss, total_classifier_acc, total_limber_acc, total_image_loss, total_text_loss
 
 @torch.no_grad()
 def validate(data_loader, limber, 
@@ -169,6 +176,7 @@ def validate(data_loader, limber,
     total_image_loss = 0
     total_text_loss = 0
 
+    total_classifier_acc = 0
     total_limber_acc = 0
     pbar = progbar_wrapper(
         data_loader, total=len(data_loader), desc=f"Validating Epoch {epoch+1}"
@@ -180,11 +188,13 @@ def validate(data_loader, limber,
         images_clip_batch = fabric.to_device(images_clip_batch)
         labels = fabric.to_device(labels)
 
-        image_encodings = limber.encode_images(images_clip_batch)
+        image_encodings = limber.encode_images(images_batch)
         text_encodings_class = limber.encode_text(class_prompts, text_encodings_raw)
 
+        classifier_logits = limber.task_model(images_batch)
+
         # Subselect the prompts and text encodings for the current batch
-        batch_prompts = [class_prompts[label] for label in labels]
+        #batch_prompts = [class_prompts[label] for label in labels]
         text_encodings = text_encodings_class[labels]
             
         normalized_proj_embeddings = F.normalize(image_encodings, dim=-1)
@@ -211,10 +221,13 @@ def validate(data_loader, limber,
         loss = loss_image*args.weight_img_loss + loss_text*args.weight_txt_loss
 
         probs_from_limber = F.softmax(logits_per_img_class, dim=-1)
+        probs_from_classifier = F.softmax(classifier_logits,dim=-1)
 
         batch_limber_acc = compute_accuracy(probs_from_limber, labels)
+        batch_classifier_acc = compute_accuracy(probs_from_classifier, labels)
 
         total_limber_acc += batch_limber_acc
+        total_classifier_acc += batch_classifier_acc
 
         batch_loss = loss.item() 
         total_loss += batch_loss
@@ -227,8 +240,9 @@ def validate(data_loader, limber,
     total_text_loss = fabric.all_gather(total_text_loss).mean() / len(data_loader)
     
     total_limber_acc = fabric.all_gather(total_limber_acc).mean() / len(data_loader)
+    total_classifier_acc = fabric.all_gather(total_classifier_acc).mean() / len(data_loader)
 
-    return total_loss, total_limber_acc, total_image_loss, total_text_loss
+    return total_loss, total_classifier_acc, total_limber_acc, total_image_loss, total_text_loss
 
 def main(args):
     
@@ -261,6 +275,7 @@ def main(args):
                                                     img_size=args.img_size, domain_name=args.domain_name)
     
     class_prompts = [f"This is a photo of a {class_name}" for class_name in class_names]
+    print(len(class_prompts))
     
     fabric.print(f"Using {args.dataset_name} dataset")
 
@@ -319,21 +334,21 @@ def main(args):
     best_val_loss = float("inf")
     for epoch in range(start_epoch, args.num_epochs):
         
-        train_loss, train_limber_acc, train_loss_img, train_loss_txt = train_one_epoch(
+        train_loss, train_classifier_acc, train_limber_acc, train_loss_img, train_loss_txt = train_one_epoch(
                                                                             train_loader, limber, class_prompts,
                                                                             text_encodings, epoch)
         if epoch % args.val_freq == 0:
-            val_loss, val_limber_acc, val_loss_img, val_loss_txt = validate(
+            val_loss, val_classifier_acc, val_limber_acc, val_loss_img, val_loss_txt = validate(
                                                                             val_loader, limber, class_prompts,
                                                                             text_encodings, epoch)
         
         limber.scheduler_step()
             
-        fabric.print(f"Epoch {epoch}/{args.num_epochs}| Train Loss: {train_loss:.4f}, Train limber Accuracy: {train_limber_acc:.4f}, Val Loss: {val_loss:.4f}, Val limber Accuracy: {val_limber_acc:.4f}")
+        fabric.print(f"Epoch {epoch}/{args.num_epochs}| Train Loss: {train_loss:.4f}, Train classifier Accuracy: {train_classifier_acc:.4f}, Train limber Accuracy: {train_limber_acc:.4f}, Val Loss: {val_loss:.4f}, Val classifier Accuracy: {val_classifier_acc:.4f}, Val limber Accuracy: {val_limber_acc:.4f}")
 
-        losses_dict = {"train_loss": train_loss, "train_loss_img": train_loss_img, "train_loss_txt": train_loss_txt,
+        losses_dict = {"train_loss": train_loss, "train_loss_img": train_loss_img, "train_loss_txt": train_loss_txt, "train_classifier_acc": train_classifier_acc,
                         "train_limber_acc": train_limber_acc,
-                        "val_loss": val_loss, "val_loss_img": val_loss_img, "val_loss_txt": val_loss_txt, 
+                        "val_loss": val_loss, "val_loss_img": val_loss_img, "val_loss_txt": val_loss_txt, "val_classifier_acc": val_classifier_acc, 
                         "val_limber_acc": val_limber_acc}
 
         fabric.log_dict(losses_dict, step=epoch)

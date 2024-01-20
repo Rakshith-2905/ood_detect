@@ -471,7 +471,7 @@ class LIMBER(nn.Module):
         for param in self.task_model.parameters():
             param.requires_grad = False
 
-        print("\n\n Constructing PLUMBER \n")
+        print("\n\n Constructing LIMBER \n")
 
         projection_dim = clip_model.visual.output_dim
         # Initialize image projector
@@ -504,7 +504,7 @@ class LIMBER(nn.Module):
         if task_dims != projection_dim and img_projection != True:
             raise ValueError("Task model dimensions must be equal to projection dimensions if img_projection is False")
 
-        print("\nPLUMBER Constructed \n")
+        print("\nLIMBER Constructed \n")
 
         # Initialize dictionary to store activations
         self.activations = {}
