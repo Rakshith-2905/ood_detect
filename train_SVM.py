@@ -28,7 +28,10 @@ import seaborn as sns
 import json
 
 from sklearn import svm
-from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, roc_auc_score, matthews_corrcoef, confusion_matrix, roc_curve, auc, precision_recall_curve, average_precision_score
+from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, roc_auc_score, confusion_matrix, roc_curve, auc, precision_recall_curve, average_precision_score, balanced_accuracy_score, classification_report
+from sklearn.preprocessing import StandardScaler
+from collections import Counter
+from sklearn.metrics.pairwise import cosine_similarity
 
 from train_task_distillation import build_classifier, get_CLIP_text_encodings, get_dataset_from_file, get_dataset
 from models.projector import ProjectionHead
@@ -50,8 +53,11 @@ def get_save_dir(args):
     save_dir = os.path.dirname(args.step1_checkpoint_path)
     save_dir = os.path.join(save_dir, 'failure_detector')
 
-    if args.dataset_name in ['cifar10-c', 'cifar100-c']:
-        save_dir = os.path.join(save_dir, f'{args.dataset_name}_{args.domain_name}_{args.severity}')
+    if args.dataset_name in ['cifar10-c', 'cifar100-c', 'imagenet-c']:
+        severity = args.severity if args.severity else ''
+        save_dir = os.path.join(save_dir, f'{args.dataset_name}_{args.domain_name}_{severity}')
+    elif args.dataset_name == 'domainnet':
+        save_dir = os.path.join(save_dir, f'{args.domain_name}')
 
     return save_dir
 
@@ -338,10 +344,21 @@ def compute_and_plot_metrics(metric_dict, log_dir):
         f.write(metrics)
         f.write("\n")
 
+def get_caption_scores_(plumber, captions, reference_caption, svm_fitter):
+    caption_latent = plumber.encode_text_batch(captions)
+    reference_latent = plumber.encode_text_batch([reference_caption])[0]
+    latent = caption_latent - reference_latent
+
+    out_mask = svm_fitter.predict(latent)
+    decisions = svm_fitter.decision_function(latent)
+
+    return decisions, caption_latent, out_mask
+
 failure_caption_data_name_map = {
     'cifar10': 'CIFAR',
+    'cifar10-c': 'CIFAR',
     'cifar10-limited': 'CIFAR',
-    'celeba': 'CELEBA',
+    'CelebA': 'CELEBA',
     'cifar100': 'CIFAR100',
     'imagenet': 'IMAGENET',
 }
@@ -352,26 +369,135 @@ def caption_failure_modes(args, svm_fitter, plumber):
     clip_model, clip_transform = clip.load(args.clip_model_name)
 
     train_dataset, val_dataset, test_dataset, failure_dataset, class_names = get_dataset(args.dataset_name, None, None, 
-                                                                data_dir=args.data_dir, clip_transform=clip_transform, img_size=args.img_size, return_failure_set=True)
+                                                                data_dir=args.data_dir, clip_transform=clip_transform, 
+                                                                img_size=args.img_size, domain_name=args.domain_name, severity=args.severity,
+                                                                return_failure_set=True)
+    
+
     print(f"Using {args.dataset_name} dataset")
 
-    selected_captions = []
+    captions_set_all = []
+    if args.dataset_name == 'CelebA':
+        class_names = ["person", "person"]
+        captions_set_all.extend(captions[class_names[0]]['all'])
+    else:
+        for i in range(len(class_names)):
+            captions_set_all.extend(captions[class_names[i]]['all'])
+
+        
+    selected_captions = []    
+    topk_caption_decisions_cls = {}
+
     for target_c in range(len(class_names)):
         target_c_name = class_names[target_c]
-        caption_set = captions[target_c_name]['all']
-        reference = captions['reference'][target_c]
-        decisions, _ = svm_wrapper.get_caption_scores(plumber=plumber,
-                                                      captions=caption_set,
-                                                      reference_caption=reference,
-                                                      svm_fitter=svm_fitter,
-                                                      target_c=target_c)
+        caption_set = captions[target_c_name]['all'] # All captions noun adjective prepositions for the target class
+        reference = captions['reference'][target_c] # Class prompts for the target class
+        # decisions, _, mask = svm_wrapper.get_caption_scores(plumber=plumber,
+        #                                               captions=caption_set,
+        #                                               reference_caption=reference,
+        #                                               svm_fitter=svm_fitter,
+        #                                               target_c=target_c)
+        
+        decisions, _, mask = get_caption_scores_(plumber, caption_set, reference, svm_fitter)
+        
+        # Sort the captions based on the decisions
+        sorted_indices = np.argsort(decisions)
+        sorted_decisions = decisions[sorted_indices]
+        sorted_captions = np.asarray(caption_set)[sorted_indices]
+        
+        sorted_captions = sorted_captions.tolist()
+        sorted_decisions = sorted_decisions.tolist()
+
+        print(f"Number of unique decisions: {np.unique(mask)}")
+        topk_caption_decisions_cls[target_c] = {
+            'Failure': {
+                'captions': sorted_captions[:10],
+                'decisions': sorted_decisions[:10]
+            },
+            'Success': {
+                'captions': sorted_captions[-10:],
+                'decisions': sorted_decisions[-10:]
+            }
+        }
+
         selected_captions.append((
             caption_set[np.argmin(decisions)],
-            caption_set[np.argmax(decisions)], decisions))
+            caption_set[np.argmax(decisions)], np.min(decisions), np.max(decisions)))
     
-    print(f"Selected captions for {args.dataset_name} dataset")
-    print(selected_captions)
-    assert False
+    # Save the topk_caption_decisions_cls captions
+    with open(os.path.join(args.save_dir, f'{args.svm_features}_topk_caption_decisions_single_svm.json'), 'w') as f:
+        json.dump(topk_caption_decisions_cls, f)
+    print(topk_caption_decisions_cls)
+    print(f"Selected captions: {selected_captions}")
+
+def learn_svm(val_features, val_labels, val_preds, test_features, test_labels, test_preds, args):
+
+    # Number of unique values in val_preds
+    print(f"Unique values in val_preds: {np.unique(val_preds)}")
+
+    # Compare val_preds and val_gt and get the indices where they are equal
+    val_correct = (val_preds == val_labels).astype(np.int)
+    test_correct = (test_preds == test_labels).astype(np.int)
+
+    print("Number of validation samples: ", len(val_correct))
+    print("Number of test samples: ", len(test_correct))
+
+    # Scale the features
+    scaler = StandardScaler()
+    scaler.fit(val_features)
+    val_features = scaler.transform(val_features)
+    test_features = scaler.transform(test_features)
+
+    clf = svm.SVC(kernel='linear', class_weight='balanced')
+    clf.fit(val_features, val_correct)
+
+    test_correct_preds = clf.predict(test_features)
+
+    test_accuracy = accuracy_score(test_correct,test_correct_preds)
+    test_recall = recall_score(test_correct, test_correct_preds)
+    test_precision = precision_score(test_correct, test_correct_preds)
+    test_f1 = f1_score(test_correct, test_correct_preds)
+    
+    # Failure estimation report (class 1 represents correct prediction of task model)
+    class_report = classification_report(test_correct, test_correct_preds, output_dict=True)
+
+    cm = confusion_matrix(test_correct, test_correct_preds)
+    class_level_acc = cm.diagonal()/cm.sum(axis=1)
+
+    estimated_accuracy = np.sum(test_correct_preds)/len(test_correct_preds) # Estimated accuracy from SVM for correct prediction
+    task_model_accuracy = np.sum(test_correct)/len(test_correct) # Actuall prediction accuracy
+    estimation_gap = np.abs(task_model_accuracy-estimated_accuracy)
+
+    print(len(test_correct_preds), len(test_correct))
+    out_metrics = {
+        'gt_labels': test_labels,
+        'task_pred': test_preds,
+        'correct_svm_pred': test_correct_preds,
+        'accu_success_pred': class_level_acc[1],
+        'accu_failure_pred': class_level_acc[0],
+        'confusion_matrix': cm,
+        'estimation_gap': estimation_gap,
+        'class_report': class_report
+    }
+
+    # Convert all NumPy arrays to lists
+    for key, value in out_metrics.items():
+        if isinstance(value, np.ndarray):
+            out_metrics[key] = value.tolist()
+
+    # Save the JSON
+    with open(os.path.join(args.save_dir, f'{args.svm_features}_metrics_single_svm.json'), 'w') as f:
+        json.dump(out_metrics, f)
+
+    # Print and log metrics
+    metrics = f'{args.svm_features}\tAccuracy: {test_accuracy*100:.2f}%, Precision: {test_precision*100:.2f}%, Recall: {test_recall*100:.2f}%, F1 Score: {test_f1*100:.2f}%'
+    
+    print(metrics, "\n\n")
+    with open(os.path.join(args.save_dir, 'single_svm_metrics.txt'), 'a') as f:
+        f.write(metrics)
+        f.write("\n")
+    
+    return clf
 
 def main(args):
     
@@ -398,17 +524,17 @@ def main(args):
     test_labels = np.asarray(features_pred_dict['test'][1]['gt_labels'])
     test_preds = np.asarray(features_pred_dict['test'][1]['classifier_preds'])
 
-    # Number of unique values in val_preds
-    print(f"Unique values in val_preds: {np.unique(val_preds)}")
+    svm_fitter = learn_svm(val_features, val_labels, val_preds, test_features, test_labels, test_preds, args)
 
-    svm_fitter = svm_wrapper.SVMFitter()
-    svm_fitter.set_preprocess(train_features)
-    cv_scores = svm_fitter.fit(preds=val_preds, ys=val_labels, latents=val_features)
+    # # Class specific SVM
+    # svm_fitter = svm_wrapper.SVMFitter()
+    # svm_fitter.set_preprocess(val_features)
+    # cv_scores = svm_fitter.fit(preds=val_preds, ys=val_labels, latents=val_features)
 
-    out_mask, out_decision, metric_dict = svm_fitter.predict(preds=test_preds, ys=test_labels, latents=test_features, compute_metrics=True)
+    # out_mask, out_decision, metric_dict = svm_fitter.predict(preds=test_preds, ys=test_labels, latents=test_features, compute_metrics=True)
 
     ## Compute and plot metrics
-    compute_and_plot_metrics(metric_dict, args.save_dir)
+    # compute_and_plot_metrics(metric_dict, args.save_dir)
 
     # plumber = PLUMBER(args.clip_model_name, args.num_classes, 
     #                   img_projection=args.img_projection, txt_projection=args.txt_projection, 
@@ -420,17 +546,6 @@ def main(args):
 
     # caption_failure_modes(args, svm_fitter, plumber)
 
-    # new_metric_dict = {
-    #     'test_acc': metric_dict['accuracy'],
-    #     'balanced_accuracy': metric_dict['balanced_accuracy'],
-    #     'indiv_accs': metric_dict['indiv_accs'],
-    # }
-
-
-    # # Save the results as a json file
-    # os.makedirs(os.path.join(args.save_dir, 'results'), exist_ok=True)
-    # with open(os.path.join(args.save_dir, 'results', 'results.json'), 'w') as f:
-    #     json.dump(metric_dict, f)
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Train ResNet on WILDS Dataset')
@@ -438,7 +553,7 @@ if __name__ == "__main__":
     parser.add_argument('--data_dir', type=str, default='/usr/workspace/KDML/DomainNet', help='Path to the data directory')
     parser.add_argument('--domain_name', type=str, default='clipart', help='Domain to use for training')
     parser.add_argument('--dataset_name', type=str, default='imagenet', help='Name of the dataset')
-    parser.add_argument('--severity', type=int, default=3, help='Severity of the corruption')
+    parser.add_argument('--severity', type=int, help='Severity of the corruption')
     parser.add_argument('--num_classes', type=int, default=345, help='Number of classes in the dataset')
     parser.add_argument('--train_on_testset', action='store_true', help='Whether to train on the test set or not')
     parser.add_argument('--use_saved_features',action = 'store_true', help='Whether to use saved features or not')
@@ -498,19 +613,19 @@ if __name__ == "__main__":
     main(args)
 
 '''
-python temp_svm.py \
+python train_SVM.py \
     --data_dir "./data/" \
     --domain_name 'real' \
     --dataset_name "CelebA" \
     --train_on_testset \
-    --num_classes 2 \
+    --num_classes 10 \
     --batch_size 256 \
     --seed 42 \
     --img_size 75 \
-    --img_projection --txt_projection \
+    --img_projection \
     --classifier_name "resnet18" \
     --classifier_checkpoint_path "logs/CelebA/resnet18/classifier/checkpoint_29.pth" \
-    --step1_checkpoint_path "logs/CelebA/resnet18/plumber_img_text_proj/_clsEpoch_29_bs_128_lr_0.1_teT_2.0_sT_1.0_imgweight_1.0_txtweight_1.0_is_mlp_False/step_1/best_projector_weights.pth" \
+    --step1_checkpoint_path "logs/CelebA/resnet18/plumber_img_proj/_clsEpoch_29_bs_128_lr_0.1_teT_2.0_sT_1.0_imgweight_1.0_txtweight_1.0_is_mlp_False/step_1/best_projector_weights.pth" \
     --clip_model_name 'ViT-B/32' \
     --prompt_path "data/CelebA/CelebA_CLIP_ViT-B_32_text_embeddings.pth" \
     --n_promt_ctx 16 \
@@ -526,5 +641,7 @@ python temp_svm.py \
     --weight_img_loss 1 \
     --weight_txt_loss 1 \
     --num_gpus 1 \
-    --num_nodes 1
+    --num_nodes 1 \
+    --svm_features 'clip_features'
+
 '''
