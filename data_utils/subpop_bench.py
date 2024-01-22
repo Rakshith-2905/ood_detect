@@ -160,7 +160,8 @@ class CMNIST(SubpopDataset):
     INPUT_SHAPE = (3, 224, 224,)
     data_type = "images"
 
-    def __init__(self, data_path, split, hparams, train_attr='yes', subsample_type=None, duplicates=None):
+    def __init__(self, data_path, split, hparams, transform1, train_attr='yes', subsample_type=None, duplicates=None):
+        self.transform1 = transform1
         root = Path(data_path)/'cmnist'
         mnist = datasets.MNIST(root, train=True)
         X, y = mnist.data, mnist.targets
@@ -591,13 +592,45 @@ def get_dataloader(dataset_name, data_path, hparams, transforms1=None, train_att
     class_names = train_dataset.class_names    
     return loaders, class_names
 
+
+def plot_images(loader, title, n_rows=2, n_cols=5, mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]):
+    """
+    Extracts the first batch of images from the given data loader and plots them in a grid with their labels.
+    Adjusts the image contrast if necessary.
+    """
+    # Get the first batch
+    _, images, labels, _ = next(iter(loader))
+
+    fig, axes = plt.subplots(n_rows, n_cols, figsize=(15, 6))
+    axes = axes.flatten()
+
+    # Function to denormalize the image
+    def denormalize(image):
+        image = image.numpy().transpose(1, 2, 0)
+        image = std * image + mean
+        image = np.clip(image, 0, 1)
+        return image
+
+    for i in range(n_rows * n_cols):
+        image = denormalize(images[i])
+        label = labels[i]
+
+        axes[i].imshow(image)
+        axes[i].set_title(f"Label: {label}", fontsize=10)
+        axes[i].axis('off')
+
+    plt.suptitle(title)
+    plt.tight_layout(rect=[0, 0.03, 1, 0.95])
+    save_path = os.path.join(f"{title}.png")
+    plt.savefig(save_path)
+
 if __name__ == "__main__":
 
     import __main__
 
     dataset_name = vars(__main__)
 
-    data_choice = "MetaShift"
+    data_choice = "CMNIST"
     data_dir = "./data"
     hparams = {
         'batch_size': 256,
@@ -615,37 +648,9 @@ if __name__ == "__main__":
         print(x.shape, y.shape, a.shape)
         if i == 10:
             break
-    assert False
-    if data_choice in datasets:
-        train_dataset = datasets[data_choice](data_dir, 'tr', hparams, train_attr=train_attr)
-        val_dataset = datasets[data_choice](data_dir, 'va', hparams)
-        test_dataset = datasets[data_choice](data_dir, 'te', hparams)
-    else:
-        raise NotImplementedError
-    # Print the size of train, val and test datasets
-    print(f"Length of Train: {len(train_dataset)}")
-    print(f"Length of Val: {len(val_dataset)}")
-    print(f"Length of Test: {len(test_dataset)}")
-
-
-    if hparams['group_balanced']:
-        # if attribute not available, groups degenerate to classes
-        train_weights = np.asarray(train_dataset.weights_g)
-        train_weights /= np.sum(train_weights)
-    else:
-        train_weights = None
-    custom_loader = CustomDataLoader(train_dataset, train_weights, hparams['batch_size'], num_workers)
-    train_loader = custom_loader.get_loader()
+            
+    plot_images(loader['train'], 'train')
+    lot_images(loader['val'], 'val')
+    lot_images(loader['test'], 'test')
+    lot_images(loader['failure'], 'failure')
     
-    # train_loader = InfiniteDataLoader(
-    #     dataset=train_dataset,
-    #     weights=train_weights,
-    #     batch_size=hparams['batch_size'],
-    #     num_workers=num_workers
-    # )
-    # eval_loader = FastDataLoader(
-    #     dataset=val_dataset,
-    #     batch_size=max(32, hparams['batch_size'] * 2),
-    #     num_workers=num_workers)
-        
-    print("Done")

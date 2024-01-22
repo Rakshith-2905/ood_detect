@@ -86,8 +86,9 @@ def get_data_from_saved_files(save_dir, batch_size=32, train_shuffle=True, retur
 
 def get_domainnet_loaders(domain_name, batch_size=512, data_dir='data/', 
                           train_transform=None, test_transform=None, clip_transform=None, 
-                          subsample_trainset=False, return_dataset=False):
-    
+                          subsample_trainset=False, return_dataset=False, use_real=True):
+    # NOTE: if use_real=True, then train, val, failure set will be from real domain and test set will be from domain_name
+
     if train_transform is None:
         train_transform = transforms.Compose([
                 transforms.RandomResizedCrop(224),
@@ -106,8 +107,11 @@ def get_domainnet_loaders(domain_name, batch_size=512, data_dir='data/',
 
             ])
     
+    train_domain_name = domain_name
+    if use_real:
+        train_domain_name = 'real'
     data_dir = os.path.join(data_dir, 'domainnet_v1.0')
-    temp_train_dataset = DomainNetDataset(root_dir=data_dir, domain=domain_name,
+    temp_train_dataset = DomainNetDataset(root_dir=data_dir, domain=train_domain_name,
                                     split='train', transform=train_transform, transform2=clip_transform)
     test_dataset= DomainNetDataset(root_dir=data_dir, domain=domain_name, 
                                     split='test', transform=test_transform, transform2=clip_transform)
@@ -153,7 +157,7 @@ if __name__=="__main__":
     train_transform = None
     test_transform = None
     clip_transform = None
-    datasets = get_domainnet_loaders('real', batch_size=4, data_dir='data', 
+    datasets = get_domainnet_loaders('clipart', batch_size=4, data_dir='data', 
                             train_transform=train_transform, test_transform=test_transform, clip_transform=clip_transform,
                             subsample_trainset=False, return_dataset=True)
 

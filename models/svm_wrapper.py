@@ -93,8 +93,8 @@ def get_caption_scores(plumber, captions, reference_caption, svm_fitter, target_
     reference_latent = plumber.encode_text_batch([reference_caption])[0]
     latent = caption_latent - reference_latent
     ys = (torch.ones(len(latent))*target_c).long()
-    _, decisions = svm_fitter.predict(ys=ys, latents=latent, compute_metrics=False)
-    return decisions, caption_latent
+    out_mask, decisions = svm_fitter.predict(ys=ys, latents=latent, compute_metrics=False)
+    return decisions, caption_latent, out_mask
     
 def inv_norm(ds_mean, ds_std):
     if ds_std is None:

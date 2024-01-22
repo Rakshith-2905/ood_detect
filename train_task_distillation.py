@@ -64,7 +64,7 @@ def get_dataset(data_name, train_transforms, test_transforms, clip_transform, da
     elif data_name == 'domainnet':
         train_dataset, val_dataset, test_dataset, failure_dataset, class_names = get_domainnet_loaders(domain_name=domain_name, data_dir=data_dir, 
                                                                         train_transform=None, test_transform=None, clip_transform=clip_transform,
-                                                                        subsample_trainset=False, return_dataset=True)
+                                                                        subsample_trainset=False, return_dataset=True, use_real=True)
 
     elif data_name == 'cifar10':
         train_dataset, val_dataset, test_dataset, failure_dataset, class_names = get_CIFAR10_dataloader(data_dir='./data',    
@@ -86,7 +86,7 @@ def get_dataset(data_name, train_transforms, test_transforms, clip_transform, da
         
         train_dataset, val_dataset, test_dataset, failure_dataset, class_names = get_CIFAR100_dataloader(data_dir='./data',  
                                                                     selected_classes=None, retain_orig_ids=False , 
-                                                                    train_transform=train_transforms, test_transform=test_transforms, clip_transform=clip_transform,
+                                                                    train_transform=None, test_transform=None, clip_transform=clip_transform,
                                                                     subsample_trainset=False, return_dataset=True)
     
     elif data_name == 'cifar100-90cls':

@@ -110,6 +110,13 @@ def get_CIFAR100_dataloader(batch_size=512, data_dir='./data', selected_classes=
                 transforms.Normalize(mean=[x / 255.0 for x in [125.3, 123.0, 113.9]],
                                              std=[x / 255.0 for x in [63.0, 62.1, 66.7]]),
             ])
+        
+    # If CLIP transform is provided add PILImage conversion to the start
+    if clip_transform is not None:
+        clip_transform = transforms.Compose([
+            transforms.ToPILImage(),  # Convert NumPy images to PIL Image format
+            clip_transform
+        ])
 
     temp_train_dataset = CIFAR100TwoTransforms(root=data_dir, train=True, transform1=train_transform, transform2=clip_transform, 
                                               selected_classes=selected_classes, retain_orig_ids=retain_orig_ids)
