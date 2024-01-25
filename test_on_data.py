@@ -82,7 +82,7 @@ def validate(data_loader, plumber,
         images_clip_batch = fabric.to_device(images_clip_batch)
         labels = fabric.to_device(labels)
 
-        logits = plumber(images_batch, class_prompts)
+        logits = plumber(images_clip_batch, class_prompts)
 
         probs_from_plumber = F.softmax(logits, dim=-1)
 
@@ -104,7 +104,11 @@ def main(args):
                       img_prompting=args.img_prompting, cls_txt_prompts=args.cls_txt_prompts, dataset_txt_prompt=args.dataset_txt_prompt, 
                       is_mlp=args.is_mlp, device=fabric.device)
     
-    plumber.load_checkpoint(args.checkpoint_path)
+    if args.checkpoint_path:
+        if not os.path.exists(args.checkpoint_path):
+            print(f"Checkpoint path {args.checkpoint_path} does not exist")
+    else:
+        plumber.load_checkpoint(args.checkpoint_path)
     
     plumber = fabric.to_device(plumber)
     
@@ -123,7 +127,7 @@ def main(args):
                                                                                         data_dir=args.data_dir, clip_transform=clip_transform, 
                                                                                         img_size=args.img_size, return_failure_set=True, 
                                                                                         sample_by_attributes=args.attributes, domain_name=args.domain_name)
-    
+
     class_prompts = [f"This is a photo of a {class_name}" for class_name in class_names]
     
     fabric.print(f"Using {args.dataset_name} dataset")
@@ -160,8 +164,9 @@ def main(args):
     fabric.print(output_message)
 
     if fabric.is_global_zero:
+        print(f"Writing results to {os.path.join(args.save_dir, f'{args.dataset_name}results.csv')}")
         # Save the results to a csv file in the save directory
-        with open(os.path.join(args.save_dir, 'results.csv'), 'w') as f:
+        with open(os.path.join(args.save_dir, f'{args.dataset_name}results.csv'), 'w') as f:
             writer = csv.writer(f)
             writer.writerow(['Val Acc', 'Test Acc'])
             writer.writerow([val_plumber_acc.item(), test_plumber_acc.item()])
@@ -185,7 +190,7 @@ if __name__ == "__main__":
     parser.add_argument('--img_prompting', action='store_true', help='Whether to use image prompting or not')
     parser.add_argument('--checkpoint_path', type=str, help='Path to checkpoint to load the step1 model from')
 
-    parser.add_argument('--classifier_name', required=True,  help='Name of the classifier to use sam_vit_h, mae_vit_large_patch16, dino_vits16, resnet50, resnet50_adv_l2_0.1, resnet50_adv_l2_0.5, resnet50x1_bitm, resnetv2_101x1_bit.goog_in21k, deeplabv3_resnet50, deeplabv3_resnet101, fcn_resnet50, fcn_resnet101')
+    parser.add_argument('--classifier_name',  help='Name of the classifier to use sam_vit_h, mae_vit_large_patch16, dino_vits16, resnet50, resnet50_adv_l2_0.1, resnet50_adv_l2_0.5, resnet50x1_bitm, resnetv2_101x1_bit.goog_in21k, deeplabv3_resnet50, deeplabv3_resnet101, fcn_resnet50, fcn_resnet101')
     parser.add_argument('--classifier_checkpoint_path', type=str, help='Path to checkpoint to load the classifier from')
     parser.add_argument('--use_imagenet_pretrained', action='store_true', help='Whether to use imagenet pretrained weights or not')
     parser.add_argument('--clip_model_name', default='ViT-B/32', help='Name of the CLIP model to use.')
@@ -230,9 +235,9 @@ if __name__ == "__main__":
     
     print(f"\nResults will be saved to {args.save_dir}")
     
-    with open(os.path.join(args.save_dir, 'args.txt'), 'w') as f:
-        for arg, value in vars(args).items():
-            f.write(f"{arg}: {value}\n")
+    # with open(os.path.join(args.save_dir, 'args.txt'), 'w') as f:
+    #     for arg, value in vars(args).items():
+    #         f.write(f"{arg}: {value}\n")
 
     tb_logger = TensorBoardLogger(args.save_dir)
     csv_logger = CSVLogger(args.save_dir, flush_logs_every_n_steps=1)

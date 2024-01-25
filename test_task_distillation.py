@@ -18,7 +18,7 @@ import torchvision.datasets as dset
 from torch.utils.data import Dataset, DataLoader, TensorDataset, ConcatDataset
 from torch.utils.data.dataset import Subset
 
-from torchmetrics.classification import Accuracy
+from torchmetrics.classification import Accuracy, MulticlassPrecision, MulticlassRecall, MulticlassCalibrationError
 from torch.optim.lr_scheduler import CosineAnnealingLR
 import lightning as L
 from lightning.fabric import Fabric, seed_everything
@@ -35,6 +35,7 @@ from tqdm import tqdm
 import numpy as np
 import random
 import pickle
+import json
 
 from data_utils.domainnet_data import DomainNetDataset, get_data_from_saved_files
 
@@ -45,6 +46,7 @@ from utils_proj import SimpleDINOLoss, compute_accuracy, compute_similarities, p
 from models.resnet_cifar import ResNet18
 from train_task_distillation import build_classifier, get_dataset_from_file, get_CLIP_text_encodings, get_dataset
 from models.prompted_CLIP import PromptedCLIPTextEncoder, PromptedCLIPImageEncoder
+
 
 
 def get_save_dir(args):
@@ -68,7 +70,7 @@ def progbar_wrapper(iterable, total, **kwargs):
 @torch.no_grad()
 def validate(data_loader, clip_model, classifier,
                     img_projector, text_projector, text_encodings_raw, class_prompts,
-                    clip_prompted_txt_enc, clip_prompted_img_enc, criterion, epoch):
+                    clip_prompted_txt_enc, clip_prompted_img_enc, criterion, epoch, metrics_computer):
 
     clip_model.eval()
     classifier.eval()
@@ -87,6 +89,10 @@ def validate(data_loader, clip_model, classifier,
 
     total_base_model_acc = 0
     total_plumber_acc = 0
+
+    all_probs_from_classifier = []
+    all_probs_from_proj = []
+    all_labels = []
     pbar = progbar_wrapper(
         data_loader, total=len(data_loader), desc=f"Validating Epoch {epoch+1}"
     )
@@ -155,6 +161,10 @@ def validate(data_loader, clip_model, classifier,
         total_image_loss += loss_image.item()
         total_text_loss += loss_text.item()
 
+        all_probs_from_classifier.append(probs_from_classifier)
+        all_probs_from_proj.append(probs_from_proj)
+        all_labels.append(labels)
+
         # pbar.set_postfix({"Batch Loss": batch_loss, "Base model Acc": batch_base_model_acc, "CLIP Acc": batch_plumber_acc})
     
     total_loss = fabric.all_gather(total_loss).mean() / len(data_loader)
@@ -164,7 +174,22 @@ def validate(data_loader, clip_model, classifier,
     total_base_model_acc = fabric.all_gather(total_base_model_acc).mean() / len(data_loader)
     total_plumber_acc = fabric.all_gather(total_plumber_acc).mean() / len(data_loader)
 
-    return total_loss, total_base_model_acc, total_plumber_acc, total_image_loss, total_text_loss
+    all_probs_from_classifier = torch.cat(all_probs_from_classifier, dim=0)
+    all_probs_from_proj = torch.cat(all_probs_from_proj, dim=0)
+    all_labels = torch.cat(all_labels, dim=0)
+
+    metrics = {}
+    metrics['base_model_acc'] = total_base_model_acc.item()
+    metrics['plumber_acc'] = total_plumber_acc.item()
+    # Expected Calibration Error
+    metrics['base_model_ece'] = metrics_computer['ece'](all_probs_from_classifier.detach().cpu(), all_labels.detach().cpu()).item()
+    metrics['plumber_ece'] = metrics_computer['ece'](all_probs_from_proj, all_labels).item()
+    metrics['base_model_precision'] = (metrics_computer['precision'](all_probs_from_classifier.detach().cpu(), all_labels.detach().cpu())).item()
+    metrics['plumber_precision'] = (metrics_computer['precision'](all_probs_from_proj.detach().cpu(), all_labels.detach().cpu())).item()
+    metrics['base_model_recall'] = (metrics_computer['recall'](all_probs_from_classifier.detach().cpu(), all_labels.detach().cpu())).item()
+    metrics['plumber_recall'] = (metrics_computer['recall'](all_probs_from_proj.detach().cpu(), all_labels.detach().cpu())).item()
+
+    return total_loss, total_base_model_acc, total_plumber_acc, total_image_loss, total_text_loss, metrics
  
 @torch.no_grad()
 def validate_feat(data_loader, clip_model, classifier,
@@ -372,22 +397,32 @@ def main(args):
     # Loss function
     criterion = SimpleDINOLoss(student_temp=args.student_temp, teacher_temp=args.teacher_temp)
 
+    ece = MulticlassCalibrationError(num_classes=args.num_classes, n_bins=15, norm='l1')
+    precision = MulticlassPrecision(num_classes=args.num_classes, average='macro')
+    recall = MulticlassRecall(num_classes=args.num_classes, average='macro')
+
+    metrics_computer = {
+        "ece": ece,
+        "precision": precision,
+        "recall": recall
+    }
+
     if not args.use_saved_features:
         clip_model = fabric.to_device(clip_model)
         classifier = fabric.to_device(classifier)
     
-        val_loss, val_base_acc, val_plumber_acc, val_loss_img, val_loss_txt = validate(
+        val_loss, val_base_acc, val_plumber_acc, val_loss_img, val_loss_txt, val_metrics = validate(
                                                                     val_loader, clip_model, classifier,
                                                                     img_projector, text_projector,
                                                                     text_encodings, class_prompts,
                                                                     clip_prompted_txt_enc, clip_prompted_img_enc,
-                                                                    criterion, 0)
-        test_loss, test_base_acc, test_plumber_acc, test_loss_img, test_loss_txt = validate(
+                                                                    criterion, 0, metrics_computer)
+        test_loss, test_base_acc, test_plumber_acc, test_loss_img, test_loss_txt, test_metrics = validate(
                                                                     test_loader, clip_model, classifier,
                                                                     img_projector, text_projector,
                                                                     text_encodings, class_prompts,
                                                                     clip_prompted_txt_enc, clip_prompted_img_enc,
-                                                                    criterion, 0)
+                                                                    criterion, 0, metrics_computer)
     else:
 
         val_loss, val_base_acc, val_plumber_acc, val_loss_img, val_loss_txt = validate_feat( clip_model, classifier,
@@ -410,6 +445,17 @@ def main(args):
                         'test_base_acc': test_base_acc.item(), 'test_plumber_acc': test_plumber_acc.item()}
 
         if args.dataset_name in ['cifar10-c', 'cifar100-c']:
+            # Save the test_metrics to the same json file, add the corruption and severity to the dictionary
+            test_metrics['corruption'] = args.domain_name
+            test_metrics['severity'] = args.severity
+
+            # Append to a json file
+            save_path = os.path.join(args.save_dir, f"test_task_distillation_corruption.json")
+            with open(save_path, 'a') as f:
+                json.dump(test_metrics, f)
+                f.write('\n')
+            
+
             save_path = os.path.join(args.save_dir, f"test_task_distillation_corruption.txt")
             with open(save_path, 'a') as f:
                 f.write(output_message)
@@ -422,6 +468,12 @@ def main(args):
             w = csv.writer(f)
             w.writerow(output_dict.keys())
             w.writerow(output_dict.values())
+        
+        # Save the test_metrics to a json file
+        save_path = os.path.join(args.save_dir, f"test_task_distillation.json")
+        with open(save_path, 'w') as f:
+            json.dump(test_metrics, f)
+
 
 
 if __name__ == "__main__":
