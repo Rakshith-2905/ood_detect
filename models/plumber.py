@@ -416,8 +416,6 @@ class PLUMBER(nn.Module):
         with torch.no_grad():
             with autocast():
                 for i in tqdm(range(0, len(text_list), batch_size)):
-                    print(text_list[i:i+batch_size])
-                    assert False
                     text_encodings_raw = self.encode_text(text_list[i:i+batch_size])
                     text_encodings.append(text_encodings_raw.float().cpu())
         text_encodings = torch.cat(text_encodings)

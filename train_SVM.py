@@ -448,8 +448,16 @@ def learn_svm(val_features, val_labels, val_preds, test_features, test_labels, t
     val_features = scaler.transform(val_features)
     test_features = scaler.transform(test_features)
 
-    clf = svm.SVC(kernel='linear', class_weight='balanced')
-    clf.fit(val_features, val_correct)
+    # Fit SVM is not saved
+    if not os.path.exists(os.path.join(args.save_dir, f'{args.svm_features}_single_svm_model.pkl')):
+        clf = svm.SVC(kernel='linear', class_weight='balanced')
+        clf.fit(val_features, val_correct)
+    else:
+        with open(os.path.join(args.save_dir, f'{args.svm_features}_single_svm_model.pkl'), 'rb') as f:
+            clf = pickle.load(f)
+
+    # clf = svm.SVC(kernel='linear', class_weight='balanced')
+    # clf.fit(val_features, val_correct)
 
     test_correct_preds = clf.predict(test_features)
 
@@ -525,6 +533,10 @@ def main(args):
     test_preds = np.asarray(features_pred_dict['test'][1]['classifier_preds'])
 
     svm_fitter = learn_svm(val_features, val_labels, val_preds, test_features, test_labels, test_preds, args)
+
+    # Save the svm model
+    with open(os.path.join(args.save_dir, f'{args.svm_features}_single_svm_model.pkl'), 'wb') as f:
+        pickle.dump(svm_fitter, f)
 
     # # Class specific SVM
     # svm_fitter = svm_wrapper.SVMFitter()
