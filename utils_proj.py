@@ -10,7 +10,12 @@ import umap
 import numpy as np
 import os
 from PIL import Image
+import torchvision.transforms as T
+from torchvision.transforms import v2
+from torchvision.transforms import Normalize, Resize
+import random
 
+from data_utils.cifar10_data import get_CIFAR10_dataloader
 
 
 class SimpleDINOLoss(nn.Module):
@@ -184,3 +189,107 @@ def plot_umap_embeddings(tensor1, tensor2, tensor3=None, include_lines_for_tenso
     ax.set_title('UMAP projection of the tensor embeddings', fontsize=18)
 
     plt.savefig('umap_embeddings.png')
+
+class ImageTransforms:
+    def __init__(self, mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225], k=3, image_size=None, specific_transforms=None):
+        """
+        Initialize with mean, std for normalization, k for the number of transformed images,
+        image_size for resizing every image, and optionally a list of specific transformations.
+        """
+        self.mean = mean
+        self.std = std
+        self.k = k
+        self.image_size = image_size
+        if self.image_size is not None:
+            self.resize_transform = T.Resize(self.image_size)
+        else:
+            self.resize_transform = None
+        self.to_tensor = T.ToTensor()
+        self.normalize = T.Normalize(mean=self.mean, std=self.std)
+
+        self.all_transforms = {
+            # 'color_jitter': T.ColorJitter(brightness=0.5, contrast=0.5, saturation=0.5, hue=0.2),
+            # 'random_horizontal_flip': T.RandomHorizontalFlip(),
+            # 'random_vertical_flip': T.RandomVerticalFlip(),
+            # 'random_rotation': T.RandomRotation(30),
+            # 'random_affine': T.RandomAffine(degrees=15, translate=(0.1, 0.1), scale=(0.9, 1.1), shear=10),
+            # 'grayscale': T.Grayscale(num_output_channels=3),
+            # 'random_perspective': T.RandomPerspective(distortion_scale=0.5, p=0.5),
+            # 'random_erasing': T.RandomErasing(p=0.5, scale=(0.02, 0.33), ratio=(0.3, 3.3), value=0),
+            # 'gaussian_blur': T.GaussianBlur(kernel_size=(5, 9), sigma=(0.1, 5)),
+            # 'pad': T.Pad(padding=10, fill=(255, 0, 0), padding_mode='constant'),
+            # # v2 Transforms
+            # 'auto_augment': T.v2.AutoAugment(),
+            # 'rand_augment': T.v2.RandAugment(),
+            'aug_mix': T.v2.AugMix(),
+            # # 'cut_mix': T.v2.CutMix(),
+            # # 'mix_up': T.v2.MixUp(),
+            # 'random_adjust_sharpness': T.v2.RandomAdjustSharpness(sharpness_factor=2, p=0.5),
+            # 'random_autocontrast': T.v2.RandomAutocontrast(p=0.5),
+            # 'random_equalize': T.v2.RandomEqualize(p=0.5),
+            # 'random_invert': T.v2.RandomInvert(p=0.5),
+            # 'random_posterize': T.v2.RandomPosterize(bits=4, p=0.5),
+            # 'random_solarize': T.v2.RandomSolarize(threshold=128, p=0.5),
+            # 'random_grayscale': T.v2.RandomGrayscale(p=0.1),
+            # Add more transformations as needed
+        }
+
+        self.specific_transforms = specific_transforms if specific_transforms else self.all_transforms
+
+    def __call__(self, image):
+        """
+        Apply resize and a different single transformation to the image for each of k images,
+        and return these along with the resized original image.
+        """
+        resized_image = self.resize_transform(image)
+        transformed_images = [self.to_tensor(resized_image)]  # Include the resized original image
+
+        for i in range(self.k):
+            
+            # Randomly choose 1 transformation from the list of specific transformations
+            transform_name, transform = random.choice(list(self.specific_transforms.items()))
+            transformed_image = transform(resized_image.copy())
+            transformed_image_tensor = self.to_tensor(transformed_image)
+            normalized_image = self.normalize(transformed_image_tensor)
+            transformed_images.append(normalized_image)
+
+        return transformed_images
+
+if __name__ == "__main__":
+
+    import clip
+    # Load the CLIP model
+    clip_model, clip_transform = clip.load('ViT-B/32', device='cpu')
+
+    # Extracting the values
+    normalize_values = next((t.mean, t.std) for t in clip_transform.transforms if isinstance(t, Normalize))
+    resize_value = next((t.size) for t in clip_transform.transforms if isinstance(t, Resize))
+
+    print(normalize_values, resize_value)
+    assert False
+    # Get the mean and std from the clip_transform
+    mean=[0.48145466, 0.4578275, 0.40821073]
+    std=[0.26862954, 0.26130258, 0.27577711]
+    image_size = (224, 224)
+
+    k = 3  # Number of different transformed images to generate
+
+    # Create an ImageTransformer instance
+    clip_transform = ImageTransforms(mean, std, k, image_size)
+
+    train_dataset, val_dataset, test_dataset, failure_dataset, class_names = get_CIFAR10_dataloader(data_dir='./data',    
+                                                            train_transform=None, test_transform=None, clip_transform=clip_transform,
+                                                            subsample_trainset=False, return_dataset=True)
+
+    # Load dataloader
+    train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=4, shuffle=True, num_workers=4)
+
+    # Get a batch of images and labels
+    images, labels, clip_batch = next(iter(train_loader))
+
+    print(images.shape, labels.shape)
+
+    # concatenate the clip_batch
+    clip_batch = torch.cat(clip_batch, dim=0)
+
+    print(clip_batch.shape)
