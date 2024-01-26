@@ -47,11 +47,15 @@ def get_save_dir(args):
         base_dir = os.path.join(base_dir, 'dissect', args.prefix)
     else:
         att_name = ""
-        if args.attributes:
-            att_name = "".join([str(att) for att in args.attributes])
-            att_name = f"att_{att_name}"
-        else:
-            att_name = "att_all"
+        if args.dataset_name == "NICOpp":
+            if args.attributes:
+                att_name = "".join([str(att) for att in args.attributes])
+                att_name = f"att_{att_name}"
+            else:
+                att_name = "att_all"
+        
+        if args.dataset_name == 'domainnet' and args.domain_name:
+            att_name = f"{args.domain_name}"
 
         base_dir = os.path.join(args.save_dir, args.dataset_name, 'shift_detection', att_name, args.prefix, 'clip', 'dissect')  
 
@@ -59,7 +63,11 @@ def get_save_dir(args):
 
 def get_save_names(target_name, concept_set_name, save_dir):
     PM_SUFFIX = {"max":"_max", "avg":"avg"}
-    concept_set_name = (concept_set_name.split("/")[-1]).split(".")[0]
+
+    if concept_set_name is None:
+        concept_set_name = (args.gt_concept_set.split("/")[-1]).split(".")[0]
+    else:
+        concept_set_name = (concept_set_name.split("/")[-1]).split(".")[0]
     
     clip_model_name = args.clip_model_name.replace("/", "_")
     target_save_name = f"{save_dir}/features/{clip_model_name}_{target_name}_{PM_SUFFIX[args.pool_mode]}.pt"
@@ -141,6 +149,81 @@ def precision(gt_concept_set, pred_concepts):
 
     return precision 
 
+def get_text_encodings(clip_model, texts):
+
+    # Compute text embeddings using batch_size=128
+    batch_size = 128
+    text_encodings = []
+    for i in range(0, len(texts), batch_size):
+        tokenized_texts = clip.tokenize(texts[i:i+batch_size]).to(args.device)
+        text_encodings.append(clip_model.encode_text(tokenized_texts).float().detach().cpu().numpy())
+    text_encodings = np.concatenate(text_encodings, axis=0)
+
+    return text_encodings
+
+def plot_UMAP(features_a, features_b, save_dir, name):
+    # Plot the UMAP
+    import umap
+    reducer = umap.UMAP()
+    features = np.concatenate((features_a, features_b), axis=0)
+    embeddings = reducer.fit_transform(features)
+    plt.figure(figsize=(10,10))
+    plt.scatter(embeddings[:len(features_a), 0], embeddings[:len(features_a), 1], c='r', label='top retreived')
+    plt.scatter(embeddings[len(features_a):, 0], embeddings[len(features_a):, 1], c='b', label='GT concepts')
+    plt.legend()
+    plt.savefig(os.path.join(save_dir, f'{name}_umap.png'))
+    plt.show()
+
+def plot_tsne(features_a, features_b, save_dir, name):
+    # Plot the UMAP
+    from sklearn.manifold import TSNE
+    reducer = TSNE()
+    features = np.concatenate((features_a, features_b), axis=0)
+    embeddings = reducer.fit_transform(features)
+    plt.figure(figsize=(10,10))
+    plt.scatter(embeddings[:len(features_a), 0], embeddings[:len(features_a), 1], c='r', label='top retreived')
+    plt.scatter(embeddings[len(features_a):, 0], embeddings[len(features_a):, 1], c='b', label='GT concepts')
+    plt.legend()
+    plt.savefig(os.path.join(save_dir, f'{name}_tsne.png'))
+    plt.show()
+
+def average_cosine_similarity(features_a, features_b):
+    similarity_matrix = cosine_similarity(features_a, features_b)
+
+    # Find the max similarity (closest embedding) for each element in features_a
+    max_similarities = np.max(similarity_matrix, axis=1)
+    
+    assert len(max_similarities) == len(features_a)
+    # Calculate the average of these maximum similarities
+    average_similarity = np.mean(max_similarities)
+
+    return average_similarity
+
+def plot_and_compute_similarities(text_a, text_b, save_dir, name):
+
+    clip_model, clip_transform = clip.load(args.clip_model_name)
+    clip_model = clip_model.to(args.device)
+
+    # Get the text encodings
+    text_encodings_a = get_text_encodings(clip_model, text_a)
+    text_encodings_b = get_text_encodings(clip_model, text_b)
+
+    # normalize the text encodings
+    text_encodings_a = text_encodings_a / np.linalg.norm(text_encodings_a, axis=1, keepdims=True)
+    text_encodings_b = text_encodings_b / np.linalg.norm(text_encodings_b, axis=1, keepdims=True)
+
+    # Plot the UMAP
+    # plot_UMAP(text_encodings_a, text_encodings_b, save_dir, name)
+    plot_tsne(text_encodings_a, text_encodings_b, save_dir, name)
+
+    # Compute the average cosine similarity
+    average_similarity = average_cosine_similarity(text_encodings_a, text_encodings_b)
+
+    # # Save the average similarity
+    # with open(os.path.join(save_dir, f'{name}_average_similarity.txt'), 'w') as f:
+    #     f.write(str(average_similarity))
+    return average_similarity
+
 def main(args):
     
     args.pool_mode = 'avg'
@@ -151,23 +234,21 @@ def main(args):
     K=50 # top K neurons
     L=100 # top L words
     
-    with open(args.concept_set, 'r') as f: 
-        concept_set = (f.read()).split('\n')
 
-    attributes = ['autumn', 'dim', 'grass', 'outdoor', 'rock', 'water']
     # Load the gt attribute json file
     with open(args.gt_concept_set, 'r') as f:
-        att_concept_json = json.load(f)
+        gt_att_concept_json = json.load(f)
     
     # Get all the values from the gt_concept_json into a single list
     gt_att_all_concepts = []
-    for att in attributes:
-        gt_att_all_concepts.append(att_concept_json[att])
+    for att, att_concepts in gt_att_concept_json.items():
+        gt_att_all_concepts.extend(att_concepts)
 
-    gt_att_concept = []
-    # select these attributes
-    for att in args.attributes:
-        gt_att_concept.extend(att_concept_json[attributes[att]])
+    if args.concept_set:
+        with open(args.concept_set, 'r') as f: 
+            concept_set = (f.read()).split('\n')
+    else:
+        concept_set = gt_att_all_concepts
 
 
     # Load the CLIP model
@@ -179,14 +260,17 @@ def main(args):
 
     plumber.to(args.device)
     if args.checkpoint_path:
-        plumber.load_checkpoint(args.checkpoint_path)
+        if not os.path.exists(args.checkpoint_path):
+            print(f"Checkpoint path {args.checkpoint_path} does not exist")
+        else:
+            plumber.load_checkpoint(args.checkpoint_path)
 
     # Create the data loader    # Create the data loader and wrap them with Fabric
     train_transform = None
     train_dataset, val_dataset, test_dataset, failure_dataset, class_names = get_dataset(args.dataset_name, train_transform, train_transform, 
                                                                                         data_dir=args.data_dir, clip_transform=clip_transform, 
                                                                                         img_size=args.img_size, return_failure_set=True, 
-                                                                                        sample_by_attributes=args.attributes)
+                                                                                        sample_by_attributes=args.attributes, domain_name=args.domain_name)
 
     class_prompts = [f"This is a photo of a {class_name}" for class_name in class_names]
 
@@ -207,16 +291,14 @@ def main(args):
                                                     class_names, K=K, L=L, target_layer=target_name, 
                                                     save_dir=log_path, display=True)
 
+        # For each of the gt attributes, calculate the precision score with respect to 
+        # the top L words from the top K neurons
         score_att = {}
-        for att in attributes:
-            precision_score = precision(att_concept_json[att], all_top_words)
+        for att, att_concepts in gt_att_concept_json.items():
+            precision_score = precision(att_concepts, all_top_words)
             score_att[att] = precision_score
         
         print(f"Precision score for all attributes: {score_att}")
-        # # Save the precision score as a csv file with layer name and precision score
-        # precision_save_path = f"{log_path}/precision.csv"
-        # with open(precision_save_path, 'a') as f:
-        #     f.write(f"{target_name},{precision_score}\n")
 
         # Save the score_att as a json file
         score_att_save_path = f"{log_path}/score_att.json"
@@ -234,6 +316,31 @@ def main(args):
         with open(words_dump_path, 'w') as f:
             json.dump(word_frequency, f)
         
+        words_dump_path = f"{log_path}/{target_name}_top_{K}N_{L}W.json"
+        # Load the json file
+        with open(words_dump_path, 'r') as f:
+            word_frequency = json.load(f)
+
+        list_retreived_captions = []
+        for key, val in word_frequency.items():
+            list_retreived_captions.extend([key]*val)
+        
+        log_path = os.path.join(log_path, 'concept_similarity')
+        os.makedirs(log_path, exist_ok=True)
+        concept_similarity = {}
+        # Load the gt attribute json file
+        for att, att_concepts in gt_att_concept_json.items():
+            similarity = plot_and_compute_similarities(list_retreived_captions, att_concepts, log_path, att)
+            # Convert the similarity to float
+            similarity = float(similarity)
+            concept_similarity[att] = similarity
+        
+        # Save the concept_similarity as a json file
+        score_att_save_path = f"{log_path}/concept_similarity.json"
+        with open(score_att_save_path, 'w') as f:
+            json.dump(concept_similarity, f, indent=4)
+
+    print("Done\n\n")
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Train ResNet on WILDS Dataset')
@@ -277,7 +384,7 @@ if __name__ == "__main__":
     parser.add_argument('--weight_img_loss', type=float, default=0.5, help='Weight for image loss')
     parser.add_argument('--weight_txt_loss', type=float, default=0.5, help='Weight for text loss')
     
-    parser.add_argument('--concept_set', type=str, default='prompts/cifar3_attributes.txt', help='Path to the concept set')
+    parser.add_argument('--concept_set', type=str, default=None, help='Path to the concept set')
     parser.add_argument('--gt_concept_set', type=str, default=None, help='Path to the ground truth concept set')
     parser.add_argument('--target_layers', type=str, nargs='+', default=['ln_post'], help='Target layers to use for dissection')
 
@@ -295,18 +402,17 @@ if __name__ == "__main__":
 python clip-dissect/dissector.py \
     --data_dir "./data/" \
     --domain_name 'real' \
-    --dataset_name "NICOpp" \
-    --attributes 1 2 3 \
-    --concept_set "clip-dissect/concepts/niccopp_concepts_att_123.txt" \
-    --num_classes 60 \
+    --dataset_name "domainnet" \
+    --gt_concept_set 'clip-dissect/domainnet_domain_concepts.json' \
+    --num_classes 345 \
     --batch_size 256 \
     --seed 42 \
     --img_size 224 \
     --img_projection --txt_projection  \
-    --checkpoint_path "logs/NICOpp/shift_detection/att_123/plumber_img_text_proj/_bs_256_lr_0.1_teT_2.0_sT_1.0_imgweight_1.0_txtweight_1.0_is_mlp_False/best_projector_weights.pth" \
+    --checkpoint_path "logs/domainnet/shift_detection/real/plumber_img_text_proj/_bs_256_lr_0.1_teT_2.0_sT_1.0_imgweight_1.0_txtweight_1.0_is_mlp_False/best_projector_weights.pth" \
     --classifier_name 'resnet18' \
     --clip_model_name 'ViT-B/32' \
-    --prompt_path "data/NICOpp/NICOpp_CLIP_ViT-B_32_text_embeddings.pth" \
+    --prompt_path "data/domainnet/domainnet_CLIP_ViT-B_32_text_embeddings.pth" \
     --save_dir "./logs" \
     --n_promt_ctx 16 \
     --num_epochs 10 \
