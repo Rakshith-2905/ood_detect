@@ -5,7 +5,6 @@ import torch.nn.functional as F
 from matplotlib import pyplot as plt
 from sklearn.metrics import confusion_matrix
 import seaborn as sns
-import umap
 
 import numpy as np
 import os

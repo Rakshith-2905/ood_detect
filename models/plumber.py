@@ -758,7 +758,7 @@ class LIMBER(nn.Module):
         if self.clip_prompted_img_enc:
             self.clip_prompted_img_enc.eval()
 
-    def encode_images(self, images):
+    def encode_images(self, images, return_logits=False):
         """
         Encode images using CLIP model
         Args:
@@ -771,13 +771,31 @@ class LIMBER(nn.Module):
             images = torch.stack([self.preprocess(image) for image in images])
 
         # Image encoding logic
-        _, image_embeddings = self.task_model(images, return_features=True)
+        task_logits, image_embeddings = self.task_model(images, return_features=True)
 
         if self.img_projector:
             proj_embeddings = self.img_projector(image_embeddings)
         else:
             proj_embeddings = image_embeddings
         
+        if return_logits:
+            return task_logits, proj_embeddings
+        return proj_embeddings
+
+    def encode_features(self, features):
+        """
+        Encode features using CLIP model
+        Args:
+            features: Tensor of shape [batch_size, 3, H, W], or list of PIL images
+        Returns:
+            proj_embeddings: Tensor of shape [batch_size, proj_dim]
+        """
+        # Image encoding logic
+        if self.img_projector:
+            proj_embeddings = self.img_projector(features)
+        else:
+            proj_embeddings = features
+
         return proj_embeddings
 
     def encode_text(self, text_list, text_encodings_raw=None):
