@@ -162,13 +162,13 @@ def main(args):
     # Loss function and optimizer
     criterion = nn.CrossEntropyLoss()
     
-    # Make directory for saving results
-    if args.dataset_name == 'domainnet':
-        args.save_dir = f"logs/{args.dataset_name}-{args.domain}/{args.classifier_model}/classifier"
-    else:
-        args.save_dir = f"logs/{args.dataset_name}/{args.classifier_model}/classifier"
-
+    # Make directory from the checkpoint_path for saving results
+    args.save_dir = os.path.dirname(args.checkpoint_path)
     assert os.path.exists(args.save_dir), f"Save directory {args.save_dir} does not exists!"
+    
+    if args.dataset_name in subpop_bench.DATASETS:
+        args.save_dir = os.path.join(args.save_dir, args.domain)
+        os.makedirs(args.save_dir, exist_ok=True)
 
     plot_images(train_loader, title="Training Image")
     plot_images(val_loader, title="Validation Image")
@@ -184,7 +184,7 @@ def main(args):
         print(f"Using {torch.cuda.device_count()} GPUs")
         model = nn.DataParallel(model)    
     
-    SVM_classifier(model, val_loader, test_loader, device)
+    # SVM_classifier(model, val_loader, test_loader, device)
 
     val_loss, val_acc = evaluate(test_loader, model, criterion, device, 0)
     print(f"Test Loss: {val_loss:.4f}, Test Accuracy: {val_acc:.4f}")
@@ -192,6 +192,8 @@ def main(args):
     with open(os.path.join(args.save_dir, 'results.txt'), 'w') as f:
         if args.dataset_name == 'domainnet':
             f.write(f"Dataset {args.dataset_name} {args.domain} Test Accuracy: {val_acc:.4f}\n")
+        elif args.dataset_name in subpop_bench.DATASETS:   
+            args.save_dir = f"logs/{args.dataset_name}/failure_estimation/{args.domain}/{args.classifier_model}/classifier"
         else:
             f.write(f"Dataset {args.dataset_name} Test Accuracy: {val_acc:.4f}\n")
 
@@ -219,12 +221,13 @@ if __name__ == "__main__":
 """
 Sample command to run:
 python test_classifier.py \
-        --dataset_name cifar10-limited \
+        --dataset_name NICOpp \
+        --domain autumn \
         --data_path ./data \
         --image_size 224 \
         --batch_size 512 \
         --seed 42 \
         --classifier_model resnet18 \
-        --checkpoint_path logs/cifar10-limited/resnet18/classifier/checkpoint_29.pth
+        --checkpoint_path logs/NICOpp/failure_estimation/autumn/resnet18/classifier/best_checkpoint.pth
 
 """

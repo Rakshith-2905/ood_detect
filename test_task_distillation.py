@@ -12,6 +12,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torchvision import transforms
+from PIL import Image
 
 import torchvision.transforms as trn
 import torchvision.datasets as dset
@@ -42,7 +43,7 @@ from data_utils.domainnet_data import DomainNetDataset, get_data_from_saved_file
 from models.resnet import CustomClassifier, CustomResNet
 from models.projector import ProjectionHead
 from simple_classifier import SimpleCNN, CIFAR10TwoTransforms
-from utils_proj import SimpleDINOLoss, compute_accuracy, compute_similarities, plot_grad_flow
+from utils_proj import SimpleDINOLoss, compute_accuracy, compute_similarities, plot_grad_flow, unnormalize_and_to_pil
 from models.resnet_cifar import ResNet18
 from train_task_distillation import build_classifier, get_dataset_from_file, get_CLIP_text_encodings, get_dataset
 from models.prompted_CLIP import PromptedCLIPTextEncoder, PromptedCLIPImageEncoder
@@ -300,8 +301,12 @@ def main(args):
 
     fabric.print(f"Built {args.classifier_name} classifier with checkpoint path: {args.classifier_checkpoint_path}")
 
-    # Load the checkpoint for the step 1 model
-    checkpoint = torch.load(args.step1_checkpoint_path, map_location=fabric.device)
+    if os.path.exists(args.step1_checkpoint_path):
+        # Load the checkpoint for the step 1 model
+        checkpoint = torch.load(args.step1_checkpoint_path, map_location=fabric.device)
+        fabric.print(f"Loaded checkpoint from {args.step1_checkpoint_path}")
+    else:
+        fabric.print(f"Checkpoint not found at {args.step1_checkpoint_path}")
 
     img_projector = None
     if args.img_projection:
@@ -451,6 +456,7 @@ def main(args):
 
             # Append to a json file
             save_path = os.path.join(args.save_dir, f"test_task_distillation_corruption.json")
+
             with open(save_path, 'a') as f:
                 json.dump(test_metrics, f)
                 f.write('\n')
@@ -474,7 +480,129 @@ def main(args):
         with open(save_path, 'w') as f:
             json.dump(test_metrics, f)
 
+    
+def main_(args):
+    
+    # Load the CLIP model
+    clip_model, clip_transform = clip.load(args.clip_model_name)
 
+    classifier, train_transform, test_transform = build_classifier(args.classifier_name, num_classes=args.num_classes, 
+                                                                    pretrained=args.use_imagenet_pretrained, 
+                                                                    checkpoint_path=args.classifier_checkpoint_path)
+    classifier = fabric.to_device(classifier)
+
+    fabric.print(f"Built {args.classifier_name} classifier with checkpoint path: {args.classifier_checkpoint_path}")
+
+    # Create the data loader and wrap them with Fabric
+    train_dataset, val_dataset, test_dataset, failure_dataset, class_names = get_dataset(args.dataset_name, train_transform, test_transform, 
+                                                            data_dir=args.data_dir, clip_transform=clip_transform, 
+                                                            img_size=args.img_size, return_failure_set=True,
+                                                            domain_name=args.domain_name, severity=args.severity)
+    fabric.print(f"Using {args.dataset_name} dataset")
+
+    train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True, num_workers=8, pin_memory=True)
+    val_loader = torch.utils.data.DataLoader(val_dataset, batch_size=args.batch_size, shuffle=args.train_on_testset, num_workers=8, pin_memory=True)
+    test_loader = torch.utils.data.DataLoader(test_dataset, batch_size=args.batch_size, shuffle=False, num_workers=8, pin_memory=True)
+    failure_loader = torch.utils.data.DataLoader(failure_dataset, batch_size=args.batch_size, shuffle=False, num_workers=8, pin_memory=True)
+
+    val_loader, test_loader = fabric.setup_dataloaders(val_loader, test_loader)
+
+
+    fabric.print(f"Number of validation examples: {len(val_loader.dataset)}")
+    fabric.print(f"Number of test examples: {len(test_loader.dataset)}")
+    # Get the text encodings for the class names
+    try:
+        text_encodings= torch.load(args.prompt_path)
+        if text_encodings.shape[0] != len(class_names):
+            raise Exception("Text encodings shape does not match the number of classes")
+
+        fabric.print(f"Loaded CLIP {args.clip_model_name} text encodings from {args.prompt_path}, {text_encodings.shape}")
+    except:
+        assert False, "{args.prompt_path} Prompt file not found."
+        # text_encodings = get_CLIP_text_encodings(clip_model, class_names, args.prompt_path)
+        # fabric.print(f"Saved CLIP {args.clip_model_name} text encodings to {args.prompt_path}")
+
+    class_prompts = [f"This is a photo of a {class_name}" for class_name in class_names]
+
+    from models.plumber import PLUMBER
+    plumber = PLUMBER(args.clip_model_name, args.num_classes, img_projection=args.img_projection, txt_projection=args.txt_projection, 
+                      img_prompting=args.img_prompting, cls_txt_prompts=args.cls_txt_prompts, dataset_txt_prompt=args.dataset_txt_prompt, 
+                      is_mlp=args.is_mlp, device=fabric.device)
+    
+    plumber = fabric.to_device(plumber)
+    
+    if os.path.exists(args.step1_checkpoint_path):
+        plumber.load_checkpoint(args.step1_checkpoint_path)
+
+    # Function to denormalize the image
+    def denormalize(image):
+        mean=[0.485, 0.456, 0.406] 
+        std=[0.229, 0.224, 0.225]
+        image = image.numpy().transpose(1, 2, 0)
+        image = std * image + mean
+        image = np.clip(image, 0, 1)
+
+        # Convert to PIL image
+        image = image * 255
+        image = image.astype(np.uint8)
+        image = Image.fromarray(image)
+        return image
+    
+    for images_batch, labels, images_clip_batch in failure_loader:
+
+        images_batch = fabric.to_device(images_batch)
+        images_clip_batch = fabric.to_device(images_clip_batch)
+        labels = fabric.to_device(labels)
+        
+        classifier_logits, classifier_embeddings = classifier(images_batch, return_features=True) # (batch_size, embedding_dim)
+        classifier_preds = torch.argmax(classifier_logits, dim=-1)
+
+        proj_embeddings = plumber.encode_images(images_clip_batch)
+        text_encodings = plumber.encode_text(class_prompts, text_encodings)
+
+        normalized_proj_embeddings = F.normalize(proj_embeddings, dim=-1)
+        normalized_text_encodings = F.normalize(text_encodings, dim=-1)# (num_classes, projection_dim)
+
+        proj_logits = 100*normalized_proj_embeddings @ normalized_text_encodings.t()
+        proj_preds = torch.argmax(proj_logits, dim=-1)
+
+        # if predictions are wrong save the images
+        for i in range(len(labels)):
+            if classifier_preds[i] != labels[i]:
+                # Unnormalize the image mean=[0.485, 0.456, 0.406] std=[0.229, 0.224, 0.225]
+                pil_img = denormalize(images_batch[i].cpu())
+                pil_img.save(f"failure_images/{i}_{class_names[labels[i]]}_{class_names[classifier_preds[i]]}.png")
+                # Compose a prompt
+                # neg_prompt = f"This is a photo which looks like a {class_names[classifier_preds[i]]}"
+                neg_prompt = f"This is a photo which looks like a {class_names[proj_preds[i]]}"
+                pos_prompt = f"This is a photo of a {class_names[labels[i]]}"
+
+                # Get the text encoding for the prompt
+                prompt_encoding = plumber.encode_text([pos_prompt, neg_prompt])
+
+                norm_img_embedding = normalized_proj_embeddings[i].unsqueeze(0)
+                norm_txt_embedding = F.normalize(prompt_encoding, dim=-1)
+
+                # T100 is the logits scale from CLIP
+                similarity_pos_neg = 100*norm_img_embedding @ norm_txt_embedding.t()
+                probs_pos_neg = similarity_pos_neg.softmax(dim=-1).detach().cpu().numpy()[0]
+
+                clip_img_encoding = clip_model.encode_image(images_clip_batch[i].unsqueeze(0))
+                text = clip.tokenize([pos_prompt, neg_prompt]).to(device)
+                get_CLIP_text_encodings = clip_model.encode_text(text)
+
+                norm_clip_img_embedding = F.normalize(clip_img_encoding, dim=-1)
+                norm_clip_txt_embedding = F.normalize(get_CLIP_text_encodings, dim=-1)
+
+                similarity_clip_pos_neg = 100*norm_clip_img_embedding @ norm_clip_txt_embedding.t()
+                probs_clip_pos_neg = similarity_clip_pos_neg.softmax(dim=-1).detach().cpu().numpy()[0]
+                
+                fabric.print(f"Failure Image and {pos_prompt} and {neg_prompt} is PLUMBER: {probs_pos_neg} CLIP: {probs_clip_pos_neg}")
+
+        assert False
+
+
+        proj_preds = torch.argmax(logits_projection, dim=-1)
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Train ResNet on WILDS Dataset')
@@ -545,7 +673,8 @@ if __name__ == "__main__":
             
     seed_everything(args.seed)
 
-    main(args)
+    # main(args)
+    main_(args)
 
 '''
 python test_task_distillation.py \

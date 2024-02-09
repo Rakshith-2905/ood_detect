@@ -32,6 +32,8 @@ class ImageNetTwoTransforms(ImageFolder):
         elif data_type == 'imagenet_a':
             self.wnids = imagenet_a_wnids
             self.class_names = [wnids_to_class_names[wnid] for wnid in self.wnids]
+        elif data_type == 'imagenet_sketch':
+            pass
         else:
             raise ValueError(f'Unknown data_type: {data_type}')
         self.split = split
@@ -51,48 +53,33 @@ def get_imagenet_loaders(batch_size=512, data_dir='./data',
                         data_type='imagenet', subsample_trainset=True, return_dataset=False):
     
     if data_type == 'imagenet':
-        train_data_dir = os.path.join(data_dir, 'imagenet-train', 'train')
-        val_data_dir = os.path.join(data_dir, 'imagenet-train', 'val')
+        train_data_dir = os.path.join(data_dir, 'imagenet', 'train')
+        test_data_dir = os.path.join(data_dir, 'imagenet', 'val')
     elif data_type == 'imagenet-val':
-        train_data_dir = os.path.join(data_dir, 'imagenet-train', 'val')
-        val_data_dir = os.path.join(data_dir, 'imagenet-train', 'val')
+        train_data_dir = os.path.join(data_dir, 'imagenet', 'val')
     else:
-        train_data_dir = os.path.join(data_dir, data_type)
-        val_data_dir = os.path.join(data_dir, data_type)
+        train_data_dir = os.path.join(data_dir, 'imagenet', 'val')
+        test_data_dir = os.path.join(data_dir, 'imagenet', data_type)
 
-    # temp_train_dataset = ImageNetTwoTransforms(root=train_data_dir, split='train',primary_transform=train_transform, 
-    #                                            secondary_transform=clip_transform, data_type=data_type)
-
-    if data_type == 'imagenet':
-        train_dataset = ImageNetTwoTransforms(root=train_data_dir, split='train',primary_transform=train_transform, 
+    train_dataset = ImageNetTwoTransforms(root=train_data_dir, split='train',primary_transform=train_transform, 
                                                secondary_transform=clip_transform, data_type=data_type)
-        val_dataset = ImageNetTwoTransforms(root=val_data_dir, split='val',primary_transform=test_transform, 
-                                            secondary_transform=clip_transform, data_type=data_type)
-        test_dataset = val_dataset
-        failure_dataset = val_dataset
-    else:
-        val_dataset = ImageNetTwoTransforms(root=val_data_dir, split='val',primary_transform=test_transform, 
-                                            secondary_transform=clip_transform, data_type=data_type)
-        train_dataset = val_dataset
-        test_dataset = val_dataset
-        failure_dataset = val_dataset
-        # Split trainset into train, val
-        # val_size = int(0.20 * len(temp_train_dataset))
-        # train_size = len(temp_train_dataset) - val_size
-        # train_dataset, temp_valset = torch.utils.data.random_split(temp_train_dataset, [train_size, val_size], 
-        #                                                         generator=torch.Generator().manual_seed(42))
-        
-        # # random subsample trainset to 20% of original size
-        # if subsample_trainset:
-        #     train_size = int(0.20 * len(train_dataset))
-        #     train_dataset, _ = torch.utils.data.random_split(train_dataset, [train_size, len(train_dataset)-train_size], 
-        #                                                     generator=torch.Generator().manual_seed(42))
+    
+    temp_valset = train_dataset
 
-        # # Split the valset into val and failure
-        # failure_size = int(0.50 * len(temp_valset))
-        # val_size = len(temp_valset) - failure_size
-        # val_dataset, failure_dataset = torch.utils.data.random_split(temp_valset, [val_size, failure_size], 
-        #                                                             generator=torch.Generator().manual_seed(42))
+    # Split the valset into val and failure
+    failure_size = int(0.50 * len(temp_valset))
+    val_size = len(temp_valset) - failure_size
+    val_dataset, failure_dataset = torch.utils.data.random_split(temp_valset, [val_size, failure_size], 
+                                                                generator=torch.Generator().manual_seed(42))
+    
+    if data_type == 'imagenet':
+        test_dataset = ImageNetTwoTransforms(root=test_data_dir, split='val',primary_transform=test_transform, 
+                                            secondary_transform=clip_transform, data_type=data_type)
+    elif data_type == 'imagenet-val':
+        test_dataset = val_dataset
+    else:
+        test_dataset = ImageNetTwoTransforms(root=test_data_dir, split='test',primary_transform=test_transform, 
+                                            secondary_transform=clip_transform, data_type=data_type)
 
     if return_dataset:
         return train_dataset, val_dataset, test_dataset, failure_dataset, train_dataset.class_names

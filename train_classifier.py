@@ -129,7 +129,13 @@ def get_dataloaders(dataset_name, domain_name=None,
             'num_workers': 4,
             'group_balanced': None,
         }
-        loaders, class_names = subpop_bench.get_dataloader(dataset_name, data_dir, hparams, train_attr='yes')
+
+        attribute_names = ["autumn", "dim", "grass", "outdoor", "rock", "water"]
+
+        # Get a list of domain indices from the domain names
+        domain_idx = [attribute_names.index(domain_name)]
+        loaders, class_names = subpop_bench.get_dataloader(dataset_name, data_dir, hparams, 
+                                                           train_attr='yes', sample_by_attributes=domain_idx)
     elif dataset_name == 'CelebA':
         class_attr = 'Young' # attribute for binary classification
         imbalance_attr = ['Male']
@@ -156,6 +162,11 @@ def get_dataloaders(dataset_name, domain_name=None,
                                                        selected_classes=selected_classes, retain_orig_ids=True,    
                                                        train_transform=None, test_transform=None, clip_transform=None, 
                                                        subsample_trainset=False, return_dataset=False)
+    # elif dataset_name in ["food101", "sun397", "eurosat", "ucf101", 
+    #                       "stanfordcars", "flowers102", "dtd", "oxfordpets", "svhn", "gtsrb"]:
+        
+    #     loaders, class_names = get_zsl_dataloaders(dataset_name, batch_size=batch_size, data_path=data_dir, 
+    #                                                preprocess=None, clip_transform=None)
     else:
         raise ValueError(f"Dataset {dataset_name} not supported")
     
@@ -244,6 +255,8 @@ def main(args):
     # Make directory for saving results
     if args.dataset_name == 'domainnet':
         args.save_dir = f"logs/{args.dataset_name}-{args.domain}/{args.classifier_model}/classifier"
+    elif args.dataset_name in subpop_bench.DATASETS:   
+        args.save_dir = f"logs/{args.dataset_name}/failure_estimation/{args.domain}/{args.classifier_model}/classifier"
     else:
         args.save_dir = f"logs/{args.dataset_name}/{args.classifier_model}/classifier"
     if not os.path.exists(args.save_dir):
@@ -379,13 +392,13 @@ if __name__ == "__main__":
 """
 Sample command to run:
 python train_classifier.py \
-        --dataset_name MetaShift \
-        --domain real \
+        --dataset_name NICOpp \
+        --domain autumn \
         --data_path ./data \
         --image_size 224 \
         --batch_size 512 \
         --seed 42 \
-        --num_epochs 30 \
+        --num_epochs 100 \
         --optimizer sgd \
         --scheduler MultiStepLR \
         --learning_rate 0.001 \

@@ -54,7 +54,7 @@ from models.prompted_CLIP import PromptedCLIPTextEncoder, PromptedCLIPImageEncod
 
 def get_dataset(data_name, train_transforms, test_transforms, clip_transform, data_dir='../data', 
                 train_attr='yes', img_size=75, return_failure_set=False, 
-                sample_by_attributes=None, domain_name=None, severity=None):
+                sample_by_attributes=None, domain_name=None, severity=None, use_real=True):
 
     if 'imagenet' in data_name.lower():
         train_dataset, val_dataset, test_dataset, failure_dataset, class_names = get_imagenet_loaders(batch_size=512, data_dir=data_dir,
@@ -64,7 +64,7 @@ def get_dataset(data_name, train_transforms, test_transforms, clip_transform, da
     elif data_name == 'domainnet':
         train_dataset, val_dataset, test_dataset, failure_dataset, class_names = get_domainnet_loaders(domain_name=domain_name, data_dir=data_dir, 
                                                                         train_transform=None, test_transform=None, clip_transform=clip_transform,
-                                                                        subsample_trainset=False, return_dataset=True, use_real=True)
+                                                                        subsample_trainset=False, return_dataset=True, use_real=use_real)
 
     elif data_name == 'cifar10':
         train_dataset, val_dataset, test_dataset, failure_dataset, class_names = get_CIFAR10_dataloader(data_dir='./data',    
@@ -102,10 +102,18 @@ def get_dataset(data_name, train_transforms, test_transforms, clip_transform, da
     elif data_name in subpop_bench.DATASETS:
         dataset_class = subpop_bench.get_dataset_class(data_name)
         hparams = {} # TODO: Add hparams need it for CMNIST
-        train_dataset = dataset_class(data_dir, 'tr', hparams, clip_transform, train_attr=train_attr, sample_by_attributes=sample_by_attributes)
-        val_dataset = dataset_class(data_dir, 'va', hparams, clip_transform, sample_by_attributes=sample_by_attributes)
-        test_dataset = dataset_class(data_dir, 'te', hparams, clip_transform, sample_by_attributes=sample_by_attributes)
-        failure_dataset = dataset_class(data_dir, 'failure', hparams, clip_transform, train_attr=train_attr, sample_by_attributes=sample_by_attributes)
+
+        domain_idx = None
+        if data_name == 'NICOpp':
+            attribute_names = ["autumn", "dim", "grass", "outdoor", "rock", "water"]
+            # Get a list of domain indices from the domain names
+            domain_idx = [attribute_names.index(domain_name)]
+
+        #TODO: Add the sample_by_attributes and domain_name more appropriately
+        train_dataset = dataset_class(data_dir, 'tr', hparams, clip_transform, train_attr=train_attr, sample_by_attributes=domain_idx)
+        val_dataset = dataset_class(data_dir, 'va', hparams, clip_transform, sample_by_attributes=domain_idx)
+        test_dataset = dataset_class(data_dir, 'te', hparams, clip_transform, sample_by_attributes=domain_idx)
+        failure_dataset = dataset_class(data_dir, 'failure', hparams, clip_transform, train_attr=train_attr, sample_by_attributes=domain_idx)
 
         class_names = train_dataset.class_names
     
@@ -252,6 +260,9 @@ def get_save_dir(args):
     save_dir_details += f"_teT_{args.teacher_temp}_sT_{args.student_temp}"
     save_dir_details += f"_imgweight_{args.weight_img_loss}_txtweight_{args.weight_txt_loss}_is_mlp_{args.is_mlp}"
 
+    if args.hard_loss:
+        save_dir_details += "_hard_loss"
+
     return os.path.join(save_dir, save_dir_details, 'step_1')
 
 @torch.no_grad()
@@ -362,12 +373,27 @@ def train_one_epoch(data_loader, clip_model, classifier,
         # T100 is the logits scale from CLIP
         logits_projection = 100*normalized_proj_embeddings @ normalized_text_encodings.t() # (batch_size, num_classes)
 
-        loss_image = criterion(logits_projection, classifier_logits)
-        loss_text = criterion(logits_projection.t(), classifier_logits.t())
-        
-        loss = loss_image*args.weight_img_loss + loss_text*args.weight_txt_loss
+        if args.hard_loss:
+            # Using classifer predictions assign pseudo labels for each image
+            classifier_preds = torch.argmax(classifier_logits, dim=-1)
+            batch_normalized_text_encodings = normalized_text_encodings[classifier_preds]
 
-        
+            logits_per_img = 100*normalized_proj_embeddings @ batch_normalized_text_encodings.t() # (batch_size, batch_size)
+            logits_per_text = logits_per_img.t()
+            
+            # We want to maximize the diagonal entries of the logits matrix while minimizing the off-diagonal entries
+            # labels are indexes to the diagonal entries of the logits matrix
+            pseudo_labels = torch.arange(len(normalized_proj_embeddings)).long().to(device) # (batch_size)
+
+            loss_image = F.cross_entropy(logits_per_img, pseudo_labels)
+            loss_text = F.cross_entropy(logits_per_text, pseudo_labels)
+            loss = loss_image*args.weight_img_loss + loss_text*args.weight_txt_loss
+        else:
+            loss_image = criterion(logits_projection, classifier_logits)
+            loss_text = criterion(logits_projection.t(), classifier_logits.t())
+            
+            loss = loss_image*args.weight_img_loss + loss_text*args.weight_txt_loss
+
         fabric.backward(loss)
 
         optimizer_step(optimizers_dict)
@@ -469,10 +495,26 @@ def validate(data_loader, clip_model, classifier,
         # T100 is the logits scale from CLIP
         logits_projection = 100*normalized_proj_embeddings @ normalized_text_encodings.t() # (batch_size, num_classes)
 
-        loss_image = criterion(logits_projection, classifier_logits)
-        loss_text = criterion(logits_projection.t(), classifier_logits.t())
-        
-        loss = loss_image*args.weight_img_loss + loss_text*args.weight_txt_loss
+        if args.hard_loss:
+            # Using classifer predictions assign pseudo labels for each image
+            classifier_preds = torch.argmax(classifier_logits, dim=-1)
+            batch_normalized_text_encodings = normalized_text_encodings[classifier_preds]
+
+            logits_per_img = 100*normalized_proj_embeddings @ batch_normalized_text_encodings.t() # (batch_size, batch_size)
+            logits_per_text = logits_per_img.t()
+            
+            # We want to maximize the diagonal entries of the logits matrix while minimizing the off-diagonal entries
+            # labels are indexes to the diagonal entries of the logits matrix
+            pseudo_labels = torch.arange(len(normalized_proj_embeddings)).long().to(device) # (batch_size)
+
+            loss_image = F.cross_entropy(logits_per_img, pseudo_labels)
+            loss_text = F.cross_entropy(logits_per_text, pseudo_labels)
+            loss = loss_image*args.weight_img_loss + loss_text*args.weight_txt_loss
+        else:
+            loss_image = criterion(logits_projection, classifier_logits)
+            loss_text = criterion(logits_projection.t(), classifier_logits.t())
+            
+            loss = loss_image*args.weight_img_loss + loss_text*args.weight_txt_loss
 
         probs_from_classifier = F.softmax(classifier_logits, dim=-1)
         probs_from_proj = F.softmax(logits_projection, dim=-1)
@@ -584,7 +626,6 @@ def train_one_epoch_feat(data_loader, clip_model, classifier,
         
         loss = loss_image*args.weight_img_loss + loss_text*args.weight_txt_loss
 
-  
         fabric.backward(loss)
         
         optimizer_step(optimizers_dict)
@@ -715,7 +756,7 @@ def validate_feat(data_loader, clip_model, classifier,
     
 def build_classifier(classifier_name, num_classes, pretrained=False, checkpoint_path=None):
     # TODO: Verify each of the models and the transforms
-    if classifier_name in ['vit_b_16', 'swin_b']:
+    if classifier_name in ['vit_b_16', 'swin_b', 'resnet18-imagenet', 'resnet50-imagenet']:
         classifier = CustomClassifier(classifier_name, use_pretrained=pretrained)
     elif classifier_name in ['resnet50_adv_l2_0.1']:
         classifier = CustomFeatureModel(classifier_name, use_pretrained=pretrained)
@@ -735,7 +776,7 @@ def build_classifier(classifier_name, num_classes, pretrained=False, checkpoint_
         ])
     else:
         raise ValueError(f"Invalid classifier name: {classifier_name}")
-    if checkpoint_path:
+    if checkpoint_path and os.path.exists(checkpoint_path):
 
         if classifier_name == 'SimpleCNN':
             classifier.load_state_dict(torch.load(checkpoint_path)['model_state_dict'])
@@ -762,7 +803,10 @@ def main(args):
                                                                     pretrained=args.use_imagenet_pretrained, 
                                                                     checkpoint_path=args.classifier_checkpoint_path)
 
-    fabric.print(f"Built {args.classifier_name} classifier with checkpoint path: {args.classifier_checkpoint_path}")
+    if os.path.exists(args.classifier_checkpoint_path):
+        fabric.print(f"Loaded {args.classifier_name} classifier from {args.classifier_checkpoint_path}")
+    else:
+        fabric.print(f"Using {args.classifier_name} classifier")
 
     img_projector = None
     if args.img_projection:
@@ -989,6 +1033,8 @@ if __name__ == "__main__":
     parser.add_argument('--batch_size', type=int, default=32, help='Batch size for the dataloader')
     parser.add_argument('--img_size', type=int, default=75, help='Image size for the celebA dataloader only')
     parser.add_argument('--seed', type=int, default=42, help='Seed for reproducibility')
+
+    parser.add_argument('--hard_loss', action='store_true', help='Using hard loss for learning the projection')
     
     parser.add_argument('--img_projection', action='store_true', help='Whether to use task projection or not')
     parser.add_argument('--txt_projection', action='store_true', help='Whether to use text projection or not')

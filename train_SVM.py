@@ -56,7 +56,7 @@ def get_save_dir(args):
     if args.dataset_name in ['cifar10-c', 'cifar100-c', 'imagenet-c']:
         severity = args.severity if args.severity else ''
         save_dir = os.path.join(save_dir, f'{args.dataset_name}_{args.domain_name}_{severity}')
-    elif args.dataset_name == 'domainnet':
+    elif args.dataset_name == 'domainnet' or args.dataset_name in ['NICOpp']:
         save_dir = os.path.join(save_dir, f'{args.domain_name}')
 
     return save_dir
@@ -223,10 +223,16 @@ def get_features_preds(args):
         train_dataset, val_dataset, test_dataset, failure_dataset, class_names = get_dataset(args.dataset_name, train_transform, test_transform, 
                                                                 data_dir=args.data_dir, clip_transform=clip_transform, 
                                                                 img_size=args.img_size, return_failure_set=True,
-                                                                domain_name=args.domain_name, severity=args.severity)
+                                                                domain_name=args.domain_name, severity=args.severity, use_real=False)
         print(f"Using {args.dataset_name} dataset")
 
-    train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True, num_workers=8, pin_memory=True)
+    if len(val_dataset) > 10000:
+        val_dataset = torch.utils.data.Subset(val_dataset, torch.randperm(10000))
+        print(f"Randomly sampled 10000 samples from the val dataset")
+    if len(failure_dataset) > 10000:
+        failure_dataset = torch.utils.data.Subset(failure_dataset, torch.randperm(10000))
+        print(f"Randomly sampled 10000 samples from the failure dataset")
+
     val_loader = torch.utils.data.DataLoader(val_dataset, batch_size=args.batch_size, shuffle=args.train_on_testset, num_workers=8, pin_memory=True)
     test_loader = torch.utils.data.DataLoader(test_dataset, batch_size=args.batch_size, shuffle=False, num_workers=8, pin_memory=True)
     failure_loader = torch.utils.data.DataLoader(failure_dataset, batch_size=args.batch_size, shuffle=False, num_workers=8, pin_memory=True)
@@ -244,9 +250,9 @@ def get_features_preds(args):
 
         print(f"Loaded CLIP {args.clip_model_name} text encodings from {args.prompt_path}, {text_encodings.shape}")
     except:
-        assert False, "{args.prompt_path} Prompt file not found."
-        # text_encodings = get_CLIP_text_encodings(clip_model, class_names, args.prompt_path)
-        # print(f"Saved CLIP {args.clip_model_name} text encodings to {args.prompt_path}")
+        # assert False, "{args.prompt_path} Prompt file not found."
+        text_encodings = get_CLIP_text_encodings(clip_model, class_names, args.prompt_path)
+        print(f"Saved CLIP {args.clip_model_name} text encodings to {args.prompt_path}")
 
     class_prompts = None
     clip_prompted_txt_enc = None
@@ -283,12 +289,12 @@ def get_features_preds(args):
     # Loss function
     criterion = SimpleDINOLoss(student_temp=args.student_temp, teacher_temp=args.teacher_temp)
 
-    train_base_acc, train_plumber_acc, train_features, train_preds = evaulate(
-                                                                train_loader, clip_model, classifier,
-                                                                img_projector, text_projector,
-                                                                text_encodings, class_prompts,
-                                                                clip_prompted_txt_enc, clip_prompted_img_enc,
-                                                                criterion, 0)
+    # train_base_acc, train_plumber_acc, train_features, train_preds = evaulate(
+    #                                                             train_loader, clip_model, classifier,
+    #                                                             img_projector, text_projector,
+    #                                                             text_encodings, class_prompts,
+    #                                                             clip_prompted_txt_enc, clip_prompted_img_enc,
+    #                                                             criterion, 0)
 
     val_base_acc, val_plumber_acc, val_features, val_preds = evaulate(
                                                                 failure_loader, clip_model, classifier,
@@ -307,8 +313,9 @@ def get_features_preds(args):
                         
     output_message = f"Val Base Acc: {val_base_acc:.2f}, Val Plumber Acc: {val_plumber_acc:.2f}, Test Base Acc: {test_base_acc:.2f}, Test Plumber Acc: {test_plumber_acc:.2f}"
     
+    print(output_message)
     return {
-        'train': [train_features, train_preds],
+        # 'train': [train_features, train_preds],
         'val': [val_features, val_preds],
         'test': [test_features, test_preds]
     }
@@ -442,6 +449,10 @@ def learn_svm(val_features, val_labels, val_preds, test_features, test_labels, t
     print("Number of validation samples: ", len(val_correct))
     print("Number of test samples: ", len(test_correct))
 
+    # # Number of unique values in val_correct
+    # print(f"Unique values in val_correct: {np.unique(val_correct)}")
+    print("Number of correct predictions in validation set: ", np.sum(val_correct))
+
     # Scale the features
     scaler = StandardScaler()
     scaler.fit(val_features)
@@ -476,7 +487,6 @@ def learn_svm(val_features, val_labels, val_preds, test_features, test_labels, t
     task_model_accuracy = np.sum(test_correct)/len(test_correct) # Actuall prediction accuracy
     estimation_gap = np.abs(task_model_accuracy-estimated_accuracy)
 
-    print(len(test_correct_preds), len(test_correct))
     out_metrics = {
         'gt_labels': test_labels,
         'task_pred': test_preds,
@@ -520,9 +530,9 @@ def main(args):
         with open(os.path.join(args.save_dir, 'features', 'features_labels_dict.pkl'), 'wb') as f:
             pickle.dump(features_pred_dict, f)
     
-    train_features = features_pred_dict['train'][0][args.svm_features]
-    train_labels = features_pred_dict['train'][1]['gt_labels']
-    train_preds = features_pred_dict['train'][1]['classifier_preds']
+    # train_features = features_pred_dict['train'][0][args.svm_features]
+    # train_labels = features_pred_dict['train'][1]['gt_labels']
+    # train_preds = features_pred_dict['train'][1]['classifier_preds']
 
     val_features = features_pred_dict['val'][0][args.svm_features]
     val_labels = np.asarray(features_pred_dict['val'][1]['gt_labels'])

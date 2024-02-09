@@ -236,11 +236,11 @@ class CustomClassifier(nn.Module):
                                             std=[0.229, 0.224, 0.225])                
                     ])
 
-        if model_name == "resnet18":
+        if model_name == "resnet18-imagenet":
             from torchvision.models import resnet18, ResNet18_Weights
             network = resnet18(weights=ResNet18_Weights.IMAGENET1K_V1)
             self.network_feat_extractor = create_feature_extractor(network,return_nodes=['flatten','fc'])
-        elif model_name == "resnet50":
+        elif model_name == "resnet50-imagenet":
             from torchvision.models import resnet50, ResNet50_Weights
             network = resnet50(weights=ResNet50_Weights.IMAGENET1K_V1)
 

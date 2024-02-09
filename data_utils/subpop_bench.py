@@ -566,12 +566,12 @@ class CustomDataLoader:
 
 # Dataloader to return train and val dataloaders along with the class names
 def get_dataloader(dataset_name, data_path, hparams, transforms1=None, train_attr='yes', 
-                   subsample_type=None, duplicates=None):
+                   subsample_type=None, duplicates=None, sample_by_attributes=None):
     dataset_class = get_dataset_class(dataset_name)
-    train_dataset = dataset_class(data_path, 'tr', hparams, transforms1, train_attr, subsample_type, duplicates)
-    val_dataset = dataset_class(data_path, 'va', hparams, transforms1, train_attr, subsample_type, duplicates)
-    test_dataset = dataset_class(data_path, 'te', hparams, transforms1, train_attr, subsample_type, duplicates)
-    failure_dataset = dataset_class(data_path, 'failure', hparams, transforms1, train_attr, subsample_type, duplicates)
+    train_dataset = dataset_class(data_path, 'tr', hparams, transforms1, train_attr, subsample_type, duplicates, sample_by_attributes)
+    val_dataset = dataset_class(data_path, 'va', hparams, transforms1, train_attr, subsample_type, duplicates, sample_by_attributes)
+    test_dataset = dataset_class(data_path, 'te', hparams, transforms1, train_attr, subsample_type, duplicates, sample_by_attributes)
+    failure_dataset = dataset_class(data_path, 'failure', hparams, transforms1, train_attr, subsample_type, duplicates, sample_by_attributes)
 
     if hparams['group_balanced']:
         train_weights = np.asarray(train_dataset.weights_g)
