@@ -109,3 +109,5 @@ prompts/text_embeddings.pth
 *.zip
 *.csv
 events*
+
+scripts
