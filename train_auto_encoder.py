@@ -75,6 +75,8 @@ class AutoEncoder(nn.Module):
 
         # Build encoder
         current_dim = input_dim
+        if use_uq_wrapper:
+            current_dim = input_dim * 2
         layer_idx = 0
         while current_dim > min_embed_dim:
             next_dim = max(min_embed_dim, current_dim // 2)  # Ensure not below min_embed_dim
@@ -84,12 +86,16 @@ class AutoEncoder(nn.Module):
             layer_idx += 1
 
         # When current dim is equal to the min_embd_dim
+        if current_dim == min_embed_dim:
+            self.encoder.add_module(f'encoder_layer_{layer_idx}', 
+                                    self._make_layer(activation, current_dim, min_embed_dim, use_batch_norm))
 
         # Optionally wrap the encoder with uq_wrapper
         if use_uq_wrapper:
             self.encoder = uq_wrapper(self.encoder)
 
         # Build decoder
+        layer_idx = 0
         current_dim = min_embed_dim
         while current_dim < output_dim:
             next_dim = min(output_dim, current_dim * 2)  # Ensure not above output_dim
@@ -97,6 +103,11 @@ class AutoEncoder(nn.Module):
                                     self._make_layer(activation, current_dim, next_dim, use_batch_norm))
             current_dim = next_dim
             layer_idx += 1
+        
+        # When current dim is equal to the output_dim
+        if current_dim == output_dim:
+            self.decoder.add_module(f'decoder_layer_{layer_idx}', 
+                                    self._make_layer(activation, current_dim, output_dim, use_batch_norm))
 
         print("Encoder:", self.encoder)
         print("Decoder:", self.decoder)
@@ -116,8 +127,8 @@ class AutoEncoder(nn.Module):
             raise NotImplementedError("Only 'relu', 'sigmoid', and 'identity' activations are supported")
         return nn.Sequential(*layers)
 
-    def forward(self, x):
-        encoded = self.encoder(x)
+    def forward(self, x, anchor=None):
+        encoded = self.encoder(x, anchor)
         decoded = self.decoder(encoded)
         return decoded
 
@@ -126,6 +137,7 @@ def train_one_epoch(data_loader, plumber, autoencoder, optimizer,
 
     plumber.set_eval_mode()
 
+    anchor_embeddings = []
     total_loss = 0
     pbar = tqdm(data_loader, desc=f"Epoch {epoch+1}", ncols=0)
     for images_batch, labels, images_clip_batch in pbar:
@@ -137,20 +149,24 @@ def train_one_epoch(data_loader, plumber, autoencoder, optimizer,
 
         image_encodings = plumber.encode_images(images_clip_batch)
 
+        if len(anchor_embeddings) < 3:
+            anchor_embeddings.append(image_encodings)
+
         ae_image_encodings = autoencoder(image_encodings)
 
         loss_img = criterion(ae_image_encodings, image_encodings)
-
         loss_img.backward()
-
         optimizer.step()
 
         total_loss += loss_img.item()
         pbar.set_postfix({'Loss': total_loss / (len(pbar) + 1)})
 
-    return total_loss / len(data_loader)
+    anchor_embeddings = torch.cat(anchor_embeddings, dim=0)
 
-def evaluate(data_loader, classifier, plumber, autoencoder, clip_model, class_prompts):
+    return total_loss / len(data_loader), anchor_embeddings
+
+@torch.no_grad()
+def evaluate(data_loader, classifier, plumber, autoencoder, anchor_embeddings, clip_model, class_prompts):
 
     plumber.set_eval_mode()
     autoencoder.eval()
@@ -180,7 +196,7 @@ def evaluate(data_loader, classifier, plumber, autoencoder, clip_model, class_pr
 
 
         image_encodings = plumber.encode_images(images_clip_batch)
-        ae_image_encodings = autoencoder(image_encodings)
+        ae_image_encodings = autoencoder(image_encodings, anchor=anchor_embeddings)
 
         proj_logits = plumber(images_clip_batch, class_prompts)
 
@@ -292,10 +308,10 @@ def learn_svm(val_features, val_labels, val_preds, test_features, test_labels, t
     
     return clf
 
-def get_features_preds(classifier, plumber, autoencoder, clip_model, val_loader, test_loader, class_prompts):
+def get_features_preds(classifier, plumber, autoencoder, anchor_embeddings, clip_model, val_loader, test_loader, class_prompts):
     
-    val_base_acc, val_plumber_acc, val_features, val_preds = evaluate(val_loader, classifier, plumber, autoencoder, clip_model, class_prompts)
-    test_base_acc, test_plumber_acc, test_features, test_preds = evaluate(test_loader, classifier, plumber, autoencoder, clip_model, class_prompts)
+    val_base_acc, val_plumber_acc, val_features, val_preds = evaluate(val_loader, classifier, plumber, autoencoder, anchor_embeddings, clip_model, class_prompts)
+    test_base_acc, test_plumber_acc, test_features, test_preds = evaluate(test_loader, classifier, plumber, autoencoder, anchor_embeddings, clip_model, class_prompts)
 
     return {
         # 'train': [train_features, train_preds],
@@ -350,45 +366,61 @@ def main(args):
                       img_projection=args.img_projection, txt_projection=args.txt_projection, 
                       img_prompting=args.img_prompting, cls_txt_prompts=args.cls_txt_prompts, 
                       dataset_txt_prompt=args.dataset_txt_prompt, is_mlp=args.is_mlp, device=args.device)
-    
+    plumber = plumber.to(args.device)
     if args.step1_checkpoint_path:
         plumber.load_checkpoint(args.step1_checkpoint_path)
     
     # Initialize the autoencoder
     
-    autoencoder = AutoEncoder(input_dim=args.projection_dim, min_embed_dim=128, output_dim=args.projection_dim,
+    autoencoder = AutoEncoder(input_dim=args.projection_dim, min_embed_dim=args.projection_dim, output_dim=args.projection_dim,
                                activation='relu', use_batch_norm=False, use_uq_wrapper=True)
     autoencoder = autoencoder.to(args.device)
-
-    # Define the loss function
-    criterion = nn.L1Loss()
-    
-    # Create the optimizer and scheduler
-    if args.optimizer == 'adam':
-        optimizer = torch.optim.Adam(autoencoder.parameters(), lr=args.learning_rate)
-    elif args.optimizer == 'sgd':
-        optimizer = torch.optim.SGD(autoencoder.parameters(), lr=args.learning_rate, momentum=0.9)
-    elif args.optimizer == 'adamw':
-        optimizer = torch.optim.AdamW(autoencoder.parameters(), lr=args.learning_rate)
-
-    start_epoch = 0
-    # Train the autoencoder
-    for epoch in range(start_epoch, args.num_epochs):
-        
-        train_loss = train_one_epoch(
-                                    val_loader, plumber, autoencoder, optimizer,
-                                    class_prompts, text_encodings, criterion, epoch)
-        #Save the autoencoder
-        torch.save(autoencoder.state_dict(), os.path.join(args.save_dir, f'autoencoder_{epoch}.pt'))
-
 
     # # Load the saved features and labels or create them
     if os.path.exists(os.path.join(args.save_dir, 'features', 'features_labels_dict.pkl')):
         with open(os.path.join(args.save_dir, 'features', 'features_labels_dict.pkl'), 'rb') as f:
             features_pred_dict = pickle.load(f)
     else:
-        features_pred_dict = get_features_preds(classifier, plumber, autoencoder, clip_model, 
-                                                failure_loader, test_loader, class_prompts, args)
+
+        # If autoencoder is available, load the weights
+        ae_checkpoint_path = os.path.join(args.save_dir, 'best_autoencoder_weights.pt')
+        if os.path.exists(ae_checkpoint_path):
+            autoencoder.load_state_dict(torch.load(ae_checkpoint_path))
+            print(f"Loaded autoencoder from {ae_checkpoint_path}")
+            anchor_embeddings = torch.load(os.path.join(args.save_dir, 'anchor_embeddings.pt'))
+        else:
+            # Define the loss function
+            criterion = nn.L1Loss()
+            # Create the optimizer and scheduler
+            if args.optimizer == 'adam':
+                optimizer = torch.optim.Adam(autoencoder.parameters(), lr=args.learning_rate)
+            elif args.optimizer == 'sgd':
+                optimizer = torch.optim.SGD(autoencoder.parameters(), lr=args.learning_rate, momentum=0.9)
+            elif args.optimizer == 'adamw':
+                optimizer = torch.optim.AdamW(autoencoder.parameters(), lr=args.learning_rate)
+
+            start_epoch = 0
+            best_loss = float('inf')
+            # Train the autoencoder
+            for epoch in range(start_epoch, args.num_epochs):
+                
+                train_loss, anchor_embeddings = train_one_epoch(
+                                                    val_loader, plumber, autoencoder, optimizer,
+                                                    class_prompts, text_encodings, criterion, epoch)
+                
+                if train_loss < best_loss:
+                    best_loss = train_loss
+                    print(f"Saving best autoencoder weights at epoch {epoch}")
+                    torch.save(autoencoder.state_dict(), os.path.join(args.save_dir, 'best_autoencoder_weights.pt'))
+            #Save the autoencoder
+            torch.save(autoencoder.state_dict(), os.path.join(args.save_dir, f'autoencoder_final.pt'))
+
+            # Save the anchor embeddings using pytorch
+            torch.save(anchor_embeddings, os.path.join(args.save_dir, 'anchor_embeddings.pt'))
+
+        # Get the features and predictions
+        features_pred_dict = get_features_preds(classifier, plumber, autoencoder, anchor_embeddings, clip_model, 
+                                                failure_loader, test_loader, class_prompts)
         # Save the features and the failure labels
         os.makedirs(os.path.join(args.save_dir, 'features'), exist_ok=True)
         with open(os.path.join(args.save_dir, 'features', 'features_labels_dict.pkl'), 'wb') as f:
@@ -404,10 +436,14 @@ def main(args):
     test_labels = np.asarray(features_pred_dict['test'][1]['gt_labels'])
     test_preds = np.asarray(features_pred_dict['test'][1]['classifier_preds'])
 
-    # Compute the differences between the projected features and the autoencoder projected features
+
+    val_proj_features = np.stack(val_proj_features, axis=0)
+    val_ae_proj_features = np.stack(val_ae_proj_features, axis=0)
+    test_proj_features = np.stack(test_proj_features, axis=0)
+    test_ae_proj_features = np.stack(test_ae_proj_features, axis=0)
+
     val_features = val_proj_features - val_ae_proj_features
     test_features = test_proj_features - test_ae_proj_features
-
 
     svm_fitter = learn_svm(val_features, val_labels, val_preds, test_features, test_labels, test_preds, args)
 
@@ -463,6 +499,9 @@ if __name__ == "__main__":
     parser.add_argument('--num_nodes', type=int, default=1, help='Number of nodes for DDP')
     parser.add_argument('--template_num', type=int, default=0, help='CLIP text prompt number')
 
+    parser.add_argument('--use_uq_wrapper', action='store_true', help='Whether to use uq_wrapper or not')
+    parser.add_argument('--svm_features', type=str, default='proj_ae', help='Features to use for SVM')
+
     args = parser.parse_args()
     device='cuda' if torch.cuda.is_available() else 'cpu'
     args.device = device
@@ -477,3 +516,39 @@ if __name__ == "__main__":
     seed_everything(args.seed)
 
     main(args)
+
+
+"""
+
+python train_auto_encoder.py \
+    --data_dir './data/' \
+    --domain_name "autumn" \
+    --dataset_name "NICOpp" \
+    --train_on_testset \
+    --num_classes 60 \
+    --batch_size 256 \
+    --seed 42 \
+    --img_size 224 \
+    --img_prompting \
+    --classifier_name "resnet18" \
+    --classifier_checkpoint_path "logs/NICOpp/failure_estimation/autumn/resnet18/classifier/checkpoint_99.pth" \
+    --step1_checkpoint_path "logs/NICOpp/failure_estimation/autumn/resnet18/plumber_img_prompt/_clsEpoch_99_bs_64_lr_0.1_teT_2.0_sT_1.0_imgweight_1.0_txtweight_1.0_is_mlp_False/step_1/best_projector_weights.pth" \
+    --clip_model_name "ViT-B/32" \
+    --prompt_path "data/NICOpp/NICOpp_CLIP_ViT-B_32_text_embeddings.pth" \
+    --n_promt_ctx 16 \
+    --num_epochs 30 \
+    --optimizer "sgd" \
+    --learning_rate 0.1 \
+    --val_freq 1 \
+    --prefix "" \
+    --proj_clip \
+    --projection_dim 512 \
+    --teacher_temp 2.0 \
+    --student_temp 1 \
+    --weight_img_loss 1.0 \
+    --weight_txt_loss 1.0 \
+    --num_gpus 1 \
+    --num_nodes 1 \
+    --use_uq_wrapper
+
+    """
