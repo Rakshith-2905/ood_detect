@@ -85,14 +85,10 @@ class AutoEncoder(nn.Module):
             current_dim = next_dim
             layer_idx += 1
 
-        # When current dim is equal to the min_embd_dim
-        if current_dim == min_embed_dim:
+        # When input dim is equal to the min_embd_dim (i.e. no reduction)
+        if input_dim == min_embed_dim:
             self.encoder.add_module(f'encoder_layer_{layer_idx}', 
                                     self._make_layer(activation, current_dim, min_embed_dim, use_batch_norm))
-
-        # Optionally wrap the encoder with uq_wrapper
-        if use_uq_wrapper:
-            self.encoder = uq_wrapper(self.encoder)
 
         # Build decoder
         layer_idx = 0
@@ -104,13 +100,22 @@ class AutoEncoder(nn.Module):
             current_dim = next_dim
             layer_idx += 1
         
-        # When current dim is equal to the output_dim
-        if current_dim == output_dim:
+        # When min embed dim is equal to the output_dim (i.e. no expansion)
+        if min_embed_dim == output_dim:
             self.decoder.add_module(f'decoder_layer_{layer_idx}', 
                                     self._make_layer(activation, current_dim, output_dim, use_batch_norm))
+            
 
-        print("Encoder:", self.encoder)
-        print("Decoder:", self.decoder)
+        # # merge encoder and decoder
+        # self.AE = nn.Sequential(
+        #     self.encoder,
+        #     self.decoder
+        # )
+
+        if use_uq_wrapper:
+            self.encoder = uq_wrapper(self.encoder)
+
+        print("AutoEncoder Architecture: ", self.encoder, self.decoder)
 
     def _make_layer(self, activation, input_dim, output_dim, use_batch_norm):
         layers = []
@@ -127,11 +132,12 @@ class AutoEncoder(nn.Module):
             raise NotImplementedError("Only 'relu', 'sigmoid', and 'identity' activations are supported")
         return nn.Sequential(*layers)
 
-    def forward(self, x, anchor=None):
-        encoded = self.encoder(x, anchor)
+    def forward(self, x, anchor=None, n_anchors=1):
+        encoded = self.encoder(x, anchor, n_anchors=n_anchors)
         decoded = self.decoder(encoded)
-        return decoded
 
+        return decoded
+    
 def train_one_epoch(data_loader, plumber, autoencoder, optimizer,
                     class_prompts, text_encodings_raw, criterion, epoch):
 
@@ -147,7 +153,11 @@ def train_one_epoch(data_loader, plumber, autoencoder, optimizer,
 
         optimizer.zero_grad()
 
-        image_encodings = plumber.encode_images(images_clip_batch)
+        if 'clip' in args.svm_features:
+            image_encodings = plumber.clip_model.encode_image(images_clip_batch).float()
+        else:
+            image_encodings = plumber.encode_images(images_clip_batch)
+
 
         if len(anchor_embeddings) < 3:
             anchor_embeddings.append(image_encodings)
@@ -170,6 +180,7 @@ def evaluate(data_loader, classifier, plumber, autoencoder, anchor_embeddings, c
 
     plumber.set_eval_mode()
     autoencoder.eval()
+    classifier.eval()
 
     gt_labels = []
     classifier_preds = []
@@ -194,9 +205,12 @@ def evaluate(data_loader, classifier, plumber, autoencoder, anchor_embeddings, c
 
         clip_raw_embeddings = clip_model.encode_image(images_clip_batch).float() # (batch_size, embedding_dim)
 
+        if 'clip' in args.svm_features:
+            image_encodings = plumber.clip_model.encode_image(images_clip_batch).float()
+        else:
+            image_encodings = plumber.encode_images(images_clip_batch)
 
-        image_encodings = plumber.encode_images(images_clip_batch)
-        ae_image_encodings = autoencoder(image_encodings, anchor=anchor_embeddings)
+        ae_image_encodings = autoencoder(image_encodings, anchor=anchor_embeddings, n_anchors=10)
 
         proj_logits = plumber(images_clip_batch, class_prompts)
 
@@ -204,19 +218,23 @@ def evaluate(data_loader, classifier, plumber, autoencoder, anchor_embeddings, c
         total_plumber_acc += compute_accuracy(proj_logits, labels)
 
         gt_labels.extend(labels.cpu().numpy())
-        classifier_preds.extend(torch.argmax(classifier_logits, dim=1).cpu().numpy())
-        proj_preds.extend(torch.argmax(proj_logits, dim=1).cpu().numpy())
+        classifier_probs = F.softmax(classifier_logits, dim=1)
+        classifier_preds.extend(torch.argmax(classifier_probs, dim=1).cpu().numpy())
+
+        proj_probs = F.softmax(proj_logits, dim=1)
+        proj_preds.extend(torch.argmax(proj_probs, dim=1).cpu().numpy())
         
         classifier_features.extend(classifier_embeddings.cpu().numpy())
         clip_features.extend(clip_raw_embeddings.cpu().numpy())
         proj_features.extend(image_encodings.cpu().numpy())
         ae_proj_features.extend(ae_image_encodings.cpu().numpy())
 
+    ae_feature_type = 'proj' if 'proj' in args.svm_features else 'clip'
     features = {
         'classifier_features': classifier_features,
         'clip_features': clip_features,
         'proj_features': proj_features,
-        'ae_proj_features': ae_proj_features
+        f'ae_{ae_feature_type}_features': ae_proj_features
     }
     predictions = {
         'gt_labels': gt_labels,
@@ -246,6 +264,12 @@ def learn_svm(val_features, val_labels, val_preds, test_features, test_labels, t
     # # Number of unique values in val_correct
     # print(f"Unique values in val_correct: {np.unique(val_correct)}")
     print("Number of correct predictions in validation set: ", np.sum(val_correct))
+    print("Number of correct predictions in test set: ", np.sum(test_correct))
+
+
+    # Print Accuracy
+    print(f"Validation Accuracy: {np.sum(val_correct)/len(val_correct)*100:.2f}%")
+    print(f"Test Accuracy: {np.sum(test_correct)/len(test_correct)*100:.2f}%")
 
     # Scale the features
     scaler = StandardScaler()
@@ -273,6 +297,8 @@ def learn_svm(val_features, val_labels, val_preds, test_features, test_labels, t
 
     cm = confusion_matrix(test_correct, test_correct_preds)
     class_level_acc = cm.diagonal()/cm.sum(axis=1)
+
+    print("Number of failure and sucess samples in test", cm.sum(axis=1))
 
     estimated_accuracy = np.sum(test_correct_preds)/len(test_correct_preds) # Estimated accuracy from SVM for correct prediction
     task_model_accuracy = np.sum(test_correct)/len(test_correct) # Actuall prediction accuracy
@@ -372,22 +398,28 @@ def main(args):
     
     # Initialize the autoencoder
     
-    autoencoder = AutoEncoder(input_dim=args.projection_dim, min_embed_dim=args.projection_dim, output_dim=args.projection_dim,
+    autoencoder = AutoEncoder(input_dim=args.projection_dim, min_embed_dim=args.projection_dim//2, output_dim=args.projection_dim,
                                activation='relu', use_batch_norm=False, use_uq_wrapper=True)
     autoencoder = autoencoder.to(args.device)
 
+    feature_type = 'proj' if 'proj' in args.svm_features else 'clip'
+
     # # Load the saved features and labels or create them
-    if os.path.exists(os.path.join(args.save_dir, 'features', 'features_labels_dict.pkl')):
-        with open(os.path.join(args.save_dir, 'features', 'features_labels_dict.pkl'), 'rb') as f:
+    features_path = os.path.join(args.save_dir, 'features', f'{feature_type}_features_labels_dict.pkl')
+    if os.path.exists(features_path):
+        with open(features_path, 'rb') as f:
             features_pred_dict = pickle.load(f)
     else:
-
-        # If autoencoder is available, load the weights
-        ae_checkpoint_path = os.path.join(args.save_dir, 'best_autoencoder_weights.pt')
+        # If the user passes the path to the autoencoder weights, load them: This is useful when dealing with multiple domains
+        if args.ae_checkpoint_path:
+            ae_checkpoint_path = args.ae_checkpoint_path
+        else:
+            # If autoencoder is available, load the weights
+            ae_checkpoint_path = os.path.join(args.save_dir, f'{feature_type}_best_autoencoder_weights.pt')
         if os.path.exists(ae_checkpoint_path):
             autoencoder.load_state_dict(torch.load(ae_checkpoint_path))
             print(f"Loaded autoencoder from {ae_checkpoint_path}")
-            anchor_embeddings = torch.load(os.path.join(args.save_dir, 'anchor_embeddings.pt'))
+            anchor_embeddings = torch.load(os.path.join(args.save_dir, f'{args.svm_features}_anchor_embeddings.pt'))
         else:
             # Define the loss function
             criterion = nn.L1Loss()
@@ -411,28 +443,28 @@ def main(args):
                 if train_loss < best_loss:
                     best_loss = train_loss
                     print(f"Saving best autoencoder weights at epoch {epoch}")
-                    torch.save(autoencoder.state_dict(), os.path.join(args.save_dir, 'best_autoencoder_weights.pt'))
+                    torch.save(autoencoder.state_dict(), os.path.join(args.save_dir, f'{feature_type}_best_autoencoder_weights.pt'))
             #Save the autoencoder
-            torch.save(autoencoder.state_dict(), os.path.join(args.save_dir, f'autoencoder_final.pt'))
+            torch.save(autoencoder.state_dict(), os.path.join(args.save_dir, f'{feature_type}_autoencoder_final.pt'))
 
             # Save the anchor embeddings using pytorch
-            torch.save(anchor_embeddings, os.path.join(args.save_dir, 'anchor_embeddings.pt'))
+            torch.save(anchor_embeddings, os.path.join(args.save_dir, f'{feature_type}_anchor_embeddings.pt'))
 
         # Get the features and predictions
         features_pred_dict = get_features_preds(classifier, plumber, autoencoder, anchor_embeddings, clip_model, 
                                                 failure_loader, test_loader, class_prompts)
         # Save the features and the failure labels
         os.makedirs(os.path.join(args.save_dir, 'features'), exist_ok=True)
-        with open(os.path.join(args.save_dir, 'features', 'features_labels_dict.pkl'), 'wb') as f:
+        with open(features_path, 'wb') as f:
             pickle.dump(features_pred_dict, f)
-    
-    val_proj_features = features_pred_dict['val'][0]['proj_features']
-    val_ae_proj_features = features_pred_dict['val'][0]['ae_proj_features']
+
+    val_proj_features = features_pred_dict['val'][0][f'{feature_type}_features']
+    val_ae_proj_features = features_pred_dict['val'][0][f'ae_{feature_type}_features']
     val_labels = np.asarray(features_pred_dict['val'][1]['gt_labels'])
     val_preds = np.asarray(features_pred_dict['val'][1]['classifier_preds'])
 
-    test_proj_features = features_pred_dict['test'][0]['proj_features']
-    test_ae_proj_features = features_pred_dict['test'][0]['ae_proj_features']
+    test_proj_features = features_pred_dict['test'][0][f'{feature_type}_features']
+    test_ae_proj_features = features_pred_dict['test'][0][f'ae_{feature_type}_features']
     test_labels = np.asarray(features_pred_dict['test'][1]['gt_labels'])
     test_preds = np.asarray(features_pred_dict['test'][1]['classifier_preds'])
 
@@ -442,8 +474,12 @@ def main(args):
     test_proj_features = np.stack(test_proj_features, axis=0)
     test_ae_proj_features = np.stack(test_ae_proj_features, axis=0)
 
-    val_features = val_proj_features - val_ae_proj_features
-    test_features = test_proj_features - test_ae_proj_features
+    if 'ae_residual' in args.svm_features:
+        val_features = val_proj_features - val_ae_proj_features
+        test_features = test_proj_features - test_ae_proj_features
+    else:
+        val_features = val_ae_proj_features
+        test_features = test_ae_proj_features
 
     svm_fitter = learn_svm(val_features, val_labels, val_preds, test_features, test_labels, test_preds, args)
 
@@ -501,6 +537,7 @@ if __name__ == "__main__":
 
     parser.add_argument('--use_uq_wrapper', action='store_true', help='Whether to use uq_wrapper or not')
     parser.add_argument('--svm_features', type=str, default='proj_ae', help='Features to use for SVM')
+    parser.add_argument('--ae_checkpoint_path', type=str, help='Path to the autoencoder checkpoint')
 
     args = parser.parse_args()
     device='cuda' if torch.cuda.is_available() else 'cpu'
@@ -529,10 +566,10 @@ python train_auto_encoder.py \
     --batch_size 256 \
     --seed 42 \
     --img_size 224 \
-    --img_prompting \
+    --img_projection \
     --classifier_name "resnet18" \
     --classifier_checkpoint_path "logs/NICOpp/failure_estimation/autumn/resnet18/classifier/checkpoint_99.pth" \
-    --step1_checkpoint_path "logs/NICOpp/failure_estimation/autumn/resnet18/plumber_img_prompt/_clsEpoch_99_bs_64_lr_0.1_teT_2.0_sT_1.0_imgweight_1.0_txtweight_1.0_is_mlp_False/step_1/best_projector_weights.pth" \
+    --step1_checkpoint_path "logs/NICOpp/failure_estimation/autumn/resnet18/plumber_img_proj/_clsEpoch_99_bs_64_lr_0.1_teT_2.0_sT_1.0_imgweight_1.0_txtweight_1.0_is_mlp_False/step_1/best_projector_weights.pth" \
     --clip_model_name "ViT-B/32" \
     --prompt_path "data/NICOpp/NICOpp_CLIP_ViT-B_32_text_embeddings.pth" \
     --n_promt_ctx 16 \
@@ -549,6 +586,7 @@ python train_auto_encoder.py \
     --weight_txt_loss 1.0 \
     --num_gpus 1 \
     --num_nodes 1 \
-    --use_uq_wrapper
+    --use_uq_wrapper \
+    --svm_features "proj_ae"
 
     """

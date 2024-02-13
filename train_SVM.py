@@ -452,6 +452,7 @@ def learn_svm(val_features, val_labels, val_preds, test_features, test_labels, t
     # # Number of unique values in val_correct
     # print(f"Unique values in val_correct: {np.unique(val_correct)}")
     print("Number of correct predictions in validation set: ", np.sum(val_correct))
+    print("Number of correct predictions in test set: ", np.sum(test_correct))
 
     # Scale the features
     scaler = StandardScaler()
