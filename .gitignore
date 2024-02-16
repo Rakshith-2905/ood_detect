@@ -109,3 +109,11 @@ prompts/text_embeddings.pth
 *.zip
 *.csv
 events*
+cifar10_dataset
+*.meta
+*.json
+*.gz
+*_batch_*
+*_batch
+*.txt
+
