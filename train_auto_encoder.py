@@ -61,7 +61,7 @@ def get_save_dir(args):
         save_dir = os.path.join(save_dir, f'{args.domain_name}')
     
     if args.use_uq_wrapper:
-        save_dir = os.path.join(save_dir, 'uq_AE')
+        save_dir = os.path.join(save_dir, 'uq_AE_2_layer')
     else:
         save_dir = os.path.join(save_dir, 'AE')    
 
@@ -105,15 +105,17 @@ class AutoEncoder(nn.Module):
             self.decoder.add_module(f'decoder_layer_{layer_idx}', 
                                     self._make_layer(activation, current_dim, output_dim, use_batch_norm))
             
+        # if use_uq_wrapper:
+        #     self.encoder = uq_wrapper(self.encoder)
 
-        # # merge encoder and decoder
-        # self.AE = nn.Sequential(
-        #     self.encoder,
-        #     self.decoder
-        # )
+        # merge encoder and decoder
+        self.AE = nn.Sequential(
+            self.encoder,
+            self.decoder
+        )
 
         if use_uq_wrapper:
-            self.encoder = uq_wrapper(self.encoder)
+            self.AE = uq_wrapper(self.AE)
 
         print("AutoEncoder Architecture: ", self.encoder, self.decoder)
 
@@ -132,9 +134,18 @@ class AutoEncoder(nn.Module):
             raise NotImplementedError("Only 'relu', 'sigmoid', and 'identity' activations are supported")
         return nn.Sequential(*layers)
 
-    def forward(self, x, anchor=None, n_anchors=1):
-        encoded = self.encoder(x, anchor, n_anchors=n_anchors)
-        decoded = self.decoder(encoded)
+    def forward(self, x, anchor=None, n_anchors=1, return_std=False):
+
+        if return_std:
+            # encoded, std = self.encoder(x, anchors=anchor, n_anchors=n_anchors, return_std=return_std)
+            # decoded = self.decoder(encoded)
+            decoded, std = self.AE(x, anchor, n_anchors=n_anchors, return_std=return_std)
+            return decoded, std
+        
+        # encoded = self.encoder(x, anchor, n_anchors=n_anchors)
+        # decoded = self.decoder(encoded)
+
+        decoded = self.AE(x, anchor, n_anchors=n_anchors)
 
         return decoded
     
@@ -194,7 +205,7 @@ def evaluate(data_loader, classifier, plumber, autoencoder, anchor_embeddings, c
     total_base_model_acc = 0
     total_plumber_acc = 0
     
-
+    std_list = []
     pbar = tqdm(data_loader, desc=f"Evaluating", ncols=0)
     for images_batch, labels, images_clip_batch in pbar:
         images_batch = images_batch.to(device)
@@ -210,8 +221,8 @@ def evaluate(data_loader, classifier, plumber, autoencoder, anchor_embeddings, c
         else:
             image_encodings = plumber.encode_images(images_clip_batch)
 
-        ae_image_encodings = autoencoder(image_encodings, anchor=anchor_embeddings, n_anchors=10)
-
+        ae_image_encodings, stds = autoencoder(image_encodings, anchor=anchor_embeddings, n_anchors=10, return_std=True)
+        std_list.append(stds)
         proj_logits = plumber(images_clip_batch, class_prompts)
 
         total_base_model_acc += compute_accuracy(classifier_logits, labels)
@@ -247,6 +258,18 @@ def evaluate(data_loader, classifier, plumber, autoencoder, anchor_embeddings, c
 
     print(f"Base model accuracy: {total_base_model_acc*100:.2f}%, Plumber accuracy: {total_plumber_acc*100:.2f}%")
 
+    # std_summed = torch.cat(std_list, dim=0).mean(dim=1)
+
+    # print(std_summed.shape)
+    # # Plot the stds as a histogram
+    # plt.hist(std_summed.cpu().numpy(), bins=50)
+    # plt.xlabel('Mean of stds')
+    # plt.ylabel('Frequency')
+    # plt.title('Mean of stds')
+    # plt.savefig(f'sum_of_stds.png')
+    # plt.close()
+
+    print(class_prompts)
     return total_base_model_acc, total_plumber_acc, features, predictions
 
 def learn_svm(val_features, val_labels, val_preds, test_features, test_labels, test_preds, args):
@@ -277,12 +300,17 @@ def learn_svm(val_features, val_labels, val_preds, test_features, test_labels, t
     val_features = scaler.transform(val_features)
     test_features = scaler.transform(test_features)
 
+    if args.svm_checkpoint_path:
+        svm_checkpoint_path = args.svm_checkpoint_path
+    else:
+        svm_checkpoint_path = os.path.join(args.save_dir, f'{args.svm_features}_single_svm_model.pkl')
+
     # Fit SVM is not saved
-    if not os.path.exists(os.path.join(args.save_dir, f'{args.svm_features}_single_svm_model.pkl')):
+    if not os.path.exists(svm_checkpoint_path):
         clf = svm.SVC(kernel='linear', class_weight='balanced')
         clf.fit(val_features, val_correct)
     else:
-        with open(os.path.join(args.save_dir, f'{args.svm_features}_single_svm_model.pkl'), 'rb') as f:
+        with open(svm_checkpoint_path, 'rb') as f:
             clf = pickle.load(f)
 
     test_correct_preds = clf.predict(test_features)
@@ -321,7 +349,11 @@ def learn_svm(val_features, val_labels, val_preds, test_features, test_labels, t
             out_metrics[key] = value.tolist()
 
     # Save the JSON
-    with open(os.path.join(args.save_dir, f'{args.svm_features}_metrics_single_svm.json'), 'w') as f:
+    metrics_path = os.path.join(args.save_dir, f'{args.svm_features}_metrics_single_svm.json')
+    if args.svm_checkpoint_path:
+        metrics_path = os.path.join(args.save_dir, f'{args.svm_features}_metrics_single_svm_src.json')
+
+    with open(metrics_path, 'w') as f:
         json.dump(out_metrics, f)
 
     # Print and log metrics
@@ -339,11 +371,99 @@ def get_features_preds(classifier, plumber, autoencoder, anchor_embeddings, clip
     val_base_acc, val_plumber_acc, val_features, val_preds = evaluate(val_loader, classifier, plumber, autoencoder, anchor_embeddings, clip_model, class_prompts)
     test_base_acc, test_plumber_acc, test_features, test_preds = evaluate(test_loader, classifier, plumber, autoencoder, anchor_embeddings, clip_model, class_prompts)
 
+    assert False
     return {
         # 'train': [train_features, train_preds],
         'val': [val_features, val_preds],
         'test': [test_features, test_preds]
     }
+
+failure_caption_data_name_map = {
+    'cifar10': 'CIFAR',
+    'cifar10-c': 'CIFAR',
+    'cifar10-limited': 'CIFAR',
+    'CelebA': 'CELEBA',
+    'cifar100': 'CIFAR100',
+    'imagenet': 'IMAGENET',
+}
+
+def get_caption_scores_(plumber, captions, reference_caption, svm_fitter):
+    caption_latent = plumber.encode_text_batch(captions)
+    reference_latent = plumber.encode_text_batch([reference_caption])[0]
+    latent = caption_latent - reference_latent
+
+    out_mask = svm_fitter.predict(latent)
+    decisions = svm_fitter.decision_function(latent)
+
+    return decisions, caption_latent, out_mask
+
+def caption_failure_modes(args, svm_fitter, plumber):
+    data_name = failure_caption_data_name_map[args.dataset_name]
+    captions = get_caption_set(data_name)
+
+    clip_model, clip_transform = clip.load(args.clip_model_name)
+
+    train_dataset, val_dataset, test_dataset, failure_dataset, class_names = get_dataset(args.dataset_name, None, None, 
+                                                                data_dir=args.data_dir, clip_transform=clip_transform, 
+                                                                img_size=args.img_size, domain_name=args.domain_name, severity=args.severity,
+                                                                return_failure_set=True)
+    
+
+    print(f"Using {args.dataset_name} dataset")
+
+    captions_set_all = []
+    if args.dataset_name == 'CelebA':
+        class_names = ["person", "person"]
+        captions_set_all.extend(captions[class_names[0]]['all'])
+    else:
+        for i in range(len(class_names)):
+            captions_set_all.extend(captions[class_names[i]]['all'])
+
+        
+    selected_captions = []    
+    topk_caption_decisions_cls = {}
+
+    for target_c in range(len(class_names)):
+        target_c_name = class_names[target_c]
+        caption_set = captions[target_c_name]['all'] # All captions noun adjective prepositions for the target class
+        reference = captions['reference'][target_c] # Class prompts for the target class
+        # decisions, _, mask = svm_wrapper.get_caption_scores(plumber=plumber,
+        #                                               captions=caption_set,
+        #                                               reference_caption=reference,
+        #                                               svm_fitter=svm_fitter,
+        #                                               target_c=target_c)
+        
+        decisions, _, mask = get_caption_scores_(plumber, caption_set, reference, svm_fitter)
+        
+        # Sort the captions based on the decisions
+        sorted_indices = np.argsort(decisions)
+        sorted_decisions = decisions[sorted_indices]
+        sorted_captions = np.asarray(caption_set)[sorted_indices]
+        
+        sorted_captions = sorted_captions.tolist()
+        sorted_decisions = sorted_decisions.tolist()
+
+        print(f"Number of unique decisions: {np.unique(mask)}")
+        topk_caption_decisions_cls[target_c] = {
+            'Failure': {
+                'captions': sorted_captions[:10],
+                'decisions': sorted_decisions[:10]
+            },
+            'Success': {
+                'captions': sorted_captions[-10:],
+                'decisions': sorted_decisions[-10:]
+            }
+        }
+
+        selected_captions.append((
+            caption_set[np.argmin(decisions)],
+            caption_set[np.argmax(decisions)], np.min(decisions), np.max(decisions)))
+    
+    # Save the topk_caption_decisions_cls captions
+    with open(os.path.join(args.save_dir, f'{args.svm_features}_topk_caption_decisions_single_svm.json'), 'w') as f:
+        json.dump(topk_caption_decisions_cls, f)
+    print(topk_caption_decisions_cls)
+    print(f"Selected captions: {selected_captions}")
 
 def main(args):
     
@@ -393,12 +513,15 @@ def main(args):
                       img_prompting=args.img_prompting, cls_txt_prompts=args.cls_txt_prompts, 
                       dataset_txt_prompt=args.dataset_txt_prompt, is_mlp=args.is_mlp, device=args.device)
     plumber = plumber.to(args.device)
-    if args.step1_checkpoint_path:
+    if args.step1_checkpoint_path and os.path.exists(args.step1_checkpoint_path):
         plumber.load_checkpoint(args.step1_checkpoint_path)
+        print(f"Loaded PLUMBER from {args.step1_checkpoint_path}")
+    else:
+        print(f"PLUMBER checkpoint not found at {args.step1_checkpoint_path}")
     
     # Initialize the autoencoder
     
-    autoencoder = AutoEncoder(input_dim=args.projection_dim, min_embed_dim=args.projection_dim//2, output_dim=args.projection_dim,
+    autoencoder = AutoEncoder(input_dim=args.projection_dim, min_embed_dim=args.ae_dim, output_dim=args.projection_dim,
                                activation='relu', use_batch_norm=False, use_uq_wrapper=True)
     autoencoder = autoencoder.to(args.device)
 
@@ -413,13 +536,17 @@ def main(args):
         # If the user passes the path to the autoencoder weights, load them: This is useful when dealing with multiple domains
         if args.ae_checkpoint_path:
             ae_checkpoint_path = args.ae_checkpoint_path
+            if feature_type not in args.ae_checkpoint_path:
+                assert False, f"Autoencoder checkpoint path {ae_checkpoint_path} does not match the feature type {feature_type}"
+            anchor_checkpoint_path = os.path.join(os.path.dirname(ae_checkpoint_path), f'{feature_type}_anchor_embeddings.pt')
         else:
             # If autoencoder is available, load the weights
             ae_checkpoint_path = os.path.join(args.save_dir, f'{feature_type}_best_autoencoder_weights.pt')
+            anchor_checkpoint_path = os.path.join(args.save_dir, f'{feature_type}_anchor_embeddings.pt')
         if os.path.exists(ae_checkpoint_path):
             autoencoder.load_state_dict(torch.load(ae_checkpoint_path))
             print(f"Loaded autoencoder from {ae_checkpoint_path}")
-            anchor_embeddings = torch.load(os.path.join(args.save_dir, f'{args.svm_features}_anchor_embeddings.pt'))
+            anchor_embeddings = torch.load(anchor_checkpoint_path)
         else:
             # Define the loss function
             criterion = nn.L1Loss()
@@ -433,6 +560,7 @@ def main(args):
 
             start_epoch = 0
             best_loss = float('inf')
+            train_losses = []
             # Train the autoencoder
             for epoch in range(start_epoch, args.num_epochs):
                 
@@ -440,6 +568,16 @@ def main(args):
                                                     val_loader, plumber, autoencoder, optimizer,
                                                     class_prompts, text_encodings, criterion, epoch)
                 
+                train_losses.append(train_loss)
+
+                # Plot the loss and save 
+                plt.plot(train_losses)
+                plt.xlabel('Epoch')
+                plt.ylabel('Loss')
+                plt.title(f'Autoencoder Train Loss')
+                plt.savefig(os.path.join(args.save_dir, f'{feature_type}_autoencoder_train_loss.png'))
+                plt.close()
+
                 if train_loss < best_loss:
                     best_loss = train_loss
                     print(f"Saving best autoencoder weights at epoch {epoch}")
@@ -536,7 +674,9 @@ if __name__ == "__main__":
     parser.add_argument('--template_num', type=int, default=0, help='CLIP text prompt number')
 
     parser.add_argument('--use_uq_wrapper', action='store_true', help='Whether to use uq_wrapper or not')
+    parser.add_argument('--ae_dim', type=int, default=128, help='Dimension of the reduced autoencoder features')
     parser.add_argument('--svm_features', type=str, default='proj_ae', help='Features to use for SVM')
+    parser.add_argument('--svm_checkpoint_path', type=str, help='Path to the SVM checkpoint')
     parser.add_argument('--ae_checkpoint_path', type=str, help='Path to the autoencoder checkpoint')
 
     args = parser.parse_args()
@@ -552,6 +692,10 @@ if __name__ == "__main__":
 
     seed_everything(args.seed)
 
+    # Save the args to a file
+    with open(os.path.join(args.save_dir, 'args.txt'), 'w') as f:
+        f.write(str(args))
+
     main(args)
 
 
@@ -559,17 +703,17 @@ if __name__ == "__main__":
 
 python train_auto_encoder.py \
     --data_dir './data/' \
-    --domain_name "autumn" \
+    --domain_name "water" \
     --dataset_name "NICOpp" \
     --train_on_testset \
     --num_classes 60 \
     --batch_size 256 \
     --seed 42 \
     --img_size 224 \
-    --img_projection \
+    --img_prompt \
     --classifier_name "resnet18" \
     --classifier_checkpoint_path "logs/NICOpp/failure_estimation/autumn/resnet18/classifier/checkpoint_99.pth" \
-    --step1_checkpoint_path "logs/NICOpp/failure_estimation/autumn/resnet18/plumber_img_proj/_clsEpoch_99_bs_64_lr_0.1_teT_2.0_sT_1.0_imgweight_1.0_txtweight_1.0_is_mlp_False/step_1/best_projector_weights.pth" \
+    --step1_checkpoint_path "logs/NICOpp/failure_estimation/autumn/resnet18/plumber_img_prompt/_clsEpoch_99_bs_64_lr_0.1_teT_2.0_sT_1.0_imgweight_1.0_txtweight_1.0_is_mlp_False/step_1/best_projector_weights.pth" \
     --clip_model_name "ViT-B/32" \
     --prompt_path "data/NICOpp/NICOpp_CLIP_ViT-B_32_text_embeddings.pth" \
     --n_promt_ctx 16 \
@@ -587,6 +731,8 @@ python train_auto_encoder.py \
     --num_gpus 1 \
     --num_nodes 1 \
     --use_uq_wrapper \
-    --svm_features "proj_ae"
+    --svm_features "clip_ae" \
+    --ae_checkpoint_path logs/NICOpp/failure_estimation/autumn/resnet18/plumber_img_prompt/_clsEpoch_99_bs_64_lr_0.1_teT_2.0_sT_1.0_imgweight_1.0_txtweight_1.0_is_mlp_False/step_1/AE-failure_detector/autumn/uq_AE/clip_best_autoencoder_weights.pt
+
 
     """

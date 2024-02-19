@@ -460,12 +460,18 @@ def learn_svm(val_features, val_labels, val_preds, test_features, test_labels, t
     val_features = scaler.transform(val_features)
     test_features = scaler.transform(test_features)
 
+    if args.svm_checkpoint_path:
+        svm_checkpoint_path = args.svm_checkpoint_path
+    else:
+        svm_checkpoint_path = os.path.join(args.save_dir, f'{args.svm_features}_single_svm_model.pkl')
+
     # Fit SVM is not saved
-    if not os.path.exists(os.path.join(args.save_dir, f'{args.svm_features}_single_svm_model.pkl')):
+    if not os.path.exists(svm_checkpoint_path):
         clf = svm.SVC(kernel='linear', class_weight='balanced')
         clf.fit(val_features, val_correct)
     else:
-        with open(os.path.join(args.save_dir, f'{args.svm_features}_single_svm_model.pkl'), 'rb') as f:
+        print(f"Loading SVM model from {svm_checkpoint_path}")
+        with open(svm_checkpoint_path, 'rb') as f:
             clf = pickle.load(f)
 
     # clf = svm.SVC(kernel='linear', class_weight='balanced')
@@ -505,7 +511,11 @@ def learn_svm(val_features, val_labels, val_preds, test_features, test_labels, t
             out_metrics[key] = value.tolist()
 
     # Save the JSON
-    with open(os.path.join(args.save_dir, f'{args.svm_features}_metrics_single_svm.json'), 'w') as f:
+    metrics_path = os.path.join(args.save_dir, f'{args.svm_features}_metrics_single_svm.json')
+    if args.svm_checkpoint_path:
+        metrics_path = os.path.join(args.save_dir, f'{args.svm_features}_metrics_single_svm_src.json')
+
+    with open(metrics_path, 'w') as f:
         json.dump(out_metrics, f)
 
     # Print and log metrics
@@ -619,6 +629,7 @@ if __name__ == "__main__":
     parser.add_argument('--template_num', type=int, default=0, help='CLIP text prompt number')
 
     parser.add_argument('--svm_features', type=str, default='proj_features', choices=['proj_features', 'clip_features', 'classifier_features'], help='Features to use for SVM')
+    parser.add_argument('--svm_checkpoint_path', type=str, help='Path to the checkpoint to load the SVM model from')
 
     args = parser.parse_args()
     device='cuda' if torch.cuda.is_available() else 'cpu'
