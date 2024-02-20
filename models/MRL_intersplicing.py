@@ -1,6 +1,8 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import copy
+
 
 def print_layer_output_sizes(model, input_size):
     hooks = []
@@ -177,6 +179,112 @@ class FeatureReplacementWrapper(nn.Module):
         self.z_vector = None  # Reset the z vector after use to prevent unintended reuse
         return result
 
+
+class FeatureReplacementWrapper(nn.Module):
+    def __init__(self, original_model, replace_layer_names, matryoshka_network, replacement_percentage=50, loss_layers=[], loss_fn=nn.MSELoss()):
+        super(FeatureReplacementWrapper, self).__init__()
+        self.original_model = original_model
+        self.matryoshka_model = copy.deepcopy(original_model)  # Clone for modifications
+        self.replace_layer_names = replace_layer_names
+        self.matryoshka_network = matryoshka_network
+        self.replacement_percentage = replacement_percentage
+        self.loss_layers = set(loss_layers)  # For loss computation
+        self.z_vector = None
+        self.feature_maps_original = {}  # Features from the original model
+        self.feature_maps_matryoshka = {}  # Features from the matryoshka model before replacement
+        
+        self.loss_fn = loss_fn
+        self.current_hook_index = 0  # Counter for the hook index
+        self._register_hooks()
+
+    def _register_hooks(self):
+        # Iterate through the original model to register capture hooks
+        for name, module in self.original_model.named_modules():
+            if name in self.loss_layers:
+                module.register_forward_hook(self._capture_hook_fn(name, self.feature_maps_original))
+        
+        # Iterate through the matryoshka model to register both capture and replacement hooks
+        for name, module in self.matryoshka_model.named_modules():
+            if name in self.loss_layers:
+                module.register_forward_hook(self._capture_hook_fn(name, self.feature_maps_matryoshka))
+            if name in self.replace_layer_names:
+                module.register_forward_hook(self._replacement_hook_fn())
+
+    def _capture_hook_fn(self, layer_name, feature_map_dict):
+        def hook(module, input, output):
+            # Capture the output features before any potential replacement
+            feature_map_dict[layer_name] = output.detach()
+        return hook
+
+    def _replacement_hook_fn(self):
+        def hook(module, input, output):
+            # Perform feature replacement on the output
+            return self._replace_features(output)
+        return hook
+
+    def _replace_features(self, output):
+        if self.z_vector is None:
+            raise ValueError("z vector is not set. Please provide a z vector before forward pass.")
+
+        matryoshka_features = self.matryoshka_features[self.current_hook_index]
+
+        print(f"Output shape: {output.shape}, Matryoshka shape: {matryoshka_features.shape}")
+
+        num_features = output.shape[1]  # Assuming the output shape is [batch_size, channels, H, W]
+        num_replace = int(num_features * (self.replacement_percentage / 100.0))  # Calculate how many to replace
+
+        indices_to_replace = torch.randperm(num_features)[:num_replace]
+
+        # Replace the selected features
+        modified_output = output.clone()  # Clone to avoid modifying the original output in-place
+        for i, idx in enumerate(indices_to_replace):
+            
+            if len(matryoshka_features.shape) == 4:  # If matryoshka_features include spatial dimensions
+                modified_output[:, idx, :, :] = matryoshka_features[:, idx, :, :]
+            else:  # If matryoshka_features are flat (no spatial dimensions)
+                modified_output[:, idx] = matryoshka_features[:, idx]
+
+        self.current_hook_index += 1  # Increment the hook index for the next layer
+
+        return modified_output
+
+    def compute_loss(self):
+        loss = 0
+        for layer in self.loss_layers:
+            original_features = self.feature_maps_original.get(layer)
+            matryoshka_features = self.feature_maps_matryoshka.get(layer)
+            if original_features is not None and matryoshka_features is not None:
+                # If the size of the feature maps is different assert the error
+                assert original_features.size() == matryoshka_features.size(), \
+                    f"Feature map sizes for layer {layer} do not match: {original_features.size()} != {matryoshka_features.size()}"
+                
+                print(f"LOSS: Original shape: {original_features.shape}, Matryoshka shape: {matryoshka_features.shape}")
+                loss += self.loss_fn(original_features, matryoshka_features)
+        return loss
+
+    def forward(self, x, z, compute_loss=True):
+        self.z_vector = z
+        self.feature_maps_original.clear()
+        self.feature_maps_matryoshka.clear()
+
+        self.current_hook_index = 0  # Initialize the counter for the hook index
+
+        self.matryoshka_features = self.matryoshka_network(self.z_vector)  # Use the provided z vector
+
+        # Forward through the original model to capture pre-replacement features
+        _ = self.original_model(x)
+
+        # Forward through the matryoshka model for feature replacement and capturing
+        result = self.matryoshka_model(x)
+
+        self.z_vector = None  # Reset z_vector after use
+
+        if compute_loss:
+            # Compute loss between the captured features
+            loss = self.compute_loss()
+            return result, loss
+        return result
+
 if __name__ == '__main__':
     
     from torchvision.models import resnet18
@@ -187,7 +295,8 @@ if __name__ == '__main__':
 
     # Define the MatryoshkaRemappingNetwork
     input_size = 512
-    layer_names = ['layer1', 'layer3', 'avgpool']
+    mrl_layer_names = ['layer1', 'layer3', 'avgpool']
+    loss_layers = ['layer2', 'layer4']
 
     layer_specs = [
         (64, 56, 56),  # layer1
@@ -196,14 +305,14 @@ if __name__ == '__main__':
     ]
 
     matryoshka_network = MatryoshkaRemappingNetwork(input_size, layer_specs)
-
+    
     # Wrap the model with the FeatureReplacementWrapper
-    wrapped_model = FeatureReplacementWrapper(model, layer_names, matryoshka_network, replacement_percentage=50)
+    wrapped_model = FeatureReplacementWrapper(model, mrl_layer_names, matryoshka_network, replacement_percentage=50, loss_layers=loss_layers, loss_fn=nn.MSELoss())
 
     # Test the wrapped model
     input_tensor = torch.randn(1, 3, 224, 224)
     z_vector = torch.randn(1, 512)
 
     z_vector = matryoshka_network.mlp(z_vector)
-    output = wrapped_model(input_tensor, z_vector)
+    output, loss = wrapped_model(input_tensor, z_vector)
     print("Output Size:", output.size())
