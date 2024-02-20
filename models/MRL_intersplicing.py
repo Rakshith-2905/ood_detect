@@ -30,13 +30,14 @@ def print_layer_output_sizes(model, input_size):
         hook.remove()
 
 class MatryoshkaRemappingNetwork(nn.Module):
-    def __init__(self, input_size, layer_specs):
+    def __init__(self, input_size, z_size, layer_specs):
         """
         Initializes the network with a combined specification for channels and spatial dimensions,
         and organizes the remapping and reshaping operations into a sequential model for each segment.
 
         Parameters:
         - input_size: The size of the input vector.
+        - z_size: The size of the z vector.
         - layer_specs: A list of specifications for each layer. Each specification is a tuple, where
           the first element is the number of channels, and the optional second and third elements are
           the spatial dimensions (height, width). If spatial dimensions are not provided, they default to (1, 1).
@@ -49,12 +50,13 @@ class MatryoshkaRemappingNetwork(nn.Module):
             nn.ReLU(),
             nn.Linear(512, 512),
             nn.ReLU(),
-            nn.Linear(512, 512),
+            nn.Linear(512, z_size),
             nn.ReLU()
         )
 
         self.segments = nn.ModuleList()
 
+        # Create a remapping and reshaping module for each segment by reducing the input size by half each time
         current_size = input_size
         for i, spec in enumerate(layer_specs):
             channel_size = spec[0]
@@ -217,6 +219,7 @@ if __name__ == '__main__':
 
     # Define the MatryoshkaRemappingNetwork
     input_size = 512
+    z_size = 512
     mrl_layer_names = ['layer1', 'layer3', 'avgpool']
     loss_layers = ['layer2', 'layer4']
 
@@ -226,15 +229,16 @@ if __name__ == '__main__':
         (512,1,1)  # avgpool
     ]
 
-    matryoshka_network = MatryoshkaRemappingNetwork(input_size, layer_specs)
+    matryoshka_network = MatryoshkaRemappingNetwork(input_size=input_size, z_size=z_size, layer_specs=layer_specs)
     
     # Wrap the model with the FeatureReplacementWrapper
     wrapped_model = FeatureReplacementWrapper(model, mrl_layer_names, matryoshka_network, replacement_percentage=50, loss_layers=loss_layers, loss_fn=nn.MSELoss())
 
     # Test the wrapped model
     input_tensor = torch.randn(1, 3, 224, 224)
-    z_vector = torch.randn(1, 512)
+    clip_features = torch.randn(1, 512)
 
-    z_vector = matryoshka_network.mlp(z_vector)
+    # Intiail transformation for getting the z_vector
+    z_vector = matryoshka_network.mlp(clip_features)
     output, loss = wrapped_model(input_tensor, z_vector)
     print("Output Size:", output.size())
