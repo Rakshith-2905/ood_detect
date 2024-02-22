@@ -1,4 +1,6 @@
 {"NICOpp":"List 100 distinct two-word phrases that describe visual characteristics like(shape, color, texture), domain-related attributes, conventional background and general photo elements of a {class_name}.Make sure the phrases are not long descriptions.",
 "NICOpp_att":"List 100 distinct two-word phrases that describe visual characteristics, conventional background and general photo elements of a {class_name}.Make sure the phrases are not long descriptions.",
-"domainnet": "list 100 distinct two-word phrases to describe the {class_name} domain from the DomainNet dataset involves focusing on distinct visual elements and styles typical of {class_name}."
+"domainnet": "list 100 distinct two-word phrases to describe the {class_name} domain from the DomainNet dataset involves focusing on distinct visual elements and styles typical of {class_name}.",
+"Waterbirds": "List 50 distinct two-word phrases that describe visual characteristics(like type of feet, beak, wings, plumage etc) {class_name}. Make sure the phrases are not long descriptions.",
+"Waterbirds_att": "List 50 distinct two-word phrases that describe visual characteristics of the typical habitat, background {class_name}. Make sure the phrases are not long descriptions."
 }
