@@ -245,7 +245,7 @@ class Waterbirds(SubpopDataset):
         ])
         self.data_type = "images"
 
-        self.class_names = ['waterbird', 'landbird']
+        self.class_names = ['landbird', 'waterbird']
         
         super().__init__(root, split, metadata, transform, transform1, train_attr, subsample_type, duplicates, sample_by_attributes=[0, 1])
 
