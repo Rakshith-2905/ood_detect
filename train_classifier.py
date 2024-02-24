@@ -131,9 +131,10 @@ def get_dataloaders(dataset_name, domain_name=None,
         }
 
         attribute_names = ["autumn", "dim", "grass", "outdoor", "rock", "water"]
-
-        # Get a list of domain indices from the domain names
-        domain_idx = [attribute_names.index(domain_name)]
+        domain_idx = None
+        if domain_name in attribute_names:
+            # Get a list of domain indices from the domain names
+            domain_idx = [attribute_names.index(domain_name)]
         loaders, class_names = subpop_bench.get_dataloader(dataset_name, data_dir, hparams, 
                                                            train_attr='yes', sample_by_attributes=domain_idx)
     elif dataset_name == 'CelebA':
@@ -392,11 +393,10 @@ if __name__ == "__main__":
 """
 Sample command to run:
 python train_classifier.py \
-        --dataset_name NICOpp \
-        --domain autumn \
+        --dataset_name Waterbirds \
         --data_path ./data \
         --image_size 224 \
-        --batch_size 512 \
+        --batch_size 256 \
         --seed 42 \
         --num_epochs 100 \
         --optimizer sgd \
