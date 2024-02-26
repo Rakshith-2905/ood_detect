@@ -22,7 +22,6 @@ from torch.optim.lr_scheduler import CosineAnnealingLR
 import lightning as L
 from lightning.fabric import Fabric, seed_everything
 from lightning.fabric.loggers import TensorBoardLogger, CSVLogger
-
 import argparse
 from tqdm import tqdm
 from functools import partial
@@ -39,7 +38,7 @@ import json
 from train_task_distillation import get_dataset, get_CLIP_text_encodings, build_classifier
 
 from models.mapping import TaskMapping, MultiHeadedAttentionSimilarity, MultiHeadedAttention, print_layers
-from utils_proj import SimpleDINOLoss, compute_accuracy, compute_similarities, CutMix
+from utils_proj import SimpleDINOLoss, compute_accuracy, compute_similarities, CutMix, MyAugMix
 from models.cluster import ClusterCreater
 
 def get_save_dir(args):
@@ -78,7 +77,7 @@ def progbar_wrapper(iterable, total, **kwargs):
     return iterable
    
 def train_one_epoch(data_loader, class_attributes_embeddings, class_attribute_prompt_list,
-                    cutmix, clip_model, classifier, pim_model, mha, optimizer, epoch): 
+                    augmix,cutmix, clip_model, classifier, pim_model, mha, optimizer, epoch): 
 
     # Set the models to train mode
     pim_model.train()
@@ -98,9 +97,11 @@ def train_one_epoch(data_loader, class_attributes_embeddings, class_attribute_pr
         labels = fabric.to_device(labels)
 
         optimizer.zero_grad()
-
+        augmix_prob = random.random()   
         cutmix_prob = random.random()
         # After epoch 5, select_cutmix with probability 0.5
+        if epoch > 5 and augmix_prob > 0.5:
+            images_batch_orig= augmix(images_batch_orig)
         if epoch > 5 and cutmix_prob > 0.5:
             images_batch_orig, labels = cutmix(images_batch_orig, labels) # Cutmix the images and labels
             
@@ -232,6 +233,9 @@ def main(args):
                                                                     pretrained=args.use_imagenet_pretrained, 
                                                                     checkpoint_path=args.classifier_checkpoint_path)
     
+
+
+
     mapper,_, _ = build_classifier(args.classifier_name, num_classes=args.num_classes, pretrained=True, checkpoint_path=None)
     
     cutmix = CutMix(args.cutmix_alpha, args.num_classes)
@@ -294,7 +298,14 @@ def main(args):
                                                             data_dir=args.data_dir, clip_transform=clip_transform, 
                                                             img_size=args.img_size, domain_name=args.domain_name, 
                                                             return_failure_set=True)
+    mean_dict= {"imagenet": [0.485, 0.456, 0.406], "domainnet": [0,0,0], "NICOpp": [0.5, 0.5, 0.5]}
+    std_dict= {"imagenet": [0.229, 0.224, 0.225], "domainnet": [1,1,1], "NICOpp": [0.5, 0.5, 0.5]}
+    mean = mean_dict[args.dataset_name]
+    std = std_dict[args.dataset_name]
     
+    augmix = MyAugMix(severity=3, mixture_width=3, chain_depth=-1, alpha=1.0,mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]) #TODO: Add the augmix parameters to the args
+    
+
     # Merge falure dataset with val dataset
     val_dataset = ConcatDataset([val_dataset, failure_dataset])
 
@@ -369,7 +380,7 @@ def main(args):
     for epoch in range(start_epoch, args.num_epochs):
         
         train_performance_dict = train_one_epoch(
-                                            train_loader, class_attributes_embeddings, class_attribute_prompts, 
+                                            train_loader, class_attributes_embeddings, class_attribute_prompts,augmix,
                                             cutmix, clip_model, classifier, pim_model, mha, optimizer, epoch)
         
 
