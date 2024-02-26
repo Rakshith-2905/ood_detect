@@ -11,6 +11,7 @@ import os
 from PIL import Image
 import torchvision.transforms as T
 from torchvision.transforms import v2
+from torchvision.transforms import AugMix
 from torchvision.transforms import Normalize, Resize
 import random
 
@@ -253,7 +254,30 @@ class ImageTransforms:
             transformed_images.append(normalized_image)
 
         return transformed_images
-    
+
+class MyAugMix:
+    def __init__(self, severity=3, mixture_width=3, chain_depth=-1, alpha=1.0 ,mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]):
+        augmix = AugMix(severity=severity, width=mixture_width, depth=chain_depth, alpha=alpha)
+        self.augmix = augmix
+        self.mean = mean
+        self.std = std
+    def __call__(self, image_tensor):
+        # first invert the normalization
+        inverse_normalization = T.Normalize(mean=[-m/s for m, s in zip(self.mean, self.std)], std=[1/s for s in self.std])
+        image_tensor = inverse_normalization(image_tensor)
+        #convert to PIL
+        image_pil = T.ToPILImage()(image_tensor)
+        # apply augmix
+        
+        augmented_image = self.augmix(image_pil)
+        # convert back to tensor
+        augmented_image_tensor = T.ToTensor()(augmented_image)
+        # normalize the augmented image
+        augmented_image_tensor = T.Normalize(mean = self.mean, std = self.std)(augmented_image_tensor)
+
+        return augmented_image_tensor
+
+                 
 class CutMix:
     def __init__(self, alpha=1.0, num_classes=None):
         """
