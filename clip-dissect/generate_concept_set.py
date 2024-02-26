@@ -51,20 +51,26 @@ def get_attributes(class_name, previous_attributes, PROMPT):
 
 def main():
     
-    data_name = 'domainnet'
+    data_name = 'cifar100_core'
     # Read the prompt template from file json
     with open('prompt_templates.json', 'r') as f:
         prompt_template = json.load(f)[data_name]
 
+    # Load cifar-100 classes
+    with open('CIFAR_100_labels.json', 'r') as f:
+        classes = json.load(f)
+    print(classes)
     # # Load the classes from the text file
     # with open('data/domainnet_v1.0/class_names.txt', 'r') as f:
     #     classes = f.read().splitlines()  
 
-    classes = ['photo', 'sketch', 'clipart', 'painting', 'infograph', 'quickdraw' ]      
+    # classes = ['photo', 'sketch', 'clipart', 'painting', 'infograph', 'quickdraw' ]      
         
     # classes = ['airplane', 'automobile', 'bird', 'cat', 'deer', 'dog', 'frog', 'horse', 'ship', 'truck' ]
     # classes = ['car', 'flower', 'chair', 'truck', 'tiger', 'wheat', 'seal', 'wolf', 'lion', 'dolphin', 'lifeboat', 'corn', 'fishing rod', 'owl', 'sunflower', 'cow', 'bird', 'clock', 'shrimp', 'goose', 'airplane', 'rabbit', 'hot air balloon', 'lizard', 'hat', 'spider', 'motorcycle', 'tortoise', 'dog', 'crocodile', 'elephant', 'gun', 'fox', 'bus', 'cat', 'sailboat', 'giraffe', 'cactus', 'pumpkin', 'train', 'ship', 'helicopter', 'bicycle', 'racket', 'squirrel', 'bear', 'scooter', 'mailbox', 'horse', 'pineapple', 'frog', 'football', 'ostrich', 'tent', 'kangaroo', 'monkey', 'crab', 'sheep', 'butterfly', 'umbrella']
     # classes = ['autumn',  'dim',  'grass',  'outdoor',  'rock',  'water']
+        
+    # classes = ['landbird', 'waterbird']
     concept_set = {}
     # Iterate over all the classes
     for class_name in tqdm(classes):
@@ -79,9 +85,27 @@ def main():
                     attributes_collected.add(item_cleaned)
 
         concept_set[class_name] = list(attributes_collected)
-        
-        with open(f'{data_name}_domain_concepts.json', 'w') as f:
+    
+        with open(f'{data_name}_concepts.json', 'w') as f:
             json.dump(concept_set, f, indent=4)
+
+def merge_core_noncore(class_name):
+    # Take the two dictionaries and merge the non core concepts as a seperate list into the core concepts
+    with open(f'{class_name}_core_concepts.json', 'r') as f:
+        core_concepts = json.load(f)
+    with open(f'{class_name}_noncore_concepts.json', 'r') as f:
+        noncore_concepts = json.load(f)
+
+    merged_concepts = {}
+    for cls_name, core_attributes in core_concepts.items():
+        noncore_attributes = noncore_concepts[cls_name]
+        merged_concepts[cls_name] = {
+            'core_attributes': core_attributes,
+            'noncore_attributes': noncore_attributes
+        }
+    
+    with open(f'{class_name}_concepts.json', 'w') as f:
+        json.dump(merged_concepts, f, indent=4)
 
 def merge_niccopp():
     with open('NICOpp_att_concepts.json', 'r') as f:
@@ -118,4 +142,5 @@ def merge_niccopp():
 
 if __name__ == "__main__":
     main()
+    # merge_core_noncore('Waterbirds')
     # merge_niccopp()
