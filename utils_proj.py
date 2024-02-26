@@ -253,18 +253,102 @@ class ImageTransforms:
             transformed_images.append(normalized_image)
 
         return transformed_images
+    
+class CutMix:
+    def __init__(self, alpha=1.0, num_classes=None):
+        """
+        Initialize the CutMix object with alpha and number of classes.
+
+        Args:
+            alpha (float): Hyperparameter for beta distribution.
+            num_classes (int): Number of classes for creating soft labels.
+        """
+        if num_classes is None:
+            raise ValueError("num_classes must be specified for label mixing.")
+        self.alpha = alpha
+        self.num_classes = num_classes
+
+    def __call__(self, features, labels):
+        """
+        Apply CutMix to a batch of images and labels, modifying the labels with lambda.
+
+        Args:
+            features (Tensor): A batch of images of shape (B, C, H, W).
+            labels (Tensor): A batch of labels of shape (B,).
+
+        Returns:
+            mixed_features (Tensor): The batch of CutMix images.
+            mixed_labels (Tensor): The batch of mixed soft labels.
+        """
+        # The size of the batch
+        B, C, H, W = features.size()
+        device = features.device
+        indices = torch.randperm(B).to(device)
+
+        # Sample lambda from the beta distribution
+        lam = np.random.beta(self.alpha, self.alpha)
+
+        # The bounding box for CutMix
+        cut_rat = np.sqrt(1. - lam)
+        cut_w = int(W * cut_rat)
+        cut_h = int(H * cut_rat)
+
+        # Uniformly sample the center of the bounding box
+        cx = np.random.randint(W)
+        cy = np.random.randint(H)
+
+        # Calculate the bounding box
+        bbx1 = np.clip(cx - cut_w // 2, 0, W)
+        bby1 = np.clip(cy - cut_h // 2, 0, H)
+        bbx2 = np.clip(cx + cut_w // 2, 0, W)
+        bby2 = np.clip(cy + cut_h // 2, 0, H)
+
+        # Create the mixed features
+        mixed_features = features.clone()
+        mixed_features[:, :, bby1:bby2, bbx1:bbx2] = features[indices, :, bby1:bby2, bbx1:bbx2]
+
+        # Adjust lambda to exactly match pixel ratio
+        lam = 1 - ((bbx2 - bbx1) * (bby2 - bby1) / (W * H))
+
+        # Convert labels to one-hot format
+        labels_one_hot = torch.nn.functional.one_hot(labels, num_classes=self.num_classes).float()
+        labels_one_hot_perm = labels_one_hot[indices]
+
+        # Mix the labels
+        mixed_labels = lam * labels_one_hot + (1 - lam) * labels_one_hot_perm
+
+        return mixed_features, mixed_labels
 
 if __name__ == "__main__":
 
-    import clip
-    # Load the CLIP model
-    clip_model, clip_transform = clip.load('ViT-B/32', device='cpu')
+    # import clip
+    # # Load the CLIP model
+    # clip_model, clip_transform = clip.load('ViT-B/32', device='cpu')
 
-    # Extracting the values
-    normalize_values = next((t.mean, t.std) for t in clip_transform.transforms if isinstance(t, Normalize))
-    resize_value = next((t.size) for t in clip_transform.transforms if isinstance(t, Resize))
+    # # Extracting the values
+    # normalize_values = next((t.mean, t.std) for t in clip_transform.transforms if isinstance(t, Normalize))
+    # resize_value = next((t.size) for t in clip_transform.transforms if isinstance(t, Resize))
 
-    print(normalize_values, resize_value)
+    # print(normalize_values, resize_value)
+
+    # Define batch size, channels, height, and width for synthetic data
+    batch_size, channels, height, width = 10, 3, 32, 32
+
+    # Generate synthetic feature maps and labels
+    features = torch.rand(batch_size, channels, height, width)
+    labels = torch.randint(0, 10, (batch_size,))  # Assuming 10 classes
+
+    cutmix = CutMix(alpha=1.0, num_classes=10)
+
+    # Function call for CutMix
+    mixed_features, mixed_labels = cutmix(features, labels)
+
+    # Check the results
+    print("Original features shape:", features.shape)
+    print("Mixed features shape:", mixed_features.shape)
+    print("Original labels:", labels)
+    print("Mixed labels (labels, labels[indices], lambda):", mixed_labels)
+
     assert False
     # Get the mean and std from the clip_transform
     mean=[0.48145466, 0.4578275, 0.40821073]
