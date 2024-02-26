@@ -92,26 +92,26 @@ def train_one_epoch(data_loader, class_attributes_embeddings, class_attribute_pr
     
     for i, (images_batch, labels, images_clip_batch) in enumerate(pbar):
         
-        images_batch_orig = fabric.to_device(images_batch_orig)
+        images_batch = fabric.to_device(images_batch)
         images_clip_batch = fabric.to_device(images_clip_batch)
         labels = fabric.to_device(labels)
 
         optimizer.zero_grad()
         augmix_prob = random.random()   
+        if epoch > args.warmup_epochs and augmix_prob > 0.5:
+            images_batch = augmix (images_batch)
         cutmix_prob = random.random()
-        # After epoch 5, select_cutmix with probability 0.5
-        if epoch > 5 and augmix_prob > 0.5:
-            images_batch_orig= augmix(images_batch_orig)
-        if epoch > 5 and cutmix_prob > 0.5:
-            images_batch_orig, labels = cutmix(images_batch_orig, labels) # Cutmix the images and labels
-            
-        pim_image_embeddings, task_model_logits, _ = pim_model(images_batch_orig, labels, return_task_logits=True)
+        # After certain epoch, select_cutmix with probability 0.5
+        if epoch > args.warmup_epochs and cutmix_prob > 0.5:
+            images_batch, labels = cutmix(images_batch, labels) # Cutmix the images and labels, labels are not one hot encoded anymore
+
+        pim_image_embeddings, task_model_logits, _ = pim_model(images_batch, labels, return_task_logits=True)
 
         # Cosine similarity between the pim image embeddings and the class_attributes_embeddings
         normalized_pim_image_embeddings = F.normalize(pim_image_embeddings, dim=-1)
         normalized_class_attributes_embeddings = F.normalize(class_attributes_embeddings, dim=-1)
 
-        pim_similarities = (normalized_pim_image_embeddings @ normalized_class_attributes_embeddings.t()) # (batch_size, num_classes*num_attributes_perclass)
+        pim_similarities = clip_model.logit_scale*(normalized_pim_image_embeddings @ normalized_class_attributes_embeddings.t()) # (batch_size, num_classes*num_attributes_perclass)
 
         # Split the similarities into class specific dictionary
         pim_similarities_dict = {}
@@ -124,11 +124,11 @@ def train_one_epoch(data_loader, class_attributes_embeddings, class_attribute_pr
         # Compute the pim logits using the multiheaded attention
         pim_logits = mha(pim_similarities_dict)
 
-        loss = F.cross_entropy(pim_logits, labels)
+        loss = F.cross_entropy(pim_logits, labels) # Can accomodate the non one hot encoded labels as well
 
         # Check if in this batch if for any samples the task model is correct and the pim model is incorrect
         # if so update a count of such samples
-        if epoch > 5:
+        if cutmix_prob < 0.5:
             task_prediction = torch.argmax(task_model_logits, dim=-1)
             pim_prediction = torch.argmax(pim_logits, dim=-1)
             correct_task_pim_incorrect = torch.where((task_prediction == labels) & (pim_prediction != labels))[0]
@@ -137,8 +137,8 @@ def train_one_epoch(data_loader, class_attributes_embeddings, class_attribute_pr
             # Get the count of such samples
             correct_task_pim_incorrect_count = len(correct_task_pim_incorrect)
 
-            loss_weight = (correct_task_pim_incorrect_count * 10)/len(labels)
-            loss = loss + loss_weight
+            loss_weight = (correct_task_pim_incorrect_count)/len(labels) # Weight the loss by the number of such samples
+            loss = loss * args.discrepancy_weight*loss_weight
 
         
         fabric.backward(loss)
@@ -179,17 +179,17 @@ def validate(data_loader, class_attributes_embeddings, class_attribute_prompt_li
     
     for i, (images_batch, labels, images_clip_batch) in enumerate(pbar):
         
-        images_batch_orig = fabric.to_device(images_batch_orig)
+        images_batch = fabric.to_device(images_batch)
         images_clip_batch = fabric.to_device(images_clip_batch)
         labels = fabric.to_device(labels)
 
-        pim_image_embeddings, task_model_logits, _ = pim_model(images_batch_orig, return_logits=True, use_cutmix=False)
+        pim_image_embeddings, task_model_logits, _ = pim_model(images_batch, return_logits=True, use_cutmix=False)
 
         # Cosine similarity between the pim image embeddings and the class_attributes_embeddings
         normalized_pim_image_embeddings = F.normalize(pim_image_embeddings, dim=-1)
         normalized_class_attributes_embeddings = F.normalize(class_attributes_embeddings, dim=-1)
 
-        pim_similarities = (normalized_pim_image_embeddings @ normalized_class_attributes_embeddings.t()) # (batch_size, num_classes*num_attributes_perclass)
+        pim_similarities = clip.logit_scale*(normalized_pim_image_embeddings @ normalized_class_attributes_embeddings.t()) # (batch_size, num_classes*num_attributes_perclass)
 
         # Split the similarities into class specific dictionary
         pim_similarities_dict = {}
@@ -243,6 +243,7 @@ def main(args):
                               task_layer_name=args.task_layer_name, vlm_dim=args.vlm_dim, 
                               mapping_output_size=mapper.feature_dim, cutmix_fn=cutmix)
     
+    # This is for the cross modal attention between PIM and the class attributes
     # mha = MultiHeadedAttention(args.num_classes, in_dim=args.vlm_dim, num_heads=1)
 
     if not os.path.exists(args.attributes_embeddings_path):
@@ -306,8 +307,9 @@ def main(args):
     augmix = MyAugMix(severity=3, mixture_width=3, chain_depth=-1, alpha=1.0,mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]) #TODO: Add the augmix parameters to the args
     
 
-    # Merge falure dataset with val dataset
-    val_dataset = ConcatDataset([val_dataset, failure_dataset])
+    if args.dataset_name in ['cifar100']:
+        # Merge falure dataset with train dataset
+        train_dataset = ConcatDataset([train_dataset, val_dataset])
 
     fabric.print(f"Using {args.dataset_name} dataset")
 
@@ -317,23 +319,9 @@ def main(args):
 
     train_loader, val_loader, test_loader = fabric.setup_dataloaders(train_loader, val_loader, test_loader)
 
-
     fabric.print(f"Number of training examples: {len(train_loader.dataset)}")
     fabric.print(f"Number of validation examples: {len(val_loader.dataset)}")
     fabric.print(f"Number of test examples: {len(test_loader.dataset)}")
-
-    # Get the text encodings for the class names
-    try:
-        text_encodings= torch.load(args.prompt_path)
-        if text_encodings.shape[0] != len(class_names):
-            raise Exception("Text encodings shape does not match the number of classes")
-        text_encodings = fabric.to_device(text_encodings)
-
-        fabric.print(f"Loaded CLIP {args.clip_model_name} text encodings from {args.prompt_path}, {text_encodings.shape}")
-    except:
-        text_encodings = get_CLIP_text_encodings(clip_model, class_names, args.prompt_path)
-        fabric.print(f"Saved CLIP {args.clip_model_name} text encodings to {args.prompt_path}")
-        text_encodings = fabric.to_device(text_encodings)
 
     ########################### Create the optimizer ############################
 
@@ -386,7 +374,7 @@ def main(args):
 
         if epoch % args.val_freq == 0:
             val_performance_dict = validate(
-                                            val_loader, class_attributes_embeddings, class_attribute_prompts, 
+                                            test_loader, class_attributes_embeddings, class_attribute_prompts, 
                                             cutmix, clip_model, classifier, pim_model, mha, optimizer, epoch)
         
         # Print the losses
@@ -395,14 +383,14 @@ def main(args):
         train_performance_dict = {f"train_{key}": value for key, value in train_performance_dict.items()}
              
         # Add test_ to all the keys
-        val_performance_dict = {f"val_{key}": value for key, value in val_performance_dict.items()}
+        val_performance_dict = {f"test_{key}": value for key, value in val_performance_dict.items()}
         losses_dict = {**train_performance_dict, **val_performance_dict}
 
 
         fabric.log_dict(losses_dict, step=epoch)
         
         # Save best model based on validation loss
-        if val_performance_dict["val_total_loss"] < best_val_loss:
+        if val_performance_dict["test_total_loss"] < best_val_loss:
             
             state.update(epoch=epoch)
             fabric.save(os.path.join(args.save_dir, "pim_weights_best.pth"), state)
@@ -428,6 +416,12 @@ if __name__ == "__main__":
     parser.add_argument('--img_size', type=int, default=75, help='Image size for the celebA dataloader only')
     parser.add_argument('--seed', type=int, default=42, help='Seed for reproducibility')
 
+    parser.add_argument('--task_layer_name', type=str, default='model.layer1', help='Name of the layer to use for the task model')
+    parser.add_argument('--cutmix_alpha', type=float, default=1.0, help='Alpha value for the beta distribution for cutmix')
+
+    parser.add_argument('--warmup_epochs', type=int, default=10, help='Number of warmup epochs before using cutmix')
+    parser.add_argument('--discrepancy_weight', type=float, default=1.0, help='Weight to multiply the loss by for samples where the task model is correct and the pim model is incorrect')
+
     parser.add_argument('--attributes_path', type=str, help='Path to the attributes file')
     parser.add_argument('--attributes_embeddings_path', type=str, help='Path to the attributes embeddings file')
 
@@ -451,9 +445,6 @@ if __name__ == "__main__":
     
     parser.add_argument('--num_gpus', type=int, default=4, help='Number of gpus for DDP per node')
     parser.add_argument('--num_nodes', type=int, default=1, help='Number of nodes for DDP')
-
-    parser.add_argument('--task_layer_name', type=str, default='model.layer1', help='Name of the layer to use for the task model')
-    parser.add_argument('--cutmix_alpha', type=float, default=1.0, help='Alpha value for the beta distribution for cutmix')
 
 
     args = parser.parse_args()
@@ -500,6 +491,10 @@ python train_mapping_network.py \
 --batch_size 128 \
 --img_size 224 \
 --seed 42 \
+--task_layer_name model.layer1 \
+--cutmix_alpha 1.0 \
+--warmup_epochs 10 \
+--discrepancy_weight 1.0 \
 --attributes_path clip-dissect/Waterbirds_concepts.json \
 --attributes_embeddings_path data/Waterbirds/Waterbirds_attributes_CLIP_ViT-B_32_text_embeddings.pth \
 --classifier_name resnet18 \
@@ -515,7 +510,7 @@ python train_mapping_network.py \
 --prefix '' \
 --vlm_dim 512 \
 --num_gpus 1 \
---num_nodes 1
+--num_nodes 1 
 
 
 '''
