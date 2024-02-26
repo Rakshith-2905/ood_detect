@@ -131,10 +131,12 @@ def get_dataloaders(dataset_name, domain_name=None,
         }
 
         attribute_names = ["autumn", "dim", "grass", "outdoor", "rock", "water"]
-        domain_idx = None
+
         if domain_name in attribute_names:
             # Get a list of domain indices from the domain names
             domain_idx = [attribute_names.index(domain_name)]
+        else:
+            domain_idx = None
         loaders, class_names = subpop_bench.get_dataloader(dataset_name, data_dir, hparams, 
                                                            train_attr='yes', sample_by_attributes=domain_idx)
     elif dataset_name == 'CelebA':
@@ -155,6 +157,16 @@ def get_dataloaders(dataset_name, domain_name=None,
                                                        selected_classes=None, retain_orig_ids=False,    
                                                        train_transform=None, test_transform=None, clip_transform=None, 
                                                        subsample_trainset=False, return_dataset=False)
+        
+        # concatenate the train and the failure dataset
+        train_loader, val_loader, test_loader, failure_loader = loaders['train'], loaders['val'], loaders['test'], loaders['failure']
+        train_dataset = torch.utils.data.ConcatDataset([train_loader.dataset, failure_loader.dataset])
+        train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=batch_size, shuffle=True, num_workers=2)
+        loaders = {
+            'train': train_loader,
+            'val': val_loader,
+            'test': test_loader
+        }
     elif dataset_name == 'cifar100-90cls':
         # Randomly select 90 numbers from 0-99 without replacement use seed
         random.seed(42)
@@ -177,49 +189,12 @@ def main(args):
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
     # ########################### Load Dataset ###########################
-    # if args.dataset_name == 'domainnet':
-    #     loaders, class_names = get_domainnet_loaders(args.domain, batch_size=args.batch_size, data_dir=args.data_path,
-    #                                                  train_transform=None, test_transform=None, clip_transform=None, 
-    #                                                  subsample_trainset=False, return_dataset=False)
-    # elif args.dataset_name in subpop_bench.DATASETS:
-    #     hparams = {
-    #         'batch_size': args.batch_size,
-    #         'image_size': args.image_size,
-    #         'num_workers': 4,
-    #         'group_balanced': None,
-    #     }
-    #     loaders, class_names = subpop_bench.get_dataloader(args.dataset_name, args.data_path, hparams, train_attr='yes')
-    # elif args.dataset_name == 'CelebA':
-    #     class_attr = 'Young' # attribute for binary classification
-    #     imbalance_attr = ['Male']
-    #     imbalance_percent = {1: [20], 0:[80]} # 1 = Young, 0 = Not Young; 20% of the Young data will be Male
-    #     ignore_attrs = []  # Example: ignore samples that are 'Bald' or 'Wearing_Earrings'
-
-    #     loaders, class_names = get_celebA_dataloader(args.batch_size, class_attr, imbalance_attr, imbalance_percent, 
-    #                                                  ignore_attrs, img_size=args.image_size, mask=False, mask_region=None)
-    # elif args.dataset_name == 'cifar10-limited':
-    #     loaders, class_names = get_CIFAR10_dataloader(batch_size=args.batch_size, data_dir=args.data_path, subsample_trainset=True)
-    # elif args.dataset_name == 'cifar10':
-    #     loaders, class_names = get_CIFAR10_dataloader(batch_size=args.batch_size, data_dir=args.data_path, subsample_trainset=False)
-    # elif args.dataset_name == 'cifar100':
-    #     loaders, class_names = get_CIFAR100_dataloader(batch_size=args.batch_size, data_dir=args.data_path, 
-    #                                                    selected_classes=None, retain_orig_ids=False,    
-    #                                                    train_transform=None, test_transform=None, clip_transform=None, 
-    #                                                    subsample_trainset=False, return_dataset=False)
-    # elif args.dataset_name == 'cifar100-90cls':
-    #     # Randomly select 90 numbers from 0-99 without replacement use seed
-    #     random.seed(42)
-    #     selected_classes = random.sample(range(100), 90)
-    #     loaders, class_names = get_CIFAR100_dataloader(batch_size=args.batch_size, data_dir=args.data_path, 
-    #                                                    selected_classes=selected_classes, retain_orig_ids=True,    
-    #                                                    train_transform=None, test_transform=None, clip_transform=None, 
-    #                                                    subsample_trainset=False, return_dataset=False)
-    
+       
     loaders, class_names = get_dataloaders(args.dataset_name, args.domain, args.batch_size, args.data_path, args.image_size, 
                                            train_transform=None, test_transform=None, clip_transform=None, 
                                            subsample_trainset=False, return_dataset=False)
     
-    train_loader, val_loader = loaders['train'], loaders['val']
+    train_loader, val_loader, test_loader = loaders['train'], loaders['val'], loaders['test']
 
     print(f"Number of training samples: {len(train_loader.dataset)}")
     print(f"Number of validation samples: {len(val_loader.dataset)}")
@@ -300,7 +275,7 @@ def main(args):
     
     for epoch in range(start_epoch, args.num_epochs):
         train_loss, train_acc = train_one_epoch(train_loader, model, criterion, optimizer, device, epoch)
-        val_loss, val_acc = validate(val_loader, model, criterion, device, epoch)
+        val_loss, val_acc = validate(test_loader, model, criterion, device, epoch)
         
         if scheduler is not None:
             scheduler.step()
@@ -393,17 +368,16 @@ if __name__ == "__main__":
 """
 Sample command to run:
 python train_classifier.py \
-        --dataset_name Waterbirds \
+        --dataset_name cifar100 \
         --data_path ./data \
-        --image_size 224 \
-        --batch_size 256 \
+        --image_size 32 \
+        --batch_size 128 \
         --seed 42 \
-        --num_epochs 100 \
+        --num_epochs 200 \
         --optimizer sgd \
         --scheduler MultiStepLR \
-        --learning_rate 0.001 \
-        --classifier_model resnet18 \
-        --use_pretrained
+        --learning_rate 0.1 \
+        --classifier_model resnet18
 
 
 """
