@@ -78,11 +78,12 @@ class TaskMapping(nn.Module):
     def forward(self, x, labels=None, return_task_logits=False, use_cutmix=False):
         self.task_features = None  # Reset task features
         with torch.no_grad():
-            task_model_logits = self.task_model(x)  # Pass input through the task model
-        with torch.set_grad_enabled(True):
+            task_model_logits = self.task_model(x)  # Pass input through the task model to extract features through the hook
 
             if use_cutmix:
                 self.task_features, labels = self.cutmix_fn(self.task_features, labels)
+
+        with torch.set_grad_enabled(True):
 
             output = self.mapping_model(self.task_features)  # Pass task features through the entire mapping model
             output = output.view(output.size(0), -1)  # Flatten the output
