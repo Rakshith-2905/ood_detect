@@ -240,14 +240,17 @@ class CustomClassifier(nn.Module):
             from torchvision.models import resnet18, ResNet18_Weights
             network = resnet18(weights=ResNet18_Weights.IMAGENET1K_V1)
             self.network_feat_extractor = create_feature_extractor(network,return_nodes=['flatten','fc'])
+            self.feature_dim=512
         elif model_name == "resnet50-imagenet":
             from torchvision.models import resnet50, ResNet50_Weights
             network = resnet50(weights=ResNet50_Weights.IMAGENET1K_V1)
 
             self.network_feat_extractor = create_feature_extractor(network,return_nodes=['flatten','fc'])
+            self.feature_dim=2048
         elif model_name == "regnet":
             from torchvision.models import regnet_y_800mf, RegNet_Y_800MF_Weights
             network = torchvision.models.get_model("regnet_y_800mf",weights=RegNet_Y_800MF_Weights.IMAGENET1K_V1 )
+
         elif model_name == "vit_b_16":
             from torchvision.models import vit_b_16, ViT_B_16_Weights
             network = torchvision.models.get_model("vit_b_16",weights = ViT_B_16_Weights.IMAGENET1K_V1)
@@ -297,17 +300,24 @@ if __name__ == "__main__":
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    model = CustomFeatureModel(model_name='resnet50_adv_l2_0.1', use_pretrained=True)
-    # model = CustomClassifier(model_name='swin_b', use_pretrained=True)
-    # features = model(torch.zeros(1, 3, 224, 224))
-    # print(features.shape)
-    # print(model.feature_dim)
+    # model = CustomFeatureModel(model_name='resnet50_adv_l2_0.1', use_pretrained=True)
+    model = CustomClassifier(model_name='resnet18-imagenet', use_pretrained=True)
+    logits, features = model(torch.zeros(1, 3, 224, 224), return_features=True)
+    print(logits.shape, features.shape)
+    print(model.feature_dim)
+    print(model.network_feat_extractor.layer1)
+
+    model = CustomResNet(model_name='resnet50', num_classes=1000, use_pretrained=True)
+    logits, features = model(torch.zeros(1, 3, 224, 224), return_features=True)
+    print(logits.shape, features.shape)
+    print(model.feature_dim)
+    print(model)
 
     #model = CustomSegmentationModel(model_name='deeplabv3_resnet101', use_pretrained=True)
     #pil_image = Image.open("./data/domainnet_v1.0/real/toothpaste/real_318_000284.jpg")
     #pil_images = [pil_image,pil_image]
-    torch_tensor = torch.zeros(1,3, 224, 224)
-    logits, features = model(torch_tensor, return_features=True)
-    print(logits.shape)
-    print(features.shape)
+    # torch_tensor = torch.zeros(1,3, 224, 224)
+    # logits, features = model(torch_tensor, return_features=True)
+    # print(logits.shape)
+    # print(features.shape)
 

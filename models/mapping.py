@@ -5,6 +5,12 @@ import torch.nn.functional as F
 from collections import OrderedDict
 import math
 
+
+# Function to print the names of the layers in a model
+def print_layers(model):
+    for name, module in model.named_modules():
+        print(name)
+
 class TaskMapping(nn.Module):
     def __init__(self, task_model, mapping_model, task_layer_name, vlm_dim, mapping_output_size, cutmix_fn=None):
         super(TaskMapping, self).__init__()
@@ -22,13 +28,22 @@ class TaskMapping(nn.Module):
         task_layer = dict(self.task_model.named_modules())[task_layer_name]
         task_layer.register_forward_hook(self.save_task_features_hook())
 
-        # Extract and prune the layers from the mapping model
+        # Update the base model if 'model.' is in the layer name
+        if mapping_layer_name.startswith('model.'):
+            if hasattr(mapping_model, 'model'):
+                mapping_model = getattr(mapping_model, 'model')
+                mapping_layer_name = mapping_layer_name.replace('model.', '', 1)  # Remove 'model.' prefix from layer name
+            else:
+                raise ValueError("The mapping model does not have a 'model' submodule.")
+
         all_layers = OrderedDict(mapping_model.named_children())
+
         if mapping_layer_name in all_layers:
             start_index = list(all_layers.keys()).index(mapping_layer_name) + 1
             selected_layers = OrderedDict(list(all_layers.items())[start_index:-1])  # Remove the last layer
         else:
             raise ValueError(f"Layer {mapping_layer_name} not found in mapping model.")
+
 
         # Calculate intermediate dimension for the MLP
         if vlm_dim > mapping_output_size:
@@ -109,7 +124,6 @@ class WeightedAverage(nn.Module):
 
         return weighted_sums
 
-
 class AttentionNet(nn.Module):
     def __init__(self, num_classes, num_attributes, in_dim=512):
         super(AttentionNet, self).__init__()
@@ -139,8 +153,7 @@ class AttentionNet(nn.Module):
         
         return weighted_sums
     
-
-class MultiHeadedAttention(nn.Module):
+class MultiHeadedAttentionSimilarity(nn.Module):
     def __init__(self, num_classes, num_attributes_per_cls=[100], num_heads=1, out_dim=1):
         super().__init__()
 
@@ -163,7 +176,49 @@ class MultiHeadedAttention(nn.Module):
         cls_logits = torch.cat(cls_logits, dim=-1) # Shape: [batch_size, num_classes]
 
         return cls_logits
-    
+
+class MultiHeadedAttention(nn.Module):
+    def __init__(self, num_classes, in_dim=512, num_heads=1, out_dim=1):
+        super().__init__()
+        self.multihead_attns = nn.ModuleList([nn.MultiheadAttention(in_dim, num_heads) for i in range(num_classes)])
+        self.out_linears = nn.ModuleList([nn.Linear(in_dim, out_dim) for i in range(num_classes)])
+        self.num_classes = num_classes
+
+    def forward(self, text_encodings, img_encodings):
+        """
+        text_encodings: batch of text encodings of shape [num_classes, num_attributes, in_dim]
+        img_encodings: batch of image encodings of shape [batch_size, in_dim]
+        """
+        batch_size, _ = img_encodings.shape
+        # Adjust img_encodings to have same format as expected by multihead attention [sequence_len, batch, dim]
+        img_encodings = img_encodings.unsqueeze(0)  # Shape: [1, batch_size, in_dim]
+
+        attn_outputs = []
+        for i, (attn, linear) in enumerate(zip(self.multihead_attns, self.out_linears)):
+            # For each class, use the corresponding text encoding as key and value
+            text_encoding = text_encodings[i]  # Shape: [num_attributes, in_dim]
+
+            # Repeat the image encodings to match the number of attributes for the current class
+            img_encodings_repeated = img_encodings.repeat(text_encoding.shape[0], 1, 1)  # Shape: [num_attributes, batch_size, in_dim]
+            # Repeate the text encoding to match the batch size
+            text_encoding = text_encoding.unsqueeze(1).repeat(1, batch_size, 1)  # Shape: [num_attributes, batch_size, in_dim]
+
+            print(img_encodings_repeated.shape)
+            # Apply multihead attention using image encodings as query and text encodings as key and value
+            attn_output, _ = attn(query=img_encodings_repeated, key=text_encoding, value=text_encoding) # Shape: [num_attributes, batch_size, in_dim]
+            print(attn_output.shape)
+            attn_output = attn_output[0]  # Shape: [batch_size, in_dim]
+
+
+            # Apply the linear layer to the attention output
+            linear_output = linear(attn_output)  # Shape: [batch_size, out_dim]
+            attn_outputs.append(linear_output)
+
+        # Combine outputs for all classes, resulting in shape [batch_size, num_classes]
+        logits = torch.cat(attn_outputs, dim=-1)
+        return logits
+
+
 if __name__ == "__main__":
     
     # Example usage
@@ -178,16 +233,26 @@ if __name__ == "__main__":
     task_mapping = TaskMapping(task_model, mapping_model, task_layer_name, vlm_dim, mapping_output_size)
    # print(task_mapping)
 
-    # Example forward pass
-    x = torch.randn(1, 3, 224, 224)
-    output, _ = task_mapping(x)
+#     # Example forward pass
+#     x = torch.randn(1, 3, 224, 224)
+#     output, _ = task_mapping(x)
 
-    print(output.shape)
+#     print(output.shape)
 
-    num_attributes_per_cls = [10, 20]
-    num_classes = 2
-    mha = MultiHeadedAttention(num_classes, num_attributes_per_cls, num_heads=1, out_dim=1)
-    cls_attribute_scores_dict = {0: torch.randn(4, 10), 1: torch.randn(4, 20)}
+    # num_attributes_per_cls = [10, 20]
+    # num_classes = 2
+    # mha = MultiHeadedAttentionSimilarity(num_classes, num_attributes_per_cls, num_heads=1, out_dim=1)
+    # cls_attribute_scores_dict = {0: torch.randn(4, 10), 1: torch.randn(4, 20)}
 
-    cls_logits = mha(cls_attribute_scores_dict)
-    print(cls_logits.shape)
+    # cls_logits = mha(cls_attribute_scores_dict)
+    # print(cls_logits.shape)
+
+    # mha = MultiHeadedAttention(num_classes=2, in_dim=512, num_heads=1, out_dim=1)
+    # text_encodings = torch.randn(2, 10, 512)
+    # img_encodings = torch.randn(4, 512)
+
+    # cls_logits = mha(text_encodings, img_encodings)
+
+    # print(cls_logits.shape)
+
+    # assert False
