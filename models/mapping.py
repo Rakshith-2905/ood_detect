@@ -17,6 +17,7 @@ class TaskMapping(nn.Module):
         self.task_model = task_model
         self.task_features = None
         self.cutmix_fn = cutmix_fn
+        self.task_model.eval()
 
         mapping_layer_name = task_layer_name
 
