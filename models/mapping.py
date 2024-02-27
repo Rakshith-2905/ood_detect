@@ -154,7 +154,49 @@ class AttentionNet(nn.Module):
         weighted_sums = torch.sum(segmented_inputs * att_weights, dim=-1)
         
         return weighted_sums
+
+class MeanAggregator(nn.Module):
+    def __init__(self, num_classes, num_attributes_per_cls):
+        super(MeanAggregator, self).__init__()
+
+        self.num_classes = num_classes
+        self.num_attributes_per_cls = num_attributes_per_cls
+
+    def forward(self, cls_attribute_scores_dict):
+        """
+        x: input tensor of shape [batch_size, num_attributes_per_cls * num_classes]
+
+        Returns:
+        mean_values: tensor of shape [batch_size, num_classes]
+        """
+        class_logits = []
+        for class_idx, attribute_score in cls_attribute_scores_dict.items():
+            mean_value = torch.mean(attribute_score, dim=-1)
+            class_logits.append(mean_value)
+        class_logits = torch.stack(class_logits, dim=-1) # Shape: [batch_size, num_classes]
+        return class_logits
     
+class MaxAggregator(nn.Module):
+    def __init__(self, num_classes, num_attributes_per_cls):
+        super(MaxAggregator, self).__init__()
+
+        self.num_classes = num_classes
+        self.num_attributes_per_cls = num_attributes_per_cls
+
+    def forward(self, cls_attribute_scores_dict):
+        """
+        x: input tensor of shape [batch_size, num_attributes_per_cls * num_classes]
+
+        Returns:
+        max_values: tensor of shape [batch_size, num_classes]
+        """
+        class_logits = []
+        for class_idx, attribute_score in cls_attribute_scores_dict.items():
+            max_value, _ = torch.max(attribute_score, dim=-1)
+            class_logits.append(max_value)
+        class_logits = torch.stack(class_logits, dim=-1) # Shape: [batch_size, num_classes]
+        return class_logits
+
 class MultiHeadedAttentionSimilarity(nn.Module):
     def __init__(self, num_classes, num_attributes_per_cls=[100], num_heads=1, out_dim=1):
         super().__init__()

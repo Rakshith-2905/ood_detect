@@ -37,7 +37,7 @@ import json
 
 from train_task_distillation import get_dataset, get_CLIP_text_encodings, build_classifier
 
-from models.mapping import TaskMapping, MultiHeadedAttentionSimilarity, MultiHeadedAttention, print_layers
+from models.mapping import TaskMapping, MultiHeadedAttentionSimilarity, MultiHeadedAttention, print_layers, MaxAggregator, MeanAggregator
 from utils_proj import SimpleDINOLoss, compute_accuracy, compute_similarities, CutMix, MyAugMix, find_normalization_parameters
 from models.cluster import ClusterCreater
 CLIP_LOGIT_SCALE = 100
@@ -61,7 +61,7 @@ def get_save_dir(args):
 
     save_dir = os.path.join(args.save_dir, args.dataset_name, att_name, projector_name)
     
-    save_dir_details = f"{args.prefix}_bs_{args.batch_size}_lr_{args.learning_rate}_augmix_prob_{args.augmix_prob}_cutmix_prob_{args.cutmix_prob}_scheduler_layer_{args.task_layer_name}"
+    save_dir_details = f"{args.prefix}_agg_{args.attribute_aggregation}_bs_{args.batch_size}_lr_{args.learning_rate}_augmix_prob_{args.augmix_prob}_cutmix_prob_{args.cutmix_prob}_scheduler_layer_{args.task_layer_name}"
 
     return os.path.join(save_dir, save_dir_details)
 
@@ -78,11 +78,11 @@ def progbar_wrapper(iterable, total, **kwargs):
     return iterable
    
 def train_one_epoch(data_loader, class_attributes_embeddings, class_attribute_prompt_list,
-                    augmix,cutmix, clip_model, classifier, pim_model, mha, optimizer, epoch): 
+                    augmix,cutmix, clip_model, classifier, pim_model, aggregator, optimizer, epoch): 
 
     # Set the models to train mode
     pim_model.train()
-    mha.train()
+    aggregator.train()
 
     total_loss = 0
     total_task_model_acc = 0
@@ -118,8 +118,9 @@ def train_one_epoch(data_loader, class_attributes_embeddings, class_attribute_pr
         normalized_pim_image_embeddings = normalized_pim_image_embeddings.to(normalized_class_attributes_embeddings.dtype)
         pim_similarities = CLIP_LOGIT_SCALE*(normalized_pim_image_embeddings @ normalized_class_attributes_embeddings.t()) # (batch_size, num_classes*num_attributes_perclass)
 
-        # convert the pim_similarities to the data type of the data type of mha
+        # convert the pim_similarities to the data type of the data type of aggregator
         pim_similarities = pim_similarities.to(torch.float32)
+
         # Split the similarities into class specific dictionary
         pim_similarities_dict = {}
         start = 0
@@ -127,11 +128,8 @@ def train_one_epoch(data_loader, class_attributes_embeddings, class_attribute_pr
             num_attributes = len(class_prompts)
             pim_similarities_dict[i] = pim_similarities[:, start:start+num_attributes]
             start += num_attributes
-        
-        # Compute the pim logits using the multiheaded attention
-        
-        
-        pim_logits = mha(pim_similarities_dict)
+            
+        pim_logits = aggregator(pim_similarities_dict)
 
         loss = F.cross_entropy(pim_logits, labels, reduction = 'none') # Can accomodate the non one hot encoded labels as well # loss is of shape (batch_size,)
 
@@ -171,11 +169,11 @@ def train_one_epoch(data_loader, class_attributes_embeddings, class_attribute_pr
 
 @torch.no_grad()
 def validate(data_loader, class_attributes_embeddings, class_attribute_prompt_list,
-                    clip_model, classifier, pim_model, mha, optimizer, epoch): 
+                    clip_model, classifier, pim_model, aggregator, optimizer, epoch): 
     
     # Set the model to eval mode
     pim_model.eval()
-    mha.eval()
+    aggregator.eval()
     classifier.eval()
     total_loss = 0
     total_task_model_acc = 0
@@ -208,7 +206,7 @@ def validate(data_loader, class_attributes_embeddings, class_attribute_prompt_li
             start += num_attributes
         
         # Compute the pim logits using the multiheaded attention
-        pim_logits = mha(pim_similarities_dict)
+        pim_logits = aggregator(pim_similarities_dict)
 
         loss = F.cross_entropy(pim_logits, labels)
 
@@ -241,9 +239,6 @@ def main(args):
                                                                     pretrained=args.use_imagenet_pretrained, 
                                                                     checkpoint_path=args.classifier_checkpoint_path)
     
-
-
-
     mapper,_, _ = build_classifier(args.classifier_name, num_classes=args.num_classes, pretrained=True, checkpoint_path=None)
     
     cutmix = CutMix(args.cutmix_alpha, args.num_classes)
@@ -289,9 +284,16 @@ def main(args):
 
     num_attributes_per_cls = [len(attributes) for attributes in class_attribute_prompts]
     
+    if args.attribute_aggregation == "mha":
+        aggregator = MultiHeadedAttentionSimilarity(args.num_classes, num_attributes_per_cls=num_attributes_per_cls, num_heads=1, out_dim=1)
+    elif args.attribute_aggregation == "mean":
+        aggregator = MeanAggregator(num_classes=args.num_classes, num_attributes_per_cls=num_attributes_per_cls)
 
-    mha = MultiHeadedAttentionSimilarity(args.num_classes, num_attributes_per_cls=num_attributes_per_cls, num_heads=1, out_dim=1)
+    elif args.attribute_aggregation == "max":
+        aggregator = MaxAggregator(num_classes=args.num_classes, num_attributes_per_cls=num_attributes_per_cls)
 
+    else:
+        raise Exception("Invalid attribute aggregation method")
     fabric.print(f"Built {args.classifier_name} classifier with checkpoint path: {args.classifier_checkpoint_path}")
     fabric.print(f"Built {args.classifier_name} mapper")
     fabric.print(f"Built MultiHeadedAttention with {args.num_classes} classes and {num_attributes_per_cls} attributes per class")
@@ -300,7 +302,7 @@ def main(args):
     clip_model = fabric.to_device(clip_model)
     fabric.to_device(classifier)
     fabric.to_device(pim_model)
-    fabric.to_device(mha)
+    fabric.to_device(aggregator)
 
     ########################### Load the dataset ############################
 
@@ -346,9 +348,8 @@ def main(args):
     else:
         raise Exception("Invalid optimizer")
     
-    
-    # Add the MHA parameters to the optimizer with a different learning rate
-    optimizer.add_param_group({"params": mha.parameters(), "lr": args.mha_learning_rate})
+    # Add the aggregator parameters to the optimizer with a different learning rate
+    optimizer.add_param_group({"params": aggregator.parameters(), "lr": args.aggregator_learning_rate})
 
     # Learning rate scheduler
     if args.scheduler == 'MultiStepLR':
@@ -363,7 +364,7 @@ def main(args):
     state = {"clip_model": clip_model, 
             "classifier": classifier,
             "pim_model": pim_model,
-            "mha": mha,
+            "aggregator": aggregator,
             "optimizer": optimizer, 
             "scheduler": scheduler,
             "epoch": start_epoch}
@@ -376,7 +377,7 @@ def main(args):
         clip_model = state["clip_model"]
         classifier = state["classifier"]
         pim_model = state["pim_model"]
-        mha = state["mha"]
+        aggregator = state[f"{args.aggregator}"]
         optimizer = state["optimizer"]
         scheduler = state["scheduler"]
 
@@ -390,13 +391,12 @@ def main(args):
         
         train_performance_dict = train_one_epoch(
                                             train_loader, class_attributes_embeddings, class_attribute_prompts,augmix,
-                                            cutmix, clip_model, classifier, pim_model, mha, optimizer, epoch)
+                                            cutmix, clip_model, classifier, pim_model, aggregator, optimizer, epoch)
         
-
         if epoch % args.val_freq == 0:
             val_performance_dict = validate( 
                 test_loader, class_attributes_embeddings, class_attribute_prompts, 
-                                             clip_model, classifier, pim_model, mha, optimizer, epoch)
+                                             clip_model, classifier, pim_model, aggregator, optimizer, epoch)
 
         if scheduler is not None:
             scheduler.step()
@@ -453,6 +453,8 @@ if __name__ == "__main__":
     parser.add_argument('--attributes_path', type=str, help='Path to the attributes file')
     parser.add_argument('--attributes_embeddings_path', type=str, help='Path to the attributes embeddings file')
 
+    parser.add_argument('--attribute_aggregation', default='mha', choices=['mha', 'mean', 'max'], help='Type of aggregation of the attribute scores')
+
     parser.add_argument('--classifier_name', required=True,  help='Name of the classifier to use sam_vit_h, mae_vit_large_patch16, dino_vits16, resnet50, resnet50_adv_l2_0.1, resnet50_adv_l2_0.5, resnet50x1_bitm, resnetv2_101x1_bit.goog_in21k, deeplabv3_resnet50, deeplabv3_resnet101, fcn_resnet50, fcn_resnet101')
     parser.add_argument('--classifier_checkpoint_path', type=str, help='Path to checkpoint to load the classifier from')
     parser.add_argument('--classifier_dim', type=int, default=None, help='Dimension of the classifier output')
@@ -464,7 +466,7 @@ if __name__ == "__main__":
     parser.add_argument('--num_epochs', type=int, default=100, help='Number of training epochs')
     parser.add_argument('--optimizer', type=str, choices=['adam','adamw', 'sgd'], default='adamw', help='Type of optimizer to use')
     parser.add_argument('--learning_rate', type=float, default=1e-3, help='Learning rate for the optimizer')
-    parser.add_argument('--mha_learning_rate', type=float, default=1e-3, help='Learning rate for the optimizer')
+    parser.add_argument('--aggregator_learning_rate', type=float, default=1e-3, help='Learning rate for the optimizer')
     parser.add_argument('--scheduler', type=str, choices=['MultiStepLR', 'cosine'], default='cosine', help='Type of learning rate scheduler to use')
     parser.add_argument('--val_freq', type=int, default=1, help='Validation frequency')
     parser.add_argument('--save_dir', type=str, default='./logs', help='Directory to save the results')
@@ -561,11 +563,13 @@ python train_mapping_network.py \
 --classifier_name resnet18 \
 --classifier_checkpoint_path logs/cifar100/resnet18/classifier/checkpoint_199.pth \
 --use_imagenet_pretrained \
+--attribute_aggregation mean \
 --clip_model_name ViT-B/32 \
 --prompt_path data/cifar100/cifar100_CLIP_ViT-B_32_text_embeddings.pth \
 --num_epochs 200 \
 --optimizer adamw \
 --learning_rate 1e-3 \
+--aggregator_learning_rate 1e-3 \
 --scheduler MultiStepLR \
 --val_freq 1 \
 --save_dir ./logs \
