@@ -164,7 +164,8 @@ def train_one_epoch(data_loader, class_attributes_embeddings, class_attribute_pr
     total_task_model_acc = fabric.all_gather(total_task_model_acc).mean() / len(data_loader)
     total_pim_acc = fabric.all_gather(total_pim_acc).mean() / len(data_loader)
 
-    performance_dict = {"total_loss": total_loss, "task_model_acc": total_task_model_acc, "pim_acc": total_pim_acc}
+    performance_dict = {"total_loss": total_loss, "task_model_acc %":total_task_model_acc *100., "pim_acc %": total_pim_acc *100.}
+
 
     return performance_dict
 
@@ -180,7 +181,7 @@ def validate(data_loader, class_attributes_embeddings, class_attribute_prompt_li
     total_task_model_acc = 0
     total_pim_acc = 0
     pbar = progbar_wrapper(
-        data_loader, total=len(data_loader), desc=f"Training Epoch {epoch+1}"
+        data_loader, total=len(data_loader), desc=f"Test Epoch {epoch+1}"
     )
     
     for i, (images_batch, labels, images_clip_batch) in enumerate(pbar):
@@ -189,7 +190,7 @@ def validate(data_loader, class_attributes_embeddings, class_attribute_prompt_li
         images_clip_batch = fabric.to_device(images_clip_batch)
         labels = fabric.to_device(labels)
 
-        pim_image_embeddings, task_model_logits, _ = pim_model(images_batch, return_logits=True, use_cutmix=False)
+        pim_image_embeddings, task_model_logits, _ = pim_model(images_batch, return_task_logits=True)
 
         # Cosine similarity between the pim image embeddings and the class_attributes_embeddings
         normalized_pim_image_embeddings = F.normalize(pim_image_embeddings, dim=-1)
@@ -226,7 +227,7 @@ def validate(data_loader, class_attributes_embeddings, class_attribute_prompt_li
     total_task_model_acc = fabric.all_gather(total_task_model_acc).mean() / len(data_loader)
     total_pim_acc = fabric.all_gather(total_pim_acc).mean() / len(data_loader)
 
-    performance_dict = {"total_loss": total_loss, "task_model_acc": total_task_model_acc, "pim_acc": total_pim_acc}
+    performance_dict = {"total_loss": total_loss, "task_model_acc %":total_task_model_acc *100., "pim_acc %": total_pim_acc *100.}
 
     return performance_dict
 
@@ -533,7 +534,7 @@ python train_mapping_network.py \
 --data_dir './data' \
 --dataset_name cifar100 \
 --num_classes 100 \
---batch_size 128 \
+--batch_size 512 \
 --img_size 32 \
 --seed 42 \
 --task_layer_name model.layer1 \
@@ -554,7 +555,7 @@ python train_mapping_network.py \
 --save_dir ./logs \
 --prefix '' \
 --vlm_dim 512 \
---num_gpus 2 \
+--num_gpus 1 \
 --num_nodes 1 \
 --augmix_prob 0.2 \
 --cutmix_prob 0.2 
