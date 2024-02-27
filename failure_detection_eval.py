@@ -346,7 +346,7 @@ if __name__ == "__main__":
     parser.add_argument('--attributes', nargs='+', type=int, default=None, help='Attributes to use for training')
     parser.add_argument('--num_classes', type=int, default=100, help='Number of classes in the dataset')
     parser.add_argument('--method', type=str, default='baseline', help='Baseline or PIM for failure detection')
-    parser.add_argument('--score', type=str, default='msp', help='Failure detection score - msp/energy/entropy')
+    parser.add_argument('--score', type=str, default='msp', help='Failure detection score - msp/energy/pe')
     
     parser.add_argument('--use_saved_features',action = 'store_true', help='Whether to use saved features or not')
     parser.add_argument('--batch_size', type=int, default=32, help='Batch size for the dataloader')
