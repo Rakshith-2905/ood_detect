@@ -71,7 +71,7 @@ def get_score(logits, ref_logits=None):
     elif args.score =='cross_entropy':
         # ref_logits is the logits of the PIM model
         ref_probs = F.softmax(ref_logits, dim=1)
-        scores = F.cross_entropy(logits, ref_probs, reduction='none')
+        scores = -F.cross_entropy(logits, ref_probs, reduction='none')
     return scores
 
 def calc_gen_threshold(scores, logits, labels, name='classifier'):
@@ -374,6 +374,7 @@ def main(args):
         
         val_pim_acc, val_task_model_acc, val_labels_list, val_pim_logits_list, val_pim_probs_list, val_task_logits_list, val_task_probs_list = outs
         val_scores = get_score(val_task_logits_list, val_pim_logits_list)
+
         threshold = calc_gen_threshold(val_scores, val_task_logits_list, val_labels_list, name='pim')
 
         estimated_val_acc, val_estimated_success_failure_idx = calc_accuracy_from_scores(val_scores, threshold)
