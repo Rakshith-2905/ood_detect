@@ -551,6 +551,7 @@ if __name__ == "__main__":
                 seed_everything(args.seed)
                 main(args)
     else:
+        seed_everything(args.seed)
         main(args)
 
 '''
