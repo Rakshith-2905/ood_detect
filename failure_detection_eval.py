@@ -39,7 +39,7 @@ import logging
 from train_task_distillation import get_dataset, get_CLIP_text_encodings, build_classifier
 
 from models.mapping import TaskMapping, MultiHeadedAttentionSimilarity, MultiHeadedAttention, print_layers, MeanAggregator, MaxAggregator
-from utils_proj import SimpleDINOLoss, compute_accuracy, compute_similarities, CutMix, MyAugMix, find_normalization_parameters
+from utils_proj import SimpleDINOLoss, compute_accuracy, compute_similarities, CutMix, MyAugMix, find_normalization_parameters, get_score, calc_gen_threshold, calc_accuracy_from_scores
 from models.cluster import ClusterCreater
 from sklearn.metrics import confusion_matrix
 CLIP_LOGIT_SCALE = 100
@@ -47,13 +47,13 @@ CLIP_LOGIT_SCALE = 100
 
 class CIFAR100C(torch.utils.data.Dataset):
     def __init__(self, corruption='gaussian_blur', transform=None,clip_transform=None, level=0):
-        numpy_path = f'/p/lustre1/viv41siv/projects/delta_uq_regression/data/CIFAR-100-c/CIFAR-100-C/{corruption}.npy'
+        numpy_path = f'data/CIFAR-100-C/{corruption}.npy'
         t = 10000 # We choose 10000 because, every numpy array has 50000 images, where the first 10000 images belong to severity 0 and so on. t is just an index for that
         self.transform = transform # Standard CIFAR100 test transform
         self.clip_transform = clip_transform
         self.data_ = np.load(numpy_path)[level*10000:(level+1)*10000,:,:,:] # Choosing 10000 images of a given severity
         self.data = self.data_[:t,:,:,:] # Actually redundant, I don't want to disturb the code structure
-        self.targets_ = np.load('/p/lustre1/viv41siv/projects/delta_uq_regression/data/CIFAR-100-c/CIFAR-100-C/labels.npy')
+        self.targets_ = np.load('data/CIFAR-100-C/labels.npy')
         self.targets = self.targets_[:t] # We select the first 10000. The next 10000 is identical to the first 10000 and so on
         self.np_PIL = transforms.Compose([transforms.ToPILImage()])
 
@@ -69,87 +69,24 @@ class CIFAR100C(torch.utils.data.Dataset):
         return image, targets, image_to_clip
 
 
-def entropy(prob):
-    """
-    Compute the entropy of the mean of the predictive distribution
-    obtained from Monte Carlo sampling during prediction phase.
-    """
-    return -1 * torch.sum(prob * torch.log(prob + 1e-15), axis=-1)
-
-def compute_msp(p):
-    msp = torch.max(p, dim=1)[0]
-    return msp
-
-def compute_energy(logits, T=1.0):
-    return -T*torch.logsumexp(logits/T, dim=1)
-
-
-def get_score(logits, ref_logits=None):
-    #NOTE: Scores have their sign appropraitely modified to reflect the fact that ID data always has higher scores than OOD data
-    print(args.score)
-    if args.score == 'msp':
-        scores = compute_msp(F.softmax(logits, dim=1))
-    elif args.score == 'energy':
-        scores = -compute_energy(logits)
-    elif args.score == 'pe':
-        scores = -entropy(F.softmax(logits, dim=1))
-    elif args.score =='cross_entropy':
-        # ref_logits is the logits of the PIM model
-        ref_probs = F.softmax(ref_logits, dim=1)
-        scores = -F.cross_entropy(logits, ref_probs, reduction='none')
-        scores = -F.cross_entropy(logits, ref_probs, reduction='none')
-    return scores
-
-def calc_gen_threshold(scores, logits, labels, name='classifier'):
-    #NOTE: To be used only with ID data
-    scores = scores.cpu().data.numpy()
-    probs = F.softmax(logits, dim=1).cpu().data.numpy()
-    labels = labels.cpu().data.numpy()
-
-    scores = scores.reshape(-1)
-    err = np.argmax(np.array(probs), 1) != np.array(labels)
-    thresholds = np.linspace(-40, 40,5000)  # Possible thresholds
-    max_loss = 10000
-    for t in thresholds:
-        l = np.abs(np.mean((scores<t)) - np.mean(err))  #np.abs(
-        print(l, t)
-        if l < max_loss:
-            max_loss = l
-            threshold = t
-
-    print('Threshold for {} = {}'.format(name, threshold))
-    return threshold
-
-def calc_accuracy_from_scores(scores, threshold):
-    idx = (scores<threshold)
-    gen_error = (idx.sum())/len(scores)
-    gen_accuracy = 1.0-gen_error
-    return gen_accuracy, ~idx
-
-
 
 def get_save_dir(args):
-    if args.resume_checkpoint_path:
-        return os.path.dirname(args.resume_checkpoint_path)
-
-    projector_name = "mapper"
-
-    att_name = ""
-    if args.dataset_name == "NICOpp":
-        if args.attributes:
-            att_name = "".join([str(att) for att in args.attributes])
-            att_name = f"att_{att_name}"
+    
+    if args.method == 'pim':
+        if args.resume_checkpoint_path is not None and os.path.exists(args.resume_checkpoint_path):
+            save_dir = os.path.dirname(args.resume_checkpoint_path)
         else:
-            att_name = "att_all"
-    
-    if args.dataset_name == 'domainnet' and args.domain_name:
-        att_name = f"{args.domain_name}"
+            raise Exception("Checkpoint path not found")
+    else:
+        # use classifer checkpoint path
+        if args.classifier_checkpoint_path is not None and os.path.exists(args.classifier_checkpoint_path):
+            save_dir = os.path.dirname(args.classifier_checkpoint_path)
+        else:
+            raise Exception("Checkpoint path not found")
 
-    save_dir = os.path.join(args.save_dir, args.dataset_name, att_name, projector_name)
-    
-    save_dir_details = f"{args.prefix}_bs_{args.batch_size}_lr_{args.learning_rate}"
+    save_dir = os.path.join(save_dir, 'failure_results')
 
-    return os.path.join(save_dir, save_dir_details)
+    return f"{save_dir}"
 
 def progbar_wrapper(iterable, total, **kwargs):
     """Wraps the iterable with tqdm for global rank zero.
@@ -194,7 +131,6 @@ def evaluate_classifier(data_loader, classifier, device='cpu'):
     print(f'Classifier Accuracy on {args.dataset_name} = {classifier_acc}')
     print(labels_list.shape, logits_list.shape, probs_list.shape)
     return classifier_acc, labels_list, logits_list, probs_list
-
 
 @torch.no_grad()
 def evaluate_pim(data_loader, class_attributes_embeddings, class_attribute_prompt_list,
@@ -274,11 +210,7 @@ def evaluate_pim(data_loader, class_attributes_embeddings, class_attribute_promp
 def main(args):
 
     log_path = f'{args.save_dir}/gen'
-    logfile = f'{log_path}/{args.filename}'
-    os.makedirs(log_path,exist_ok = True)
-    loglevel = logging.INFO
-    logging.basicConfig(level=loglevel,filename=logfile, filemode='a', format='%(levelname)s - %(message)s')
-    logger = logging.getLogger()
+    
     
     ########################### Create the model ############################
     clip_model, clip_transform = clip.load(args.clip_model_name, device=args.device)
@@ -333,7 +265,7 @@ def main(args):
         # Evaluating task model
         print('Evaluating on Validation Data')
         val_acc, val_labels_list, val_logits_list, val_probs_list = evaluate_classifier(val_loader, classifier, device=device)
-        val_scores = get_score(val_logits_list)
+        val_scores = get_score(args.score, val_logits_list)
         threshold = calc_gen_threshold(val_scores, val_logits_list, val_labels_list, name='classifier')
 
         # Just for verification
@@ -342,7 +274,7 @@ def main(args):
         # Repeating this for test data
         print('Evaluating on Test Data')
         test_acc, test_labels_list, test_logits_list, test_probs_list = evaluate_classifier(test_loader, classifier, device=device)
-        test_scores = get_score(test_logits_list)
+        test_scores = get_score(args.score, test_logits_list)
         estimated_test_acc, test_estimated_success_failure_idx = calc_accuracy_from_scores(test_scores, threshold)
 
         print(f'Score = {args.score}')
@@ -367,9 +299,30 @@ def main(args):
         print(f'Success Recall = {cm_test[1,1]/(cm_test[1,0]+cm_test[1,1])}')
 
         if args.eval_dataset == 'cifar100c':
-            logger.info(f'CIFAR100-C - Corruption {args.cifar100c_corruption}, Severity {args.severity} - True accuracy --- {test_acc:.4f}')
-            logger.info(f'CIFAR100-C - Corruption {args.cifar100c_corruption}, Severity {args.severity} - Predicted accuracy --- {estimated_test_acc:.4f}')
-            logger.info(f'CIFAR100-C - Corruption {args.cifar100c_corruption}, Severity {args.severity} - Failure recall --- {cm_test[0,0]/(cm_test[0,0]+cm_test[0,1]):.4f}')
+            # convert confusion matrix to list
+            cm_val_list = cm_val.tolist()
+            cm_test_list = cm_test.tolist()
+            # Convert the results to a dictionary
+            results = {
+                "cifar100c_corruption": args.cifar100c_corruption,
+                "severity": args.severity,
+                "true_val_acc": val_acc,
+                "estimated_val_acc": estimated_val_acc.item(),
+                "true_test_acc": test_acc,
+                "estimated_test_acc": estimated_test_acc.item(),
+                "val_cm": cm_val_list, # Confusion matrix for validation data as a list
+                "test_cm": cm_test_list,
+                "val_failure_recall": cm_val[0,0]/(cm_val[0,0]+cm_val[0,1]),
+                "val_success_recall": cm_val[1,1]/(cm_val[1,0]+cm_val[1,1]),
+                "test_failure_recall": cm_test[0,0]/(cm_test[0,0]+cm_test[0,1]),
+                "test_success_recall": cm_test[1,1]/(cm_test[1,0]+cm_test[1,1])
+            }
+
+            # Save the results to a file
+            results_file = f'{args.save_dir}/{args.score}_cifar100c_results.json'
+            with open(results_file, 'a') as f:
+                json.dump(results, f)
+                f.write('\n')
 
     elif args.method == 'pim':
         class_attributes_embeddings_prompts = torch.load(args.attributes_embeddings_path)
@@ -399,8 +352,6 @@ def main(args):
             pim_model.load_state_dict(state["pim_model"])
             aggregator.load_state_dict(state[f"aggregator"])
 
-
-            
             print(f"Loaded checkpoint from {args.resume_checkpoint_path}")
 
 
@@ -420,7 +371,7 @@ def main(args):
                             clip_model, classifier, pim_model, aggregator)
         
         val_pim_acc, val_task_model_acc, val_labels_list, val_pim_logits_list, val_pim_probs_list, val_task_logits_list, val_task_probs_list = outs
-        val_scores = get_score(val_task_logits_list, val_pim_logits_list)
+        val_scores = get_score(args.score, val_task_logits_list, val_pim_logits_list)
 
         threshold = calc_gen_threshold(val_scores, val_task_logits_list, val_labels_list, name='pim')
 
@@ -432,7 +383,7 @@ def main(args):
                             clip_model, classifier, pim_model, aggregator)
         
         test_pim_acc, test_task_model_acc, test_labels_list, test_pim_logits_list, test_pim_probs_list, test_task_logits_list, test_task_probs_list = outs
-        test_scores = get_score(test_task_logits_list, test_pim_logits_list)
+        test_scores = get_score(args.score, test_task_logits_list, test_pim_logits_list)
         estimated_test_acc, test_estimated_success_failure_idx = calc_accuracy_from_scores(test_scores, threshold)
 
         print(f'Score = {args.score}')
@@ -456,7 +407,31 @@ def main(args):
         print(f'Failure Recall = {cm_test[0,0]/(cm_test[0,0]+cm_test[0,1])}')
         print(f'Success Recall = {cm_test[1,1]/(cm_test[1,0]+cm_test[1,1])}')
 
-    
+        if args.eval_dataset == 'cifar100c':
+            # convert confusion matrix to list
+            cm_val_list = cm_val.tolist()
+            cm_test_list = cm_test.tolist()
+            # Convert the results to a dictionary
+            results = {
+                "cifar100c_corruption": args.cifar100c_corruption,
+                "severity": args.severity,
+                "true_val_acc": val_task_model_acc,
+                "estimated_val_acc": estimated_val_acc.item(),
+                "true_test_acc": test_task_model_acc,
+                "estimated_test_acc": estimated_test_acc.item(),
+                "val_cm": cm_val_list, # Confusion matrix for validation data as a list
+                "test_cm": cm_test_list,
+                "val_failure_recall": cm_val[0,0]/(cm_val[0,0]+cm_val[0,1]),
+                "val_success_recall": cm_val[1,1]/(cm_val[1,0]+cm_val[1,1]),
+                "test_failure_recall": cm_test[0,0]/(cm_test[0,0]+cm_test[0,1]),
+                "test_success_recall": cm_test[1,1]/(cm_test[1,0]+cm_test[1,1])
+            }
+
+            # Save it as a CSV file
+            results_file = f'{args.save_dir}/cifar100c_results.json'
+            with open(results_file, 'a') as f:
+                json.dump(results, f)
+                f.write('\n')
     else:
         raise NotImplementedError
 
@@ -529,17 +504,10 @@ if __name__ == "__main__":
     
     # Make directory for saving results
     args.save_dir = get_save_dir(args)    
-    os.makedirs(os.path.join(args.save_dir, 'lightning_logs'), exist_ok=True)
+    os.makedirs(args.save_dir, exist_ok=True)
     
     print(f"\nResults will be saved to {args.save_dir}")
     
-    with open(os.path.join(args.save_dir, 'args.txt'), 'w') as f:
-        for arg, value in vars(args).items():
-            f.write(f"{arg}: {value}\n")
-
-    tb_logger = TensorBoardLogger(args.save_dir)
-    csv_logger = CSVLogger(args.save_dir, flush_logs_every_n_steps=1)
-
     corruption_list = ['brightness', 'defocus_blur', 'fog', 'gaussian_blur', 'glass_blur', 'jpeg_compression', 'motion_blur', 'saturate','snow','speckle_noise', 'contrast', 'elastic_transform', 'frost', 'gaussian_noise', 'impulse_noise', 'pixelate','shot_noise', 'spatter','zoom_blur']
     severity = [4]
     if args.eval_dataset == 'cifar100c':
@@ -557,39 +525,6 @@ if __name__ == "__main__":
 '''
 Example usage:
 
-python train_mapping_network.py \
---data_dir './data' \
---dataset_name Waterbirds \
---num_classes 2 \
---use_saved_features \
---batch_size 128 \
---img_size 224 \
---seed 42 \
---task_layer_name model.layer1 \
---cutmix_alpha 1.0 \
---warmup_epochs 10 \
---discrepancy_weight 1.0 \
---attributes_path clip-dissect/Waterbirds_concepts.json \
---attributes_embeddings_path data/Waterbirds/Waterbirds_attributes_CLIP_ViT-B_32_text_embeddings.pth \
---classifier_name resnet18 \
---classifier_checkpoint_path logs/Waterbirds/failure_estimation/None/resnet18/classifier/checkpoint_99.pth \
---use_imagenet_pretrained \
---clip_model_name ViT-B/32 \
---prompt_path data/Waterbirds/Waterbirds_CLIP_ViT-B_32_text_embeddings.pth \
---num_epochs 100 \
---optimizer adamw \
---learning_rate 1e-3 \
---val_freq 1 \
---save_dir ./logs \
---prefix '' \
---vlm_dim 512 \
---num_gpus 1 \
---num_nodes 1 
-
-
-'''
-'''
-
 python failure_detection_eval.py \
 --data_dir './data' \
 --dataset_name cifar100 \
@@ -597,7 +532,7 @@ python failure_detection_eval.py \
 --batch_size 512 \
 --img_size 32 \
 --seed 42 \
---task_layer_name model.layer2 \
+--task_layer_name model.layer3 \
 --cutmix_alpha 1.0 \
 --warmup_epochs 10 \
 --discrepancy_weight 1.0 \
@@ -622,10 +557,10 @@ python failure_detection_eval.py \
 --num_nodes 1 \
 --augmix_prob 0.2 \
 --cutmix_prob 0.2 \
---resume_checkpoint_path logs/cifar100/mapper/_agg_mean_bs_512_lr_0.001_augmix_prob_0.2_cutmix_prob_0.2_scheduler_layer_model.layer4/pim_weights_best.pth \
+--resume_checkpoint_path logs/cifar100/mapper/_agg_mean_bs_512_lr_0.001_augmix_prob_0.2_cutmix_prob_0.2_scheduler_layer_model.layer3/pim_weights_best.pth \
 --method baseline \
---score pe \
---eval_dataset cifar100c
+--score msp \
+--eval_dataset cifar100c \
 --filename cifar100c.log
 
 
