@@ -97,6 +97,7 @@ def get_score(logits, ref_logits=None):
         # ref_logits is the logits of the PIM model
         ref_probs = F.softmax(ref_logits, dim=1)
         scores = -F.cross_entropy(logits, ref_probs, reduction='none')
+        scores = -F.cross_entropy(logits, ref_probs, reduction='none')
     return scores
 
 def calc_gen_threshold(scores, logits, labels, name='classifier'):
@@ -357,11 +358,13 @@ def main(args):
         print(cm_val)
         print(f'Gen Gap = {torch.abs(val_acc-estimated_val_acc)}')
         print(f'Failure Recall = {cm_val[0,0]/(cm_val[0,0]+cm_val[0,1])}')
+        print(f'Success Recall = {cm_val[1,1]/(cm_val[1,0]+cm_val[1,1])}')
 
         print('Test Data')
         print(cm_test)
         print(f'Gen Gap = {torch.abs(test_acc-estimated_test_acc)}')
         print(f'Failure Recall = {cm_test[0,0]/(cm_test[0,0]+cm_test[0,1])}')
+        print(f'Success Recall = {cm_test[1,1]/(cm_test[1,0]+cm_test[1,1])}')
 
         if args.eval_dataset == 'cifar100c':
             logger.info(f'CIFAR100-C - Corruption {args.cifar100c_corruption}, Severity {args.severity} - True accuracy --- {test_acc:.4f}')
@@ -418,6 +421,7 @@ def main(args):
         
         val_pim_acc, val_task_model_acc, val_labels_list, val_pim_logits_list, val_pim_probs_list, val_task_logits_list, val_task_probs_list = outs
         val_scores = get_score(val_task_logits_list, val_pim_logits_list)
+
         threshold = calc_gen_threshold(val_scores, val_task_logits_list, val_labels_list, name='pim')
 
         estimated_val_acc, val_estimated_success_failure_idx = calc_accuracy_from_scores(val_scores, threshold)
@@ -444,11 +448,13 @@ def main(args):
         print(cm_val)
         print(f'Gen Gap = {torch.abs(val_task_model_acc-estimated_val_acc)}')
         print(f'Failure Recall = {cm_val[0,0]/(cm_val[0,0]+cm_val[0,1])}')
+        print(f'Success Recall = {cm_val[1,1]/(cm_val[1,0]+cm_val[1,1])}')
 
         print('Test Data')
         print(cm_test)
         print(f'Gen Gap = {torch.abs(test_task_model_acc-estimated_test_acc)}')
         print(f'Failure Recall = {cm_test[0,0]/(cm_test[0,0]+cm_test[0,1])}')
+        print(f'Success Recall = {cm_test[1,1]/(cm_test[1,0]+cm_test[1,1])}')
 
     
     else:
@@ -590,7 +596,7 @@ python failure_detection_eval.py \
 --batch_size 512 \
 --img_size 32 \
 --seed 42 \
---task_layer_name model.layer4 \
+--task_layer_name model.layer2 \
 --cutmix_alpha 1.0 \
 --warmup_epochs 10 \
 --discrepancy_weight 1.0 \
