@@ -34,6 +34,7 @@ import numpy as np
 import random
 import pickle
 import json
+import logging
 
 from train_task_distillation import get_dataset, get_CLIP_text_encodings, build_classifier
 
@@ -42,6 +43,30 @@ from utils_proj import SimpleDINOLoss, compute_accuracy, compute_similarities, C
 from models.cluster import ClusterCreater
 from sklearn.metrics import confusion_matrix
 CLIP_LOGIT_SCALE = 100
+
+
+class CIFAR100C(torch.utils.data.Dataset):
+    def __init__(self, corruption='gaussian_blur', transform=None,clip_transform=None, level=0):
+        numpy_path = f'/p/lustre1/viv41siv/projects/delta_uq_regression/data/CIFAR-100-c/CIFAR-100-C/{corruption}.npy'
+        t = 10000 # We choose 10000 because, every numpy array has 50000 images, where the first 10000 images belong to severity 0 and so on. t is just an index for that
+        self.transform = transform # Standard CIFAR100 test transform
+        self.clip_transform = clip_transform
+        self.data_ = np.load(numpy_path)[level*10000:(level+1)*10000,:,:,:] # Choosing 10000 images of a given severity
+        self.data = self.data_[:t,:,:,:] # Actually redundant, I don't want to disturb the code structure
+        self.targets_ = np.load('/p/lustre1/viv41siv/projects/delta_uq_regression/data/CIFAR-100-c/CIFAR-100-C/labels.npy')
+        self.targets = self.targets_[:t] # We select the first 10000. The next 10000 is identical to the first 10000 and so on
+        self.np_PIL = transforms.Compose([transforms.ToPILImage()])
+
+    def __len__(self):
+        return self.data.shape[0]
+
+    def __getitem__(self, idx):
+        image_ = self.data[idx,:,:,:]
+        if self.transform:
+            image = self.transform(image_)
+            image_to_clip = self.clip_transform(self.np_PIL(image_))
+        targets = self.targets[idx]
+        return image, targets, image_to_clip
 
 
 def entropy(prob):
@@ -71,7 +96,7 @@ def get_score(logits, ref_logits=None):
     elif args.score =='cross_entropy':
         # ref_logits is the logits of the PIM model
         ref_probs = F.softmax(ref_logits, dim=1)
-        scores = F.cross_entropy(logits, ref_probs, reduction='none')
+        scores = -F.cross_entropy(logits, ref_probs, reduction='none')
     return scores
 
 def calc_gen_threshold(scores, logits, labels, name='classifier'):
@@ -246,6 +271,13 @@ def evaluate_pim(data_loader, class_attributes_embeddings, class_attribute_promp
     return pim_acc, task_model_acc, labels_list, pim_logits_list, pim_probs_list, task_model_logits_list, task_model_probs_list
 
 def main(args):
+
+    log_path = f'{args.save_dir}/gen'
+    logfile = f'{log_path}/{args.filename}'
+    os.makedirs(log_path,exist_ok = True)
+    loglevel = logging.INFO
+    logging.basicConfig(level=loglevel,filename=logfile, filemode='a', format='%(levelname)s - %(message)s')
+    logger = logging.getLogger()
     
     ########################### Create the model ############################
     clip_model, clip_transform = clip.load(args.clip_model_name, device=args.device)
@@ -279,7 +311,13 @@ def main(args):
 
     train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True, num_workers=8, pin_memory=True)
     val_loader = torch.utils.data.DataLoader(val_dataset, batch_size=args.batch_size, shuffle=False, num_workers=8, pin_memory=True)
-    test_loader = torch.utils.data.DataLoader(test_dataset, batch_size=args.batch_size, shuffle=False, num_workers=8, pin_memory=True)
+
+    if args.eval_dataset == 'cifar100':
+        test_loader = torch.utils.data.DataLoader(test_dataset, batch_size=args.batch_size, shuffle=False, num_workers=8, pin_memory=True)
+    elif args.eval_dataset == 'cifar100c':
+        transform_test = transforms.Compose([transforms.ToTensor(),transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010))])
+        testset = CIFAR100C(corruption=args.cifar100c_corruption, transform=transform_test,clip_transform=clip_transform, level=args.severity)
+        test_loader = torch.utils.data.DataLoader(testset, batch_size=args.batch_size, shuffle=False, num_workers=8, pin_memory=True)
 
     print(f"Number of validation examples: {len(val_loader.dataset)}")
     print(f"Number of test examples: {len(test_loader.dataset)}")
@@ -289,6 +327,7 @@ def main(args):
     
     if args.method == 'baseline':
         classifier.to(device)
+        classifier.eval()
         
         # Evaluating task model
         print('Evaluating on Validation Data')
@@ -323,6 +362,11 @@ def main(args):
         print(cm_test)
         print(f'Gen Gap = {torch.abs(test_acc-estimated_test_acc)}')
         print(f'Failure Recall = {cm_test[0,0]/(cm_test[0,0]+cm_test[0,1])}')
+
+        if args.eval_dataset == 'cifar100c':
+            logger.info(f'CIFAR100-C - Corruption {args.cifar100c_corruption}, Severity {args.severity} - True accuracy --- {test_acc:.4f}')
+            logger.info(f'CIFAR100-C - Corruption {args.cifar100c_corruption}, Severity {args.severity} - Predicted accuracy --- {estimated_test_acc:.4f}')
+            logger.info(f'CIFAR100-C - Corruption {args.cifar100c_corruption}, Severity {args.severity} - Failure recall --- {cm_test[0,0]/(cm_test[0,0]+cm_test[0,1]):.4f}')
 
     elif args.method == 'pim':
         class_attributes_embeddings_prompts = torch.load(args.attributes_embeddings_path)
@@ -421,6 +465,10 @@ if __name__ == "__main__":
     parser.add_argument('--num_classes', type=int, default=100, help='Number of classes in the dataset')
     parser.add_argument('--method', type=str, default='baseline', help='Baseline or PIM for failure detection')
     parser.add_argument('--score', type=str, default='msp', help='Failure detection score - msp/energy/pe')
+    parser.add_argument('--eval_dataset', type=str, default='cifar100', help='Evaluation dataset')
+    parser.add_argument('--filename', type=str, default='cifar100c.log', help='Filename')
+    parser.add_argument('--cifar100c_corruption', default="gaussian_blur", type=str, help='Corruption type')
+    parser.add_argument('--severity', default=5, type=int, help='Severity of corruption')
     
     parser.add_argument('--use_saved_features',action = 'store_true', help='Whether to use saved features or not')
     parser.add_argument('--batch_size', type=int, default=32, help='Batch size for the dataloader')
@@ -486,9 +534,18 @@ if __name__ == "__main__":
     tb_logger = TensorBoardLogger(args.save_dir)
     csv_logger = CSVLogger(args.save_dir, flush_logs_every_n_steps=1)
 
-    seed_everything(args.seed)
-
-    main(args)
+    corruption_list = ['brightness', 'defocus_blur', 'fog', 'gaussian_blur', 'glass_blur', 'jpeg_compression', 'motion_blur', 'saturate','snow','speckle_noise', 'contrast', 'elastic_transform', 'frost', 'gaussian_noise', 'impulse_noise', 'pixelate','shot_noise', 'spatter','zoom_blur']
+    severity = [4]
+    if args.eval_dataset == 'cifar100c':
+        for c in corruption_list:
+            for s in severity:
+                args.cifar100c_corruption = c
+                args.severity = s
+                print(f'Corruption = {args.cifar100c_corruption}, Severity = {args.severity}')
+                seed_everything(args.seed)
+                main(args)
+    else:
+        main(args)
 
 '''
 Example usage:
@@ -559,8 +616,10 @@ python failure_detection_eval.py \
 --augmix_prob 0.2 \
 --cutmix_prob 0.2 \
 --resume_checkpoint_path logs/cifar100/mapper/_agg_mean_bs_512_lr_0.001_augmix_prob_0.2_cutmix_prob_0.2_scheduler_layer_model.layer4/pim_weights_best.pth \
---method pim \
---score cross_entropy
+--method baseline \
+--score pe \
+--eval_dataset cifar100c
+--filename cifar100c.log
 
 
 '''
