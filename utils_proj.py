@@ -256,8 +256,8 @@ class ImageTransforms:
         return transformed_images
 
 class MyAugMix:
-    def __init__(self, severity=3, mixture_width=3, chain_depth=-1, alpha=1.0 ,mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]):
-        augmix = AugMix(severity=severity, width=mixture_width, depth=chain_depth, alpha=alpha)
+    def __init__(self, severity=3,  alpha=1.0 ,mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]):
+        augmix = AugMix(severity=severity, alpha=alpha)
         self.augmix = augmix
         self.mean = mean
         self.std = std
@@ -265,17 +265,17 @@ class MyAugMix:
         # first invert the normalization
         inverse_normalization = T.Normalize(mean=[-m/s for m, s in zip(self.mean, self.std)], std=[1/s for s in self.std])
         image_tensor = inverse_normalization(image_tensor)
+        
         #convert to PIL
-        image_pil = T.ToPILImage()(image_tensor)
+        image_tensor = (image_tensor*255.).type(torch.uint8)
         # apply augmix
         
-        augmented_image = self.augmix(image_pil)
-        # convert back to tensor
-        augmented_image_tensor = T.ToTensor()(augmented_image)
+        augmented_image = self.augmix(image_tensor)
+        augmented_image = augmented_image/255.
         # normalize the augmented image
-        augmented_image_tensor = T.Normalize(mean = self.mean, std = self.std)(augmented_image_tensor)
+        augmented_image = T.Normalize(mean = self.mean, std = self.std)(augmented_image)
 
-        return augmented_image_tensor
+        return augmented_image
 
                  
 class CutMix:
@@ -342,7 +342,12 @@ class CutMix:
         mixed_labels = lam * labels_one_hot + (1 - lam) * labels_one_hot_perm
 
         return mixed_features, mixed_labels
-
+def find_normalization_parameters(transform_pipeline):
+    for transform in transform_pipeline.transforms:
+        if isinstance(transform, T.Normalize):
+            mean, std = transform.mean, transform.std
+            return mean, std
+    return None, None  # Returns None if no Normalize transform is found
 if __name__ == "__main__":
 
     # import clip
