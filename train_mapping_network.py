@@ -348,7 +348,13 @@ def main(args):
     # Add the MHA parameters to the optimizer
     optimizer.add_param_group({"params": mha.parameters()})
 
-    # Create the multi step learning rate scheduler
+    # Learning rate scheduler
+    if args.scheduler == 'MultiStepLR':
+        scheduler = optim.lr_scheduler.MultiStepLR(optimizer, milestones=[60, 120, 160], gamma=0.2)
+    elif args.scheduler == 'cosine':
+        scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=100)
+    else:
+        scheduler = None
 
     start_epoch = 0
 
@@ -357,6 +363,7 @@ def main(args):
             "pim_model": pim_model,
             "mha": mha,
             "optimizer": optimizer, 
+            "scheduler": scheduler,
             "epoch": start_epoch}
 
     if args.resume_checkpoint_path:
@@ -369,6 +376,7 @@ def main(args):
         pim_model = state["pim_model"]
         mha = state["mha"]
         optimizer = state["optimizer"]
+        scheduler = state["scheduler"]
 
         fabric.print(f"Loaded checkpoint from {args.resume_checkpoint_path} at epoch {start_epoch}")
     if start_epoch >= args.num_epochs:
@@ -387,6 +395,9 @@ def main(args):
             val_performance_dict = validate( 
                 test_loader, class_attributes_embeddings, class_attribute_prompts, 
                                              clip_model, classifier, pim_model, mha, optimizer, epoch)
+
+        if scheduler is not None:
+            scheduler.step()
         
         # Print the losses
         fabric.print(f"Epoch: {epoch+1}/{args.num_epochs} | Train Loss: {train_performance_dict['total_loss']:.4f} | Val Loss: {val_performance_dict['total_loss']:.4f} | Train task model Acc: {train_performance_dict['task_model_acc']:.4f} | Val task model Acc: {val_performance_dict['task_model_acc']:.4f} | Train pim Acc: {train_performance_dict['pim_acc']:.4f} | Val pim Acc: {val_performance_dict['pim_acc']:.4f}")
@@ -451,6 +462,7 @@ if __name__ == "__main__":
     parser.add_argument('--num_epochs', type=int, default=100, help='Number of training epochs')
     parser.add_argument('--optimizer', type=str, choices=['adam','adamw', 'sgd'], default='adamw', help='Type of optimizer to use')
     parser.add_argument('--learning_rate', type=float, default=1e-3, help='Learning rate for the optimizer')
+    parser.add_argument('--scheduler', type=str, choices=['MultiStepLR', 'cosine'], default='cosine', help='Type of learning rate scheduler to use')
     parser.add_argument('--val_freq', type=int, default=1, help='Validation frequency')
     parser.add_argument('--save_dir', type=str, default='./logs', help='Directory to save the results')
     parser.add_argument('--prefix', type=str, default='', help='prefix to add to the save directory')
@@ -551,6 +563,7 @@ python train_mapping_network.py \
 --num_epochs 100 \
 --optimizer adamw \
 --learning_rate 1e-3 \
+--scheduler MultiStepLR \
 --val_freq 1 \
 --save_dir ./logs \
 --prefix '' \
