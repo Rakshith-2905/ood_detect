@@ -37,7 +37,7 @@ import json
 
 from train_task_distillation import get_dataset, get_CLIP_text_encodings, build_classifier
 
-from models.mapping import TaskMapping, MultiHeadedAttentionSimilarity, MultiHeadedAttention, print_layers
+from models.mapping import TaskMapping, MultiHeadedAttentionSimilarity, MultiHeadedAttention, print_layers, MeanAggregator, MaxAggregator
 from utils_proj import SimpleDINOLoss, compute_accuracy, compute_similarities, CutMix, MyAugMix, find_normalization_parameters
 from models.cluster import ClusterCreater
 from sklearn.metrics import confusion_matrix
@@ -59,7 +59,7 @@ def compute_energy(logits, T=1.0):
     return -T*torch.logsumexp(logits/T, dim=1)
 
 
-def get_score(logits):
+def get_score(logits, ref_logits=None):
     #NOTE: Scores have their sign appropraitely modified to reflect the fact that ID data always has higher scores than OOD data
     print(args.score)
     if args.score == 'msp':
@@ -68,6 +68,10 @@ def get_score(logits):
         scores = -compute_energy(logits)
     elif args.score == 'pe':
         scores = -entropy(F.softmax(logits, dim=1))
+    elif args.score =='cross_entropy':
+        # ref_logits is the logits of the PIM model
+        ref_probs = F.softmax(ref_logits, dim=1)
+        scores = F.cross_entropy(logits, ref_probs, reduction='none')
     return scores
 
 def calc_gen_threshold(scores, logits, labels, name='classifier'):
@@ -167,27 +171,29 @@ def evaluate_classifier(data_loader, classifier, device='cpu'):
 
 
 @torch.no_grad()
-def pim_failure_detection(data_loader, class_attributes_embeddings, class_attribute_prompt_list,
-                    clip_model, classifier, pim_model, mha, optimizer, epoch): 
+def evaluate_pim(data_loader, class_attributes_embeddings, class_attribute_prompt_list,
+                    clip_model, classifier, pim_model, aggregator): 
     
     # Set the model to eval mode
     pim_model.eval()
-    mha.eval()
-
+    aggregator.eval()
+    classifier.eval()
     total_loss = 0
     total_task_model_acc = 0
     total_pim_acc = 0
     pbar = progbar_wrapper(
-        data_loader, total=len(data_loader), desc=f"Training Epoch {epoch+1}"
+        data_loader, total=len(data_loader), desc=f"Eval"
     )
     
+    labels_list, pim_logits_list, pim_probs_list = [], [], []
+    task_model_logits_list, task_model_probs_list = [], []
+
     for i, (images_batch, labels, images_clip_batch) in enumerate(pbar):
         
-        images_batch = fabric.to_device(images_batch)
-        images_clip_batch = fabric.to_device(images_clip_batch)
-        labels = fabric.to_device(labels)
+        images_batch = images_batch.to(device)
+        labels = labels.to(device)
 
-        pim_image_embeddings, task_model_logits, _ = pim_model(images_batch, return_logits=True, use_cutmix=False)
+        pim_image_embeddings, task_model_logits, _ = pim_model(images_batch, return_task_logits=True)
 
         # Cosine similarity between the pim image embeddings and the class_attributes_embeddings
         normalized_pim_image_embeddings = F.normalize(pim_image_embeddings, dim=-1)
@@ -205,7 +211,7 @@ def pim_failure_detection(data_loader, class_attributes_embeddings, class_attrib
             start += num_attributes
         
         # Compute the pim logits using the multiheaded attention
-        pim_logits = mha(pim_similarities_dict)
+        pim_logits = aggregator(pim_similarities_dict)
 
         loss = F.cross_entropy(pim_logits, labels)
 
@@ -220,14 +226,24 @@ def pim_failure_detection(data_loader, class_attributes_embeddings, class_attrib
 
         total_loss += loss.item()
 
-    total_loss = fabric.all_gather(total_loss).mean() / len(data_loader)
-    total_task_model_acc = fabric.all_gather(total_task_model_acc).mean() / len(data_loader)
-    total_pim_acc = fabric.all_gather(total_pim_acc).mean() / len(data_loader)
+        labels_list.append(labels)
+        pim_logits_list.append(pim_logits)
+        pim_probs_list.append(pim_probs)
+        task_model_logits_list.append(task_model_logits)
+        task_model_probs_list.append(task_model_probs)
 
-    performance_dict = {"total_loss": total_loss, "task_model_acc": total_task_model_acc, "pim_acc": total_pim_acc}
+    labels_list = torch.cat(labels_list, dim=0)
+    pim_logits_list = torch.cat(pim_logits_list, dim=0)
+    pim_probs_list = torch.cat(pim_probs_list, dim=0)
+    task_model_logits_list = torch.cat(task_model_logits_list, dim=0)
+    task_model_probs_list = torch.cat(task_model_probs_list, dim=0)
+    
 
-    return performance_dict
-
+    print(labels_list.shape, pim_logits_list.shape, pim_probs_list.shape, task_model_logits_list.shape, task_model_probs_list.shape)
+    pim_acc = compute_accuracy(pim_probs_list, labels_list)
+    task_model_acc = compute_accuracy(task_model_probs_list, labels_list)
+    print(f'PIM Accuracy on {args.dataset_name} = {pim_acc} and Task Model Accuracy = {task_model_acc}')
+    return pim_acc, task_model_acc, labels_list, pim_logits_list, pim_probs_list, task_model_logits_list, task_model_probs_list
 
 def main(args):
     
@@ -239,9 +255,6 @@ def main(args):
     classifier, train_transform, test_transform = build_classifier(args.classifier_name, num_classes=args.num_classes, 
                                                                     pretrained=args.use_imagenet_pretrained, 
                                                                     checkpoint_path=args.classifier_checkpoint_path)
-    
-
-
 
     mapper,_, _ = build_classifier(args.classifier_name, num_classes=args.num_classes, pretrained=True, checkpoint_path=None)
     
@@ -294,7 +307,6 @@ def main(args):
 
         print(f'Score = {args.score}')
         print(f'True Validation Accuracy = {val_acc}, Estimated Validation Accuracy = {estimated_val_acc}, True Test Accuracy = {test_acc}, Estimated Test Accuracy = {estimated_test_acc}')
-        
         val_true_success_failure_idx = torch.argmax(val_probs_list, 1) == val_labels_list
         test_true_success_failure_idx = torch.argmax(test_probs_list, 1) == test_labels_list
 
@@ -321,8 +333,29 @@ def main(args):
 
         num_attributes_per_cls = [len(attributes) for attributes in class_attribute_prompts]
         
+        
+        if args.attribute_aggregation == "mha":
+            aggregator = MultiHeadedAttentionSimilarity(args.num_classes, num_attributes_per_cls=num_attributes_per_cls, num_heads=1, out_dim=1)
+        elif args.attribute_aggregation == "mean":
+            aggregator = MeanAggregator(num_classes=args.num_classes, num_attributes_per_cls=num_attributes_per_cls)
 
-        mha = MultiHeadedAttentionSimilarity(args.num_classes, num_attributes_per_cls=num_attributes_per_cls, num_heads=1, out_dim=1)
+        elif args.attribute_aggregation == "max":
+            aggregator = MaxAggregator(num_classes=args.num_classes, num_attributes_per_cls=num_attributes_per_cls)
+
+        else:
+            raise Exception("Invalid attribute aggregation method")
+
+        if args.resume_checkpoint_path:
+            state = torch.load(args.resume_checkpoint_path)
+            print(state.keys())
+            classifier.load_state_dict(state["classifier"])
+            pim_model.load_state_dict(state["pim_model"])
+            aggregator.load_state_dict(state[f"aggregator"])
+
+
+            
+            print(f"Loaded checkpoint from {args.resume_checkpoint_path}")
+
 
         print(f"Built {args.classifier_name} classifier with checkpoint path: {args.classifier_checkpoint_path}")
         print(f"Built {args.classifier_name} mapper")
@@ -331,7 +364,48 @@ def main(args):
         clip_model.to(device)
         classifier.to(device)
         pim_model.to(device)
-        mha.to(device)
+        aggregator.to(device)
+
+        # Evaluating task model
+        print('Evaluating on Validation Data')
+        # TODO: Update this to get task model logits and probs as well
+        outs = evaluate_pim(val_loader, class_attributes_embeddings, class_attribute_prompts,
+                            clip_model, classifier, pim_model, aggregator)
+        
+        val_pim_acc, val_task_model_acc, val_labels_list, val_pim_logits_list, val_pim_probs_list, val_task_logits_list, val_task_probs_list = outs
+        val_scores = get_score(val_task_logits_list, val_pim_logits_list)
+        threshold = calc_gen_threshold(val_scores, val_task_logits_list, val_labels_list, name='pim')
+
+        estimated_val_acc, val_estimated_success_failure_idx = calc_accuracy_from_scores(val_scores, threshold)
+
+        # Repeating this for test data
+        print('Evaluating on Test Data')
+        outs = evaluate_pim(test_loader, class_attributes_embeddings, class_attribute_prompts,
+                            clip_model, classifier, pim_model, aggregator)
+        
+        test_pim_acc, test_task_model_acc, test_labels_list, test_pim_logits_list, test_pim_probs_list, test_task_logits_list, test_task_probs_list = outs
+        test_scores = get_score(test_task_logits_list, test_pim_logits_list)
+        estimated_test_acc, test_estimated_success_failure_idx = calc_accuracy_from_scores(test_scores, threshold)
+
+        print(f'Score = {args.score}')
+        print(f'True Validation Accuracy = {val_task_model_acc}, Estimated Validation Accuracy = {estimated_val_acc}, True Test Accuracy = {test_task_model_acc}, Estimated Test Accuracy = {estimated_test_acc}')
+        val_true_success_failure_idx = torch.argmax(val_task_logits_list, 1) == val_labels_list
+        test_true_success_failure_idx = torch.argmax(test_task_logits_list, 1) == test_labels_list
+
+        print('Confusion Matrices')
+        cm_val = confusion_matrix(val_true_success_failure_idx.cpu().numpy(), val_estimated_success_failure_idx.cpu().numpy())
+        cm_test = confusion_matrix(test_true_success_failure_idx.cpu().numpy(), test_estimated_success_failure_idx.cpu().numpy())
+
+        print('Validation Data')
+        print(cm_val)
+        print(f'Gen Gap = {torch.abs(val_task_model_acc-estimated_val_acc)}')
+        print(f'Failure Recall = {cm_val[0,0]/(cm_val[0,0]+cm_val[0,1])}')
+
+        print('Test Data')
+        print(cm_test)
+        print(f'Gen Gap = {torch.abs(test_task_model_acc-estimated_test_acc)}')
+        print(f'Failure Recall = {cm_test[0,0]/(cm_test[0,0]+cm_test[0,1])}')
+
     
     else:
         raise NotImplementedError
@@ -353,7 +427,7 @@ if __name__ == "__main__":
     parser.add_argument('--img_size', type=int, default=75, help='Image size for the celebA dataloader only')
     parser.add_argument('--seed', type=int, default=42, help='Seed for reproducibility')
 
-    parser.add_argument('--task_layer_name', type=str, default='model.layer1', help='Name of the layer to use for the task model')
+    parser.add_argument('--task_layer_name', type=str, default='model.layer2', help='Name of the layer to use for the task model')
     parser.add_argument('--cutmix_alpha', type=float, default=1.0, help='Alpha value for the beta distribution for cutmix')
     parser.add_argument('--augmix_severity', type=int, default=3, help='Severity of the augmix')
     parser.add_argument('--augmix_alpha', type=float, default=1.0, help='Alpha value for the beta distribution for augmix')
@@ -366,6 +440,8 @@ if __name__ == "__main__":
     parser.add_argument('--attributes_path', type=str, help='Path to the attributes file')
     parser.add_argument('--attributes_embeddings_path', type=str, help='Path to the attributes embeddings file')
 
+    parser.add_argument('--attribute_aggregation', default='mha', choices=['mha', 'mean', 'max'], help='Type of aggregation of the attribute scores')
+
     parser.add_argument('--classifier_name', required=True,  help='Name of the classifier to use sam_vit_h, mae_vit_large_patch16, dino_vits16, resnet50, resnet50_adv_l2_0.1, resnet50_adv_l2_0.5, resnet50x1_bitm, resnetv2_101x1_bit.goog_in21k, deeplabv3_resnet50, deeplabv3_resnet101, fcn_resnet50, fcn_resnet101')
     parser.add_argument('--classifier_checkpoint_path', type=str, help='Path to checkpoint to load the classifier from')
     parser.add_argument('--classifier_dim', type=int, default=None, help='Dimension of the classifier output')
@@ -377,6 +453,8 @@ if __name__ == "__main__":
     parser.add_argument('--num_epochs', type=int, default=100, help='Number of training epochs')
     parser.add_argument('--optimizer', type=str, choices=['adam','adamw', 'sgd'], default='adamw', help='Type of optimizer to use')
     parser.add_argument('--learning_rate', type=float, default=1e-3, help='Learning rate for the optimizer')
+    parser.add_argument('--aggregator_learning_rate', type=float, default=1e-3, help='Learning rate for the optimizer')
+    parser.add_argument('--scheduler', type=str, choices=['MultiStepLR', 'cosine'], default='cosine', help='Type of learning rate scheduler to use')
     parser.add_argument('--val_freq', type=int, default=1, help='Validation frequency')
     parser.add_argument('--save_dir', type=str, default='./logs', help='Directory to save the results')
     parser.add_argument('--prefix', type=str, default='', help='prefix to add to the save directory')
@@ -447,14 +525,15 @@ python train_mapping_network.py \
 
 '''
 '''
+
 python failure_detection_eval.py \
---data_dir '/usr/workspace/viv41siv/ICLR2024/AMP/data/CIFAR100' \
+--data_dir './data' \
 --dataset_name cifar100 \
 --num_classes 100 \
---batch_size 128 \
+--batch_size 512 \
 --img_size 32 \
 --seed 42 \
---task_layer_name model.layer1 \
+--task_layer_name model.layer4 \
 --cutmix_alpha 1.0 \
 --warmup_epochs 10 \
 --discrepancy_weight 1.0 \
@@ -463,21 +542,25 @@ python failure_detection_eval.py \
 --classifier_name resnet18 \
 --classifier_checkpoint_path logs/cifar100/resnet18/classifier/checkpoint_199.pth \
 --use_imagenet_pretrained \
+--attribute_aggregation mean \
 --clip_model_name ViT-B/32 \
 --prompt_path data/cifar100/cifar100_CLIP_ViT-B_32_text_embeddings.pth \
---num_epochs 100 \
+--num_epochs 200 \
 --optimizer adamw \
 --learning_rate 1e-3 \
+--aggregator_learning_rate 1e-3 \
+--scheduler MultiStepLR \
 --val_freq 1 \
 --save_dir ./logs \
 --prefix '' \
 --vlm_dim 512 \
---num_gpus 2 \
+--num_gpus 1 \
 --num_nodes 1 \
 --augmix_prob 0.2 \
 --cutmix_prob 0.2 \
---method baseline \
---score msp
+--resume_checkpoint_path logs/cifar100/mapper/_agg_mean_bs_512_lr_0.001_augmix_prob_0.2_cutmix_prob_0.2_scheduler_layer_model.layer4/pim_weights_best.pth \
+--method pim \
+--score cross_entropy
 
 
 '''
