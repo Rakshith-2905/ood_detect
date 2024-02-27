@@ -318,11 +318,13 @@ def main(args):
         print(cm_val)
         print(f'Gen Gap = {torch.abs(val_acc-estimated_val_acc)}')
         print(f'Failure Recall = {cm_val[0,0]/(cm_val[0,0]+cm_val[0,1])}')
+        print(f'Success Recall = {cm_val[1,1]/(cm_val[1,0]+cm_val[1,1])}')
 
         print('Test Data')
         print(cm_test)
         print(f'Gen Gap = {torch.abs(test_acc-estimated_test_acc)}')
         print(f'Failure Recall = {cm_test[0,0]/(cm_test[0,0]+cm_test[0,1])}')
+        print(f'Success Recall = {cm_test[1,1]/(cm_test[1,0]+cm_test[1,1])}')
 
     elif args.method == 'pim':
         class_attributes_embeddings_prompts = torch.load(args.attributes_embeddings_path)
@@ -401,11 +403,13 @@ def main(args):
         print(cm_val)
         print(f'Gen Gap = {torch.abs(val_task_model_acc-estimated_val_acc)}')
         print(f'Failure Recall = {cm_val[0,0]/(cm_val[0,0]+cm_val[0,1])}')
+        print(f'Success Recall = {cm_val[1,1]/(cm_val[1,0]+cm_val[1,1])}')
 
         print('Test Data')
         print(cm_test)
         print(f'Gen Gap = {torch.abs(test_task_model_acc-estimated_test_acc)}')
         print(f'Failure Recall = {cm_test[0,0]/(cm_test[0,0]+cm_test[0,1])}')
+        print(f'Success Recall = {cm_test[1,1]/(cm_test[1,0]+cm_test[1,1])}')
 
     
     else:
@@ -534,7 +538,7 @@ python failure_detection_eval.py \
 --batch_size 512 \
 --img_size 32 \
 --seed 42 \
---task_layer_name model.layer4 \
+--task_layer_name model.layer2 \
 --cutmix_alpha 1.0 \
 --warmup_epochs 10 \
 --discrepancy_weight 1.0 \
@@ -559,7 +563,7 @@ python failure_detection_eval.py \
 --num_nodes 1 \
 --augmix_prob 0.2 \
 --cutmix_prob 0.2 \
---resume_checkpoint_path logs/cifar100/mapper/_agg_mean_bs_512_lr_0.001_augmix_prob_0.2_cutmix_prob_0.2_scheduler_layer_model.layer4/pim_weights_best.pth \
+--resume_checkpoint_path logs/cifar100/mapper/_agg_mean_bs_512_lr_0.001_augmix_prob_0.2_cutmix_prob_0.2_scheduler_layer_model.layer2/pim_weights_best.pth \
 --method pim \
 --score cross_entropy
 
