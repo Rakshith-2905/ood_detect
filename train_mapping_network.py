@@ -345,8 +345,9 @@ def main(args):
     else:
         raise Exception("Invalid optimizer")
     
-    # Add the MHA parameters to the optimizer
-    optimizer.add_param_group({"params": mha.parameters()})
+    
+    # Add the MHA parameters to the optimizer with a different learning rate
+    optimizer.add_param_group({"params": mha.parameters(), "lr": args.mha_learning_rate})
 
     # Learning rate scheduler
     if args.scheduler == 'MultiStepLR':
@@ -462,6 +463,7 @@ if __name__ == "__main__":
     parser.add_argument('--num_epochs', type=int, default=100, help='Number of training epochs')
     parser.add_argument('--optimizer', type=str, choices=['adam','adamw', 'sgd'], default='adamw', help='Type of optimizer to use')
     parser.add_argument('--learning_rate', type=float, default=1e-3, help='Learning rate for the optimizer')
+    parser.add_argument('--mha_learning_rate', type=float, default=1e-3, help='Learning rate for the optimizer')
     parser.add_argument('--scheduler', type=str, choices=['MultiStepLR', 'cosine'], default='cosine', help='Type of learning rate scheduler to use')
     parser.add_argument('--val_freq', type=int, default=1, help='Validation frequency')
     parser.add_argument('--save_dir', type=str, default='./logs', help='Directory to save the results')
