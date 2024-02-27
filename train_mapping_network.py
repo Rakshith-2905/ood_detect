@@ -61,7 +61,7 @@ def get_save_dir(args):
 
     save_dir = os.path.join(args.save_dir, args.dataset_name, att_name, projector_name)
     
-    save_dir_details = f"{args.prefix}_bs_{args.batch_size}_lr_{args.learning_rate}_augmix_prob_{args.augmix_prob}_cutmix_prob_{args.cutmix_prob}"
+    save_dir_details = f"{args.prefix}_bs_{args.batch_size}_lr_{args.learning_rate}_augmix_prob_{args.augmix_prob}_cutmix_prob_{args.cutmix_prob}_scheduler_layer_{args.task_layer_name}"
 
     return os.path.join(save_dir, save_dir_details)
 
@@ -341,7 +341,8 @@ def main(args):
     elif args.optimizer == "adamw":
         optimizer = torch.optim.AdamW(pim_model.parameters(), lr=args.learning_rate)
     elif args.optimizer == "sgd":
-        optimizer = torch.optim.SGD(pim_model.parameters(), lr=args.learning_rate, momentum=0.9, weight_decay=1e-4)
+
+        optimizer = torch.optim.SGD(pim_model.parameters(), lr=args.learning_rate, momentum=0.9, weight_decay=5e-4)
     else:
         raise Exception("Invalid optimizer")
     
@@ -351,9 +352,9 @@ def main(args):
 
     # Learning rate scheduler
     if args.scheduler == 'MultiStepLR':
-        scheduler = optim.lr_scheduler.MultiStepLR(optimizer, milestones=[60, 120, 160], gamma=0.2)
+        scheduler = torch.optim.lr_scheduler.MultiStepLR(optimizer, milestones=[60, 120, 160], gamma=0.2)
     elif args.scheduler == 'cosine':
-        scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=100)
+        scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=100)
     else:
         scheduler = None
 
@@ -439,7 +440,7 @@ if __name__ == "__main__":
     parser.add_argument('--img_size', type=int, default=75, help='Image size for the celebA dataloader only')
     parser.add_argument('--seed', type=int, default=42, help='Seed for reproducibility')
 
-    parser.add_argument('--task_layer_name', type=str, default='model.layer1', help='Name of the layer to use for the task model')
+    parser.add_argument('--task_layer_name', type=str, default='model.layer2', help='Name of the layer to use for the task model')
     parser.add_argument('--cutmix_alpha', type=float, default=1.0, help='Alpha value for the beta distribution for cutmix')
     parser.add_argument('--augmix_severity', type=int, default=3, help='Severity of the augmix')
     parser.add_argument('--augmix_alpha', type=float, default=1.0, help='Alpha value for the beta distribution for augmix')
@@ -551,7 +552,7 @@ python train_mapping_network.py \
 --batch_size 512 \
 --img_size 32 \
 --seed 42 \
---task_layer_name model.layer1 \
+--task_layer_name model.layer4 \
 --cutmix_alpha 1.0 \
 --warmup_epochs 10 \
 --discrepancy_weight 1.0 \
@@ -562,7 +563,7 @@ python train_mapping_network.py \
 --use_imagenet_pretrained \
 --clip_model_name ViT-B/32 \
 --prompt_path data/cifar100/cifar100_CLIP_ViT-B_32_text_embeddings.pth \
---num_epochs 100 \
+--num_epochs 200 \
 --optimizer adamw \
 --learning_rate 1e-3 \
 --scheduler MultiStepLR \
@@ -572,8 +573,8 @@ python train_mapping_network.py \
 --vlm_dim 512 \
 --num_gpus 1 \
 --num_nodes 1 \
---augmix_prob 0.0 \
---cutmix_prob 0.0 
+--augmix_prob 0.2 \
+--cutmix_prob 0.2 
 
 
 '''
