@@ -61,7 +61,7 @@ def get_save_dir(args):
 
     save_dir = os.path.join(args.save_dir, args.dataset_name, att_name, projector_name)
     
-    save_dir_details = f"{args.prefix}_bs_{args.batch_size}_lr_{args.learning_rate}"
+    save_dir_details = f"{args.prefix}_bs_{args.batch_size}_lr_{args.learning_rate}_augmix_prob_{args.augmix_prob}_cutmix_prob_{args.cutmix_prob}"
 
     return os.path.join(save_dir, save_dir_details)
 
@@ -164,7 +164,7 @@ def train_one_epoch(data_loader, class_attributes_embeddings, class_attribute_pr
     total_task_model_acc = fabric.all_gather(total_task_model_acc).mean() / len(data_loader)
     total_pim_acc = fabric.all_gather(total_pim_acc).mean() / len(data_loader)
 
-    performance_dict = {"total_loss": total_loss, "task_model_acc %":total_task_model_acc *100., "pim_acc %": total_pim_acc *100.}
+    performance_dict = {"total_loss": total_loss, "task_model_acc":total_task_model_acc *100., "pim_acc": total_pim_acc *100.}
 
 
     return performance_dict
@@ -176,7 +176,7 @@ def validate(data_loader, class_attributes_embeddings, class_attribute_prompt_li
     # Set the model to eval mode
     pim_model.eval()
     mha.eval()
-
+    classifier.eval()
     total_loss = 0
     total_task_model_acc = 0
     total_pim_acc = 0
@@ -227,7 +227,7 @@ def validate(data_loader, class_attributes_embeddings, class_attribute_prompt_li
     total_task_model_acc = fabric.all_gather(total_task_model_acc).mean() / len(data_loader)
     total_pim_acc = fabric.all_gather(total_pim_acc).mean() / len(data_loader)
 
-    performance_dict = {"total_loss": total_loss, "task_model_acc %":total_task_model_acc *100., "pim_acc %": total_pim_acc *100.}
+    performance_dict = {"total_loss": total_loss, "task_model_acc":total_task_model_acc *100., "pim_acc": total_pim_acc *100.}
 
     return performance_dict
 
@@ -557,8 +557,8 @@ python train_mapping_network.py \
 --vlm_dim 512 \
 --num_gpus 1 \
 --num_nodes 1 \
---augmix_prob 0.2 \
---cutmix_prob 0.2 
+--augmix_prob 0.0 \
+--cutmix_prob 0.0 
 
 
 '''
