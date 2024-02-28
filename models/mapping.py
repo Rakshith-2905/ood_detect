@@ -18,33 +18,38 @@ class TaskMapping(nn.Module):
         self.task_features = None
         self.cutmix_fn = cutmix_fn
         self.task_model.eval()
-
+        self.task_layer_name = task_layer_name
         mapping_layer_name = task_layer_name
 
         # Freeze all parameters in the task model for inference
         for param in self.task_model.parameters():
             param.requires_grad = False
+        if task_layer_name!="model.layer0":
+            # Register hook to the task model layer
+            task_layer = dict(self.task_model.named_modules())[task_layer_name]
+            task_layer.register_forward_hook(self.save_task_features_hook())
 
-        # Register hook to the task model layer
-        task_layer = dict(self.task_model.named_modules())[task_layer_name]
-        task_layer.register_forward_hook(self.save_task_features_hook())
+            # Update the base model if 'model.' is in the layer name
+            if mapping_layer_name.startswith('model.'):
+                if hasattr(mapping_model, 'model'):
+                    mapping_model = getattr(mapping_model, 'model')
+                    mapping_layer_name = mapping_layer_name.replace('model.', '', 1)  # Remove 'model.' prefix from layer name
+                else:
+                    raise ValueError("The mapping model does not have a 'model' submodule.")
 
-        # Update the base model if 'model.' is in the layer name
-        if mapping_layer_name.startswith('model.'):
-            if hasattr(mapping_model, 'model'):
-                mapping_model = getattr(mapping_model, 'model')
-                mapping_layer_name = mapping_layer_name.replace('model.', '', 1)  # Remove 'model.' prefix from layer name
+            all_layers = OrderedDict(mapping_model.named_children())
+
+            if mapping_layer_name in all_layers:
+                start_index = list(all_layers.keys()).index(mapping_layer_name) + 1
+                selected_layers = OrderedDict(list(all_layers.items())[start_index:-1])  # Remove the last layer
             else:
-                raise ValueError("The mapping model does not have a 'model' submodule.")
+                raise ValueError(f"Layer {mapping_layer_name} not found in mapping model.")
 
-        all_layers = OrderedDict(mapping_model.named_children())
-
-        if mapping_layer_name in all_layers:
-            start_index = list(all_layers.keys()).index(mapping_layer_name) + 1
-            selected_layers = OrderedDict(list(all_layers.items())[start_index:-1])  # Remove the last layer
         else:
-            raise ValueError(f"Layer {mapping_layer_name} not found in mapping model.")
-
+            all_layers = OrderedDict(mapping_model.model.named_children())
+            
+            
+            selected_layers = OrderedDict(list(all_layers.items())[:-1])  # Remove the last layer
 
         # Calculate intermediate dimension for the MLP
         if vlm_dim > mapping_output_size:
@@ -78,6 +83,7 @@ class TaskMapping(nn.Module):
 
     def forward(self, x, labels=None, return_task_logits=False, use_cutmix=False):
         self.task_features = None  # Reset task features
+        
         with torch.no_grad():
             task_model_logits = self.task_model(x)  # Pass input through the task model to extract features through the hook
 
@@ -85,7 +91,9 @@ class TaskMapping(nn.Module):
                 self.task_features, labels = self.cutmix_fn(self.task_features, labels)
 
         with torch.set_grad_enabled(True):
-
+            if self.task_layer_name == "model.layer0":
+                self.task_features = x
+            
             output = self.mapping_model(self.task_features)  # Pass task features through the entire mapping model
             output = output.view(output.size(0), -1)  # Flatten the output
             output = self.projection_head(output)
