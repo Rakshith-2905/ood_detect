@@ -68,7 +68,183 @@ class CIFAR100C(torch.utils.data.Dataset):
         targets = self.targets[idx]
         return image, targets, image_to_clip
 
+def kl_divergence_pytorch(p, q):
+    """
+    Compute the KL divergence between two probability distributions.
+    """
+    return (p * (p / q).log()).sum(dim=1)
 
+def exhaustive_selection_for_samples(task_model_logits, clip_model_logits, num_classes, num_attributes_per_class, aggregation='mean'):
+    """
+    Performs exhaustive selection to minimize KL divergence across samples between aggregated attribute predictions (via mean or max) and task model predictions after removing each attribute for each class.
+    
+    :param task_model_logits: A PyTorch tensor of shape (num_samples, num_classes) with the task model's class probabilities for each sample.
+    :param clip_model_logits: A PyTorch tensor of shape (num_samples, sum(num_attributes_per_class)) with the CLIP model's attribute predictions.
+    :param num_classes: The number of classes.
+    :param num_attributes_per_class: A list specifying the number of attributes per class.
+    :param aggregation: A string specifying the type of aggregation ('mean' or 'max').
+    :return: A list of lists, containing the selected attributes for each class that minimizes KL divergence when removed.
+    """
+    num_samples = task_model_logits.shape[0]
+    selected_attributes = [set(range(n)) for n in num_attributes_per_class]
+
+    # Helper function to aggregate logits based on specified method
+    def aggregate(logits, dim, method='mean'):
+        if method == 'mean':
+            return logits.mean(dim=dim)
+        elif method == 'max':
+            return logits.max(dim=dim).values
+
+    # Compute the starting index of each class in the CLIP logits tensor
+    class_start_indices = [0]
+    for i in range(1, num_classes):
+        class_start_indices.append(class_start_indices[i-1] + num_attributes_per_class[i-1])
+
+    # Precompute base_modified_logits for all classes
+    base_modified_logits = []
+    for idx in range(num_classes):
+        start_idx = class_start_indices[idx]
+        end_idx = start_idx + num_attributes_per_class[idx]
+        if aggregation == 'mean':
+            aggregated_logits = clip_model_logits[:, start_idx:end_idx].mean(dim=1)
+        elif aggregation == 'max':
+            aggregated_logits = clip_model_logits[:, start_idx:end_idx].max(dim=1).values
+        base_modified_logits.append(aggregated_logits)
+
+    # Iterating through each class
+    for class_index in range(num_classes):
+        best_kl = float('inf')
+        best_attribute_set = set(range(num_attributes_per_class[class_index]))
+
+        # Iterating through each attribute for the current class
+        for attribute_index in range(num_attributes_per_class[class_index]):
+            test_attributes = set(range(num_attributes_per_class[class_index])) - {attribute_index}
+            
+            # Create a copy of base_modified_logits for the current iteration
+            modified_logits = base_modified_logits.copy()
+
+            # Update the logits for the current class after removing the attribute
+            if test_attributes:  # Ensure there are attributes to aggregate
+                indices = [class_start_indices[class_index] + idx for idx in test_attributes]
+                cls_aggregated_logits = aggregate(clip_model_logits[:, indices], dim=1, method=aggregation)
+                modified_logits[class_index] = cls_aggregated_logits
+
+            # Recompute the all_class_logits and all_class_probs using modified_logits
+            all_class_logits = torch.stack(modified_logits, dim=1)
+            all_class_probs = F.softmax(all_class_logits, dim=1)
+
+            # Extract the probability distributions for the class of interest and calculate KL divergence
+            cls_probs = all_class_probs[:, class_index]
+            kl_divergence = kl_divergence_pytorch(task_model_logits[:, class_index], cls_probs).mean()
+
+            # Check if this set of attributes results in lower KL divergence
+            if kl_divergence < best_kl:
+                best_kl = kl_divergence
+                best_attribute_set = test_attributes
+
+        # Update the selected attributes list for the current class
+        selected_attributes[class_index] = best_attribute_set
+
+    return [list(s) for s in selected_attributes]  # Convert each set to a list for the output
+
+
+
+@torch.no_grad()
+def clip_attribute_classifier(data_loader, class_attributes_embeddings, class_attribute_prompt_list,
+                                clip_model, classifier, pim_model, aggregator): 
+    
+    # Set the model to eval mode
+    clip_model.eval()
+
+    total_loss = 0
+    total_task_model_acc = 0
+    total_clip_acc = 0
+    pbar = progbar_wrapper(
+        data_loader, total=len(data_loader), desc=f"Eval"
+    )
+
+    class_names = data_loader.dataset.class_names
+
+    # Construct CLIP text embeddings
+    class_level_prompts = ["This is a photo of a " + class_name for class_name in class_names]
+    class_level_prompts = clip.tokenize(class_level_prompts).to(device)
+    class_text_embeddings = clip_model.encode_text(class_level_prompts)
+
+    
+    labels_list, clip_logits_list, clip_probs_list = [], [], []
+    task_model_logits_list, task_model_probs_list = [], []
+
+    clip_class_level_probs_list = []
+
+    for i, (images_batch, labels, images_clip_batch) in enumerate(pbar):
+        
+        images_batch = images_batch.to(device)
+        images_clip_batch = images_clip_batch.to(device)
+        labels = labels.to(device)
+
+        pim_image_embeddings, task_model_logits, _ = pim_model(images_batch, return_task_logits=True)
+
+        clip_image_embeddings = clip_model.encode_image(images_clip_batch)
+
+        # Cosine similarity between the pim image embeddings and the class_attributes_embeddings
+        normalized_clip_image_embeddings = F.normalize(clip_image_embeddings, dim=-1)
+        normalized_class_attributes_embeddings = F.normalize(class_attributes_embeddings, dim=-1)
+
+        normalized_class_text_embeddings = F.normalize(class_text_embeddings, dim=-1)
+
+        normalized_clip_image_embeddings = normalized_clip_image_embeddings.to(normalized_class_attributes_embeddings.dtype)
+        clip_similarities = CLIP_LOGIT_SCALE*(normalized_clip_image_embeddings @ normalized_class_attributes_embeddings.t()) # (batch_size, num_classes*num_attributes_perclass)
+
+        clip_class_level_logits = CLIP_LOGIT_SCALE*(normalized_clip_image_embeddings @ normalized_class_text_embeddings.t()) # (batch_size, num_classes)
+
+        # Split the similarities into class specific dictionary
+        clip_similarities = clip_similarities.to(torch.float32)
+        clip_similarities_dict = {}
+        start = 0
+        for i, class_prompts in enumerate(class_attribute_prompt_list):
+            num_attributes = len(class_prompts)
+            clip_similarities_dict[i] = clip_similarities[:, start:start+num_attributes]
+            start += num_attributes
+        
+        # Compute the pim logits using the multiheaded attention
+        clip_logits = aggregator(clip_similarities_dict)
+
+        loss = F.cross_entropy(clip_logits, labels)
+
+        task_model_probs = F.softmax(task_model_logits, dim=-1)
+        clip_probs = F.softmax(clip_logits, dim=-1)
+
+        clip_class_level_probs = F.softmax(clip_class_level_logits, dim=-1)
+        clip_class_level_probs_list.append(clip_class_level_probs)
+        
+        task_model_acc = compute_accuracy(task_model_probs, labels)
+        clip_acc = compute_accuracy(clip_probs, labels)
+
+        total_task_model_acc += task_model_acc
+        total_clip_acc += clip_acc
+
+        total_loss += loss.item()
+
+        labels_list.append(labels)
+        clip_logits_list.append(clip_logits)
+        clip_probs_list.append(clip_probs)
+        task_model_logits_list.append(task_model_logits)
+        task_model_probs_list.append(task_model_probs)
+
+    labels_list = torch.cat(labels_list, dim=0)
+    clip_logits_list = torch.cat(clip_logits_list, dim=0)
+    clip_probs_list = torch.cat(clip_probs_list, dim=0)
+    task_model_logits_list = torch.cat(task_model_logits_list, dim=0)
+    task_model_probs_list = torch.cat(task_model_probs_list, dim=0)
+    
+    clip_class_level_probs_list = torch.cat(clip_class_level_probs_list, dim=0)
+
+    clip_acc = compute_accuracy(clip_probs_list, labels_list)
+
+    clip_class_level_acc = compute_accuracy(clip_class_level_probs_list, labels_list)
+
+    task_model_acc = compute_accuracy(task_model_probs_list, labels_list)
+    print(f'clip Attribute level Accuracy on {args.dataset_name} = {clip_acc} Clip Class Level Accuracy = {clip_class_level_acc} and Task Model Accuracy = {task_model_acc}')
 
 def get_save_dir(args):
     
@@ -210,8 +386,7 @@ def evaluate_pim(data_loader, class_attributes_embeddings, class_attribute_promp
 def main(args):
 
     log_path = f'{args.save_dir}/gen'
-    
-    
+        
     ########################### Create the model ############################
     clip_model, clip_transform = clip.load(args.clip_model_name, device=args.device)
     clip_model.eval()
@@ -315,7 +490,7 @@ def main(args):
                 "val_failure_recall": cm_val[0,0]/(cm_val[0,0]+cm_val[0,1]),
                 "val_success_recall": cm_val[1,1]/(cm_val[1,0]+cm_val[1,1]),
                 "test_failure_recall": cm_test[0,0]/(cm_test[0,0]+cm_test[0,1]),
-                "test_success_recall": cm_test[1,1]/(cm_test[1,0]+cm_test[1,1])
+                "test_success_recall": cm_test[1,1]/(cm_test[1,0]+cm_test[1,1]),
             }
 
             # Save the results to a file
@@ -347,7 +522,7 @@ def main(args):
 
         if args.resume_checkpoint_path:
             state = torch.load(args.resume_checkpoint_path)
-            print(state.keys())
+            epoch = state["epoch"]
             classifier.load_state_dict(state["classifier"])
             pim_model.load_state_dict(state["pim_model"])
             aggregator.load_state_dict(state[f"aggregator"])
@@ -356,13 +531,16 @@ def main(args):
 
 
         print(f"Built {args.classifier_name} classifier with checkpoint path: {args.classifier_checkpoint_path}")
-        print(f"Built {args.classifier_name} mapper")
+        print(f"Built {args.classifier_name} mapper with checkpoint path: {args.classifier_checkpoint_path} from layer {args.task_layer_name} epoch {epoch}")
         print(f"Built MultiHeadedAttention with {args.num_classes} classes and {num_attributes_per_cls} attributes per class")
 
         clip_model.to(device)
         classifier.to(device)
         pim_model.to(device)
         aggregator.to(device)
+
+        # # This evaluates CLIP attribute classifier, NOTE: use only with mean and max aggregators
+        # clip_attribute_classifier(test_loader, class_attributes_embeddings, class_attribute_prompts, clip_model, classifier, pim_model, aggregator)
 
         # Evaluating task model
         print('Evaluating on Validation Data')
@@ -527,6 +705,45 @@ Example usage:
 
 python failure_detection_eval.py \
 --data_dir './data' \
+--dataset_name Waterbirds \
+--num_classes 2 \
+--batch_size 512 \
+--img_size 32 \
+--seed 42 \
+--task_layer_name model.layer1 \
+--cutmix_alpha 1.0 \
+--warmup_epochs 10 \
+--discrepancy_weight 1.0 \
+--attributes_path clip-dissect/Waterbirds_core_concepts.json \
+--attributes_embeddings_path data/Waterbirds/Waterbirds_attributes_CLIP_ViT-B_32_text_embeddings.pth \
+--classifier_name resnet18 \
+--classifier_checkpoint_path logs/Waterbirds/resnet18/classifier/checkpoint_99.pth \
+--use_imagenet_pretrained \
+--attribute_aggregation mean \
+--clip_model_name ViT-B/32 \
+--prompt_path data/Waterbirds/Waterbirds_CLIP_ViT-B_32_text_embeddings.pth \
+--num_epochs 200 \
+--optimizer adamw \
+--learning_rate 1e-3 \
+--aggregator_learning_rate 1e-3 \
+--scheduler MultiStepLR \
+--val_freq 1 \
+--save_dir ./logs \
+--prefix '' \
+--vlm_dim 512 \
+--num_gpus 1 \
+--num_nodes 1 \
+--augmix_prob 0.2 \
+--cutmix_prob 0.2 \
+--resume_checkpoint_path logs/Waterbirds/resnet18/mapper/_agg_mean_bs_512_lr_0.001_augmix_prob_0.2_cutmix_prob_0.2_scheduler_warmup_epoch_10_layer_model.layer1/pim_weights_best.pth \
+--method pim \
+--score cross_entropy \
+# --eval_dataset cifar100c \
+# --filename cifar100c.log
+
+
+python failure_detection_eval.py \
+--data_dir './data' \
 --dataset_name cifar100 \
 --num_classes 100 \
 --batch_size 512 \
@@ -541,7 +758,7 @@ python failure_detection_eval.py \
 --classifier_name resnet18 \
 --classifier_checkpoint_path logs/cifar100/resnet18/classifier/checkpoint_199.pth \
 --use_imagenet_pretrained \
---attribute_aggregation mean \
+--attribute_aggregation max \
 --clip_model_name ViT-B/32 \
 --prompt_path data/cifar100/cifar100_CLIP_ViT-B_32_text_embeddings.pth \
 --num_epochs 200 \
@@ -557,11 +774,11 @@ python failure_detection_eval.py \
 --num_nodes 1 \
 --augmix_prob 0.2 \
 --cutmix_prob 0.2 \
---resume_checkpoint_path logs/cifar100/mapper/_agg_mean_bs_512_lr_0.001_augmix_prob_0.2_cutmix_prob_0.2_scheduler_layer_model.layer3/pim_weights_best.pth \
---method baseline \
---score msp \
---eval_dataset cifar100c \
---filename cifar100c.log
+--resume_checkpoint_path logs/cifar100/mapper/_agg_mean_bs_512_lr_0.001_augmix_prob_0.2_cutmix_prob_0.2_scheduler_layer_model.layer3/pim_weights_11.pth \
+--method pim \
+--score cross_entropy \
+# --eval_dataset cifar100c \
+# --filename cifar100c.log
 
 
 '''
