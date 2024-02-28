@@ -55,13 +55,16 @@ def get_save_dir(args):
             att_name = f"att_{att_name}"
         else:
             att_name = "att_all"
-    
+
     if args.dataset_name == 'domainnet' and args.domain_name:
         att_name = f"{args.domain_name}"
 
-    save_dir = os.path.join(args.save_dir, args.dataset_name, att_name, projector_name)
+    if args.classifier_checkpoint_path:
+        save_dir = os.path.dirname(os.path.dirname(args.classifier_checkpoint_path))
+        save_dir = os.path.join(save_dir, "pim", att_name, projector_name)
+    save_dir = os.path.join(args.save_dir, args.dataset_name, args.classifier_name, att_name, projector_name)
     
-    save_dir_details = f"{args.prefix}_agg_{args.attribute_aggregation}_bs_{args.batch_size}_lr_{args.learning_rate}_augmix_prob_{args.augmix_prob}_cutmix_prob_{args.cutmix_prob}_scheduler_layer_{args.task_layer_name}"
+    save_dir_details = f"{args.prefix}_agg_{args.attribute_aggregation}_bs_{args.batch_size}_lr_{args.learning_rate}_augmix_prob_{args.augmix_prob}_cutmix_prob_{args.cutmix_prob}_scheduler_warmup_epoch_{args.warmup_epochs}_layer_{args.task_layer_name}"
 
     return os.path.join(save_dir, save_dir_details)
 
@@ -418,6 +421,8 @@ def main(args):
             
             state.update(epoch=epoch)
             fabric.save(os.path.join(args.save_dir, "pim_weights_best.pth"), state)
+
+            best_val_loss = val_performance_dict["test_total_loss"]
         
         if epoch % 5 == 0:
             state.update(epoch=epoch)
@@ -519,30 +524,34 @@ python train_mapping_network.py \
 --data_dir './data' \
 --dataset_name Waterbirds \
 --num_classes 2 \
---use_saved_features \
---batch_size 128 \
+--batch_size 512 \
 --img_size 224 \
 --seed 42 \
---task_layer_name model.layer1 \
+--task_layer_name model.layer4 \
 --cutmix_alpha 1.0 \
 --warmup_epochs 10 \
 --discrepancy_weight 1.0 \
---attributes_path clip-dissect/Waterbirds_concepts.json \
+--attributes_path clip-dissect/Waterbirds_core_concepts.json \
 --attributes_embeddings_path data/Waterbirds/Waterbirds_attributes_CLIP_ViT-B_32_text_embeddings.pth \
 --classifier_name resnet18 \
---classifier_checkpoint_path logs/Waterbirds/failure_estimation/None/resnet18/classifier/checkpoint_99.pth \
+--classifier_checkpoint_path logs/Waterbirds/resnet18/classifier/checkpoint_99.pth \
 --use_imagenet_pretrained \
+--attribute_aggregation mean \
 --clip_model_name ViT-B/32 \
 --prompt_path data/Waterbirds/Waterbirds_CLIP_ViT-B_32_text_embeddings.pth \
---num_epochs 100 \
+--num_epochs 200 \
 --optimizer adamw \
 --learning_rate 1e-3 \
+--aggregator_learning_rate 1e-3 \
+--scheduler MultiStepLR \
 --val_freq 1 \
 --save_dir ./logs \
 --prefix '' \
 --vlm_dim 512 \
 --num_gpus 1 \
---num_nodes 1 
+--num_nodes 1 \
+--augmix_prob 0.2 \
+--cutmix_prob 0.2 
 
 
 '''
@@ -554,7 +563,7 @@ python train_mapping_network.py \
 --batch_size 512 \
 --img_size 32 \
 --seed 42 \
---task_layer_name model.layer4 \
+--task_layer_name model.layer2 \
 --cutmix_alpha 1.0 \
 --warmup_epochs 10 \
 --discrepancy_weight 1.0 \
@@ -563,7 +572,7 @@ python train_mapping_network.py \
 --classifier_name resnet18 \
 --classifier_checkpoint_path logs/cifar100/resnet18/classifier/checkpoint_199.pth \
 --use_imagenet_pretrained \
---attribute_aggregation mean \
+--attribute_aggregation max \
 --clip_model_name ViT-B/32 \
 --prompt_path data/cifar100/cifar100_CLIP_ViT-B_32_text_embeddings.pth \
 --num_epochs 200 \
