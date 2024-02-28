@@ -16,6 +16,7 @@ from data_utils.domainnet_data import DomainNetDataset, get_domainnet_loaders
 from data_utils.cifar100_data import CIFAR100TwoTransforms, CIFAR100C, get_CIFAR100_dataloader
 from data_utils.cifar10_data import get_CIFAR10_dataloader
 from data_utils.celebA_dataset import get_celebA_dataloader
+from data_utils.pacs_dataset import get_pacs_dataloader
 
 from train_task_distillation import get_dataset, build_classifier
 from data_utils import subpop_bench
@@ -122,6 +123,11 @@ def get_dataloaders(dataset_name, domain_name=None,
         loaders, class_names = get_domainnet_loaders(domain_name, batch_size=batch_size, data_dir=data_dir,
                                                      train_transform=None, test_transform=None, clip_transform=None, 
                                                      subsample_trainset=False, return_dataset=False)
+    elif dataset_name == "pacs":
+        loaders, class_names = get_pacs_dataloader(domain_name, batch_size=batch_size, data_dir=data_dir, 
+                                                train_transform=None, test_transform=None, clip_transform=None, 
+                                                return_dataset=False, use_real=True)
+
     elif dataset_name in subpop_bench.DATASETS:
         hparams = {
             'batch_size': batch_size,
