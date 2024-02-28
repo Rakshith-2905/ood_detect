@@ -39,7 +39,7 @@ import logging
 from train_task_distillation import get_dataset, get_CLIP_text_encodings, build_classifier
 
 from models.mapping import TaskMapping, MultiHeadedAttentionSimilarity, MultiHeadedAttention, print_layers, MeanAggregator, MaxAggregator
-from utils_proj import SimpleDINOLoss, compute_accuracy, compute_similarities, CutMix, MyAugMix, find_normalization_parameters
+from utils_proj import SimpleDINOLoss, compute_accuracy, compute_similarities, CutMix, MyAugMix, find_normalization_parameters, get_score, calc_gen_threshold, calc_accuracy_from_scores
 from models.cluster import ClusterCreater
 from sklearn.metrics import confusion_matrix
 CLIP_LOGIT_SCALE = 100
@@ -47,13 +47,13 @@ CLIP_LOGIT_SCALE = 100
 
 class CIFAR100C(torch.utils.data.Dataset):
     def __init__(self, corruption='gaussian_blur', transform=None,clip_transform=None, level=0):
-        numpy_path = f'/p/lustre1/viv41siv/projects/delta_uq_regression/data/CIFAR-100-c/CIFAR-100-C/{corruption}.npy'
+        numpy_path = f'data/CIFAR-100-C/{corruption}.npy'
         t = 10000 # We choose 10000 because, every numpy array has 50000 images, where the first 10000 images belong to severity 0 and so on. t is just an index for that
         self.transform = transform # Standard CIFAR100 test transform
         self.clip_transform = clip_transform
         self.data_ = np.load(numpy_path)[level*10000:(level+1)*10000,:,:,:] # Choosing 10000 images of a given severity
         self.data = self.data_[:t,:,:,:] # Actually redundant, I don't want to disturb the code structure
-        self.targets_ = np.load('/p/lustre1/viv41siv/projects/delta_uq_regression/data/CIFAR-100-c/CIFAR-100-C/labels.npy')
+        self.targets_ = np.load('data/CIFAR-100-C/labels.npy')
         self.targets = self.targets_[:t] # We select the first 10000. The next 10000 is identical to the first 10000 and so on
         self.np_PIL = transforms.Compose([transforms.ToPILImage()])
 
@@ -68,88 +68,201 @@ class CIFAR100C(torch.utils.data.Dataset):
         targets = self.targets[idx]
         return image, targets, image_to_clip
 
-
-def entropy(prob):
+def kl_divergence_pytorch(p, q):
     """
-    Compute the entropy of the mean of the predictive distribution
-    obtained from Monte Carlo sampling during prediction phase.
+    Compute the KL divergence between two probability distributions.
     """
-    return -1 * torch.sum(prob * torch.log(prob + 1e-15), axis=-1)
+    return (p * (p / q).log()).sum(dim=1)
 
-def compute_msp(p):
-    msp = torch.max(p, dim=1)[0]
-    return msp
+def exhaustive_selection_for_samples(task_model_logits, clip_model_logits, num_classes, num_attributes_per_class, aggregation='mean'):
+    """
+    Performs exhaustive selection to minimize KL divergence across samples between aggregated attribute predictions (via mean or max) and task model predictions after removing each attribute for each class.
+    
+    :param task_model_logits: A PyTorch tensor of shape (num_samples, num_classes) with the task model's class probabilities for each sample.
+    :param clip_model_logits: A PyTorch tensor of shape (num_samples, sum(num_attributes_per_class)) with the CLIP model's attribute predictions.
+    :param num_classes: The number of classes.
+    :param num_attributes_per_class: A list specifying the number of attributes per class.
+    :param aggregation: A string specifying the type of aggregation ('mean' or 'max').
+    :return: A list of lists, containing the selected attributes for each class that minimizes KL divergence when removed.
+    """
+    num_samples = task_model_logits.shape[0]
+    selected_attributes = [set(range(n)) for n in num_attributes_per_class]
 
-def compute_energy(logits, T=1.0):
-    return -T*torch.logsumexp(logits/T, dim=1)
+    # Helper function to aggregate logits based on specified method
+    def aggregate(logits, dim, method='mean'):
+        if method == 'mean':
+            return logits.mean(dim=dim)
+        elif method == 'max':
+            return logits.max(dim=dim).values
+
+    # Compute the starting index of each class in the CLIP logits tensor
+    class_start_indices = [0]
+    for i in range(1, num_classes):
+        class_start_indices.append(class_start_indices[i-1] + num_attributes_per_class[i-1])
+
+    # Precompute base_modified_logits for all classes
+    base_modified_logits = []
+    for idx in range(num_classes):
+        start_idx = class_start_indices[idx]
+        end_idx = start_idx + num_attributes_per_class[idx]
+        if aggregation == 'mean':
+            aggregated_logits = clip_model_logits[:, start_idx:end_idx].mean(dim=1)
+        elif aggregation == 'max':
+            aggregated_logits = clip_model_logits[:, start_idx:end_idx].max(dim=1).values
+        base_modified_logits.append(aggregated_logits)
+
+    # Iterating through each class
+    for class_index in range(num_classes):
+        best_kl = float('inf')
+        best_attribute_set = set(range(num_attributes_per_class[class_index]))
+
+        # Iterating through each attribute for the current class
+        for attribute_index in range(num_attributes_per_class[class_index]):
+            test_attributes = set(range(num_attributes_per_class[class_index])) - {attribute_index}
+            
+            # Create a copy of base_modified_logits for the current iteration
+            modified_logits = base_modified_logits.copy()
+
+            # Update the logits for the current class after removing the attribute
+            if test_attributes:  # Ensure there are attributes to aggregate
+                indices = [class_start_indices[class_index] + idx for idx in test_attributes]
+                cls_aggregated_logits = aggregate(clip_model_logits[:, indices], dim=1, method=aggregation)
+                modified_logits[class_index] = cls_aggregated_logits
+
+            # Recompute the all_class_logits and all_class_probs using modified_logits
+            all_class_logits = torch.stack(modified_logits, dim=1)
+            all_class_probs = F.softmax(all_class_logits, dim=1)
+
+            # Extract the probability distributions for the class of interest and calculate KL divergence
+            cls_probs = all_class_probs[:, class_index]
+            kl_divergence = kl_divergence_pytorch(task_model_logits[:, class_index], cls_probs).mean()
+
+            # Check if this set of attributes results in lower KL divergence
+            if kl_divergence < best_kl:
+                best_kl = kl_divergence
+                best_attribute_set = test_attributes
+
+        # Update the selected attributes list for the current class
+        selected_attributes[class_index] = best_attribute_set
+
+    return [list(s) for s in selected_attributes]  # Convert each set to a list for the output
 
 
-def get_score(logits, ref_logits=None):
-    #NOTE: Scores have their sign appropraitely modified to reflect the fact that ID data always has higher scores than OOD data
-    print(args.score)
-    if args.score == 'msp':
-        scores = compute_msp(F.softmax(logits, dim=1))
-    elif args.score == 'energy':
-        scores = -compute_energy(logits)
-    elif args.score == 'pe':
-        scores = -entropy(F.softmax(logits, dim=1))
-    elif args.score =='cross_entropy':
-        # ref_logits is the logits of the PIM model
-        ref_probs = F.softmax(ref_logits, dim=1)
-        scores = -F.cross_entropy(logits, ref_probs, reduction='none')
-        scores = -F.cross_entropy(logits, ref_probs, reduction='none')
-    return scores
 
-def calc_gen_threshold(scores, logits, labels, name='classifier'):
-    #NOTE: To be used only with ID data
-    scores = scores.cpu().data.numpy()
-    probs = F.softmax(logits, dim=1).cpu().data.numpy()
-    labels = labels.cpu().data.numpy()
+@torch.no_grad()
+def clip_attribute_classifier(data_loader, class_attributes_embeddings, class_attribute_prompt_list,
+                                clip_model, classifier, pim_model, aggregator): 
+    
+    # Set the model to eval mode
+    clip_model.eval()
 
-    scores = scores.reshape(-1)
-    err = np.argmax(np.array(probs), 1) != np.array(labels)
-    thresholds = np.linspace(-40, 40,5000)  # Possible thresholds
-    max_loss = 10000
-    for t in thresholds:
-        l = np.abs(np.mean((scores<t)) - np.mean(err))  #np.abs(
-        print(l, t)
-        if l < max_loss:
-            max_loss = l
-            threshold = t
+    total_loss = 0
+    total_task_model_acc = 0
+    total_clip_acc = 0
+    pbar = progbar_wrapper(
+        data_loader, total=len(data_loader), desc=f"Eval"
+    )
 
-    print('Threshold for {} = {}'.format(name, threshold))
-    return threshold
+    class_names = data_loader.dataset.class_names
 
-def calc_accuracy_from_scores(scores, threshold):
-    idx = (scores<threshold)
-    gen_error = (idx.sum())/len(scores)
-    gen_accuracy = 1.0-gen_error
-    return gen_accuracy, ~idx
+    # Construct CLIP text embeddings
+    class_level_prompts = ["This is a photo of a " + class_name for class_name in class_names]
+    class_level_prompts = clip.tokenize(class_level_prompts).to(device)
+    class_text_embeddings = clip_model.encode_text(class_level_prompts)
 
+    
+    labels_list, clip_logits_list, clip_probs_list = [], [], []
+    task_model_logits_list, task_model_probs_list = [], []
 
+    clip_class_level_probs_list = []
+
+    for i, (images_batch, labels, images_clip_batch) in enumerate(pbar):
+        
+        images_batch = images_batch.to(device)
+        images_clip_batch = images_clip_batch.to(device)
+        labels = labels.to(device)
+
+        pim_image_embeddings, task_model_logits, _ = pim_model(images_batch, return_task_logits=True)
+
+        clip_image_embeddings = clip_model.encode_image(images_clip_batch)
+
+        # Cosine similarity between the pim image embeddings and the class_attributes_embeddings
+        normalized_clip_image_embeddings = F.normalize(clip_image_embeddings, dim=-1)
+        normalized_class_attributes_embeddings = F.normalize(class_attributes_embeddings, dim=-1)
+
+        normalized_class_text_embeddings = F.normalize(class_text_embeddings, dim=-1)
+
+        normalized_clip_image_embeddings = normalized_clip_image_embeddings.to(normalized_class_attributes_embeddings.dtype)
+        clip_similarities = CLIP_LOGIT_SCALE*(normalized_clip_image_embeddings @ normalized_class_attributes_embeddings.t()) # (batch_size, num_classes*num_attributes_perclass)
+
+        clip_class_level_logits = CLIP_LOGIT_SCALE*(normalized_clip_image_embeddings @ normalized_class_text_embeddings.t()) # (batch_size, num_classes)
+
+        # Split the similarities into class specific dictionary
+        clip_similarities = clip_similarities.to(torch.float32)
+        clip_similarities_dict = {}
+        start = 0
+        for i, class_prompts in enumerate(class_attribute_prompt_list):
+            num_attributes = len(class_prompts)
+            clip_similarities_dict[i] = clip_similarities[:, start:start+num_attributes]
+            start += num_attributes
+        
+        # Compute the pim logits using the multiheaded attention
+        clip_logits = aggregator(clip_similarities_dict)
+
+        loss = F.cross_entropy(clip_logits, labels)
+
+        task_model_probs = F.softmax(task_model_logits, dim=-1)
+        clip_probs = F.softmax(clip_logits, dim=-1)
+
+        clip_class_level_probs = F.softmax(clip_class_level_logits, dim=-1)
+        clip_class_level_probs_list.append(clip_class_level_probs)
+        
+        task_model_acc = compute_accuracy(task_model_probs, labels)
+        clip_acc = compute_accuracy(clip_probs, labels)
+
+        total_task_model_acc += task_model_acc
+        total_clip_acc += clip_acc
+
+        total_loss += loss.item()
+
+        labels_list.append(labels)
+        clip_logits_list.append(clip_logits)
+        clip_probs_list.append(clip_probs)
+        task_model_logits_list.append(task_model_logits)
+        task_model_probs_list.append(task_model_probs)
+
+    labels_list = torch.cat(labels_list, dim=0)
+    clip_logits_list = torch.cat(clip_logits_list, dim=0)
+    clip_probs_list = torch.cat(clip_probs_list, dim=0)
+    task_model_logits_list = torch.cat(task_model_logits_list, dim=0)
+    task_model_probs_list = torch.cat(task_model_probs_list, dim=0)
+    
+    clip_class_level_probs_list = torch.cat(clip_class_level_probs_list, dim=0)
+
+    clip_acc = compute_accuracy(clip_probs_list, labels_list)
+
+    clip_class_level_acc = compute_accuracy(clip_class_level_probs_list, labels_list)
+
+    task_model_acc = compute_accuracy(task_model_probs_list, labels_list)
+    print(f'clip Attribute level Accuracy on {args.dataset_name} = {clip_acc} Clip Class Level Accuracy = {clip_class_level_acc} and Task Model Accuracy = {task_model_acc}')
 
 def get_save_dir(args):
-    if args.resume_checkpoint_path:
-        return os.path.dirname(args.resume_checkpoint_path)
-
-    projector_name = "mapper"
-
-    att_name = ""
-    if args.dataset_name == "NICOpp":
-        if args.attributes:
-            att_name = "".join([str(att) for att in args.attributes])
-            att_name = f"att_{att_name}"
+    
+    if args.method == 'pim':
+        if args.resume_checkpoint_path is not None and os.path.exists(args.resume_checkpoint_path):
+            save_dir = os.path.dirname(args.resume_checkpoint_path)
         else:
-            att_name = "att_all"
-    
-    if args.dataset_name == 'domainnet' and args.domain_name:
-        att_name = f"{args.domain_name}"
+            raise Exception("Checkpoint path not found")
+    else:
+        # use classifer checkpoint path
+        if args.classifier_checkpoint_path is not None and os.path.exists(args.classifier_checkpoint_path):
+            save_dir = os.path.dirname(args.classifier_checkpoint_path)
+        else:
+            raise Exception("Checkpoint path not found")
 
-    save_dir = os.path.join(args.save_dir, args.dataset_name, att_name, projector_name)
-    
-    save_dir_details = f"{args.prefix}_bs_{args.batch_size}_lr_{args.learning_rate}"
+    save_dir = os.path.join(save_dir, 'failure_results')
 
-    return os.path.join(save_dir, save_dir_details)
+    return f"{save_dir}"
 
 def progbar_wrapper(iterable, total, **kwargs):
     """Wraps the iterable with tqdm for global rank zero.
@@ -194,7 +307,6 @@ def evaluate_classifier(data_loader, classifier, device='cpu'):
     print(f'Classifier Accuracy on {args.dataset_name} = {classifier_acc}')
     print(labels_list.shape, logits_list.shape, probs_list.shape)
     return classifier_acc, labels_list, logits_list, probs_list
-
 
 @torch.no_grad()
 def evaluate_pim(data_loader, class_attributes_embeddings, class_attribute_prompt_list,
@@ -274,12 +386,7 @@ def evaluate_pim(data_loader, class_attributes_embeddings, class_attribute_promp
 def main(args):
 
     log_path = f'{args.save_dir}/gen'
-    logfile = f'{log_path}/{args.filename}'
-    os.makedirs(log_path,exist_ok = True)
-    loglevel = logging.INFO
-    logging.basicConfig(level=loglevel,filename=logfile, filemode='a', format='%(levelname)s - %(message)s')
-    logger = logging.getLogger()
-    
+        
     ########################### Create the model ############################
     clip_model, clip_transform = clip.load(args.clip_model_name, device=args.device)
     clip_model.eval()
@@ -333,7 +440,7 @@ def main(args):
         # Evaluating task model
         print('Evaluating on Validation Data')
         val_acc, val_labels_list, val_logits_list, val_probs_list = evaluate_classifier(val_loader, classifier, device=device)
-        val_scores = get_score(val_logits_list)
+        val_scores = get_score(args.score, val_logits_list)
         threshold = calc_gen_threshold(val_scores, val_logits_list, val_labels_list, name='classifier')
 
         # Just for verification
@@ -342,7 +449,7 @@ def main(args):
         # Repeating this for test data
         print('Evaluating on Test Data')
         test_acc, test_labels_list, test_logits_list, test_probs_list = evaluate_classifier(test_loader, classifier, device=device)
-        test_scores = get_score(test_logits_list)
+        test_scores = get_score(args.score, test_logits_list)
         estimated_test_acc, test_estimated_success_failure_idx = calc_accuracy_from_scores(test_scores, threshold)
 
         print(f'Score = {args.score}')
@@ -367,9 +474,30 @@ def main(args):
         print(f'Success Recall = {cm_test[1,1]/(cm_test[1,0]+cm_test[1,1])}')
 
         if args.eval_dataset == 'cifar100c':
-            logger.info(f'CIFAR100-C - Corruption {args.cifar100c_corruption}, Severity {args.severity} - True accuracy --- {test_acc:.4f}')
-            logger.info(f'CIFAR100-C - Corruption {args.cifar100c_corruption}, Severity {args.severity} - Predicted accuracy --- {estimated_test_acc:.4f}')
-            logger.info(f'CIFAR100-C - Corruption {args.cifar100c_corruption}, Severity {args.severity} - Failure recall --- {cm_test[0,0]/(cm_test[0,0]+cm_test[0,1]):.4f}')
+            # convert confusion matrix to list
+            cm_val_list = cm_val.tolist()
+            cm_test_list = cm_test.tolist()
+            # Convert the results to a dictionary
+            results = {
+                "cifar100c_corruption": args.cifar100c_corruption,
+                "severity": args.severity,
+                "true_val_acc": val_acc,
+                "estimated_val_acc": estimated_val_acc.item(),
+                "true_test_acc": test_acc,
+                "estimated_test_acc": estimated_test_acc.item(),
+                "val_cm": cm_val_list, # Confusion matrix for validation data as a list
+                "test_cm": cm_test_list,
+                "val_failure_recall": cm_val[0,0]/(cm_val[0,0]+cm_val[0,1]),
+                "val_success_recall": cm_val[1,1]/(cm_val[1,0]+cm_val[1,1]),
+                "test_failure_recall": cm_test[0,0]/(cm_test[0,0]+cm_test[0,1]),
+                "test_success_recall": cm_test[1,1]/(cm_test[1,0]+cm_test[1,1]),
+            }
+
+            # Save the results to a file
+            results_file = f'{args.save_dir}/{args.score}_cifar100c_results.json'
+            with open(results_file, 'a') as f:
+                json.dump(results, f)
+                f.write('\n')
 
     elif args.method == 'pim':
         class_attributes_embeddings_prompts = torch.load(args.attributes_embeddings_path)
@@ -394,24 +522,25 @@ def main(args):
 
         if args.resume_checkpoint_path:
             state = torch.load(args.resume_checkpoint_path)
-            print(state.keys())
+            epoch = state["epoch"]
             classifier.load_state_dict(state["classifier"])
             pim_model.load_state_dict(state["pim_model"])
             aggregator.load_state_dict(state[f"aggregator"])
 
-
-            
             print(f"Loaded checkpoint from {args.resume_checkpoint_path}")
 
 
         print(f"Built {args.classifier_name} classifier with checkpoint path: {args.classifier_checkpoint_path}")
-        print(f"Built {args.classifier_name} mapper")
+        print(f"Built {args.classifier_name} mapper with checkpoint path: {args.classifier_checkpoint_path} from layer {args.task_layer_name} epoch {epoch}")
         print(f"Built MultiHeadedAttention with {args.num_classes} classes and {num_attributes_per_cls} attributes per class")
 
         clip_model.to(device)
         classifier.to(device)
         pim_model.to(device)
         aggregator.to(device)
+
+        # # This evaluates CLIP attribute classifier, NOTE: use only with mean and max aggregators
+        # clip_attribute_classifier(test_loader, class_attributes_embeddings, class_attribute_prompts, clip_model, classifier, pim_model, aggregator)
 
         # Evaluating task model
         print('Evaluating on Validation Data')
@@ -420,7 +549,7 @@ def main(args):
                             clip_model, classifier, pim_model, aggregator)
         
         val_pim_acc, val_task_model_acc, val_labels_list, val_pim_logits_list, val_pim_probs_list, val_task_logits_list, val_task_probs_list = outs
-        val_scores = get_score(val_task_logits_list, val_pim_logits_list)
+        val_scores = get_score(args.score, val_task_logits_list, val_pim_logits_list)
 
         threshold = calc_gen_threshold(val_scores, val_task_logits_list, val_labels_list, name='pim')
 
@@ -432,7 +561,7 @@ def main(args):
                             clip_model, classifier, pim_model, aggregator)
         
         test_pim_acc, test_task_model_acc, test_labels_list, test_pim_logits_list, test_pim_probs_list, test_task_logits_list, test_task_probs_list = outs
-        test_scores = get_score(test_task_logits_list, test_pim_logits_list)
+        test_scores = get_score(args.score, test_task_logits_list, test_pim_logits_list)
         estimated_test_acc, test_estimated_success_failure_idx = calc_accuracy_from_scores(test_scores, threshold)
 
         print(f'Score = {args.score}')
@@ -456,7 +585,31 @@ def main(args):
         print(f'Failure Recall = {cm_test[0,0]/(cm_test[0,0]+cm_test[0,1])}')
         print(f'Success Recall = {cm_test[1,1]/(cm_test[1,0]+cm_test[1,1])}')
 
-    
+        if args.eval_dataset == 'cifar100c':
+            # convert confusion matrix to list
+            cm_val_list = cm_val.tolist()
+            cm_test_list = cm_test.tolist()
+            # Convert the results to a dictionary
+            results = {
+                "cifar100c_corruption": args.cifar100c_corruption,
+                "severity": args.severity,
+                "true_val_acc": val_task_model_acc,
+                "estimated_val_acc": estimated_val_acc.item(),
+                "true_test_acc": test_task_model_acc,
+                "estimated_test_acc": estimated_test_acc.item(),
+                "val_cm": cm_val_list, # Confusion matrix for validation data as a list
+                "test_cm": cm_test_list,
+                "val_failure_recall": cm_val[0,0]/(cm_val[0,0]+cm_val[0,1]),
+                "val_success_recall": cm_val[1,1]/(cm_val[1,0]+cm_val[1,1]),
+                "test_failure_recall": cm_test[0,0]/(cm_test[0,0]+cm_test[0,1]),
+                "test_success_recall": cm_test[1,1]/(cm_test[1,0]+cm_test[1,1])
+            }
+
+            # Save it as a CSV file
+            results_file = f'{args.save_dir}/cifar100c_results.json'
+            with open(results_file, 'a') as f:
+                json.dump(results, f)
+                f.write('\n')
     else:
         raise NotImplementedError
 
@@ -529,17 +682,10 @@ if __name__ == "__main__":
     
     # Make directory for saving results
     args.save_dir = get_save_dir(args)    
-    os.makedirs(os.path.join(args.save_dir, 'lightning_logs'), exist_ok=True)
+    os.makedirs(args.save_dir, exist_ok=True)
     
     print(f"\nResults will be saved to {args.save_dir}")
     
-    with open(os.path.join(args.save_dir, 'args.txt'), 'w') as f:
-        for arg, value in vars(args).items():
-            f.write(f"{arg}: {value}\n")
-
-    tb_logger = TensorBoardLogger(args.save_dir)
-    csv_logger = CSVLogger(args.save_dir, flush_logs_every_n_steps=1)
-
     corruption_list = ['brightness', 'defocus_blur', 'fog', 'gaussian_blur', 'glass_blur', 'jpeg_compression', 'motion_blur', 'saturate','snow','speckle_noise', 'contrast', 'elastic_transform', 'frost', 'gaussian_noise', 'impulse_noise', 'pixelate','shot_noise', 'spatter','zoom_blur']
     severity = [4]
     if args.eval_dataset == 'cifar100c':
@@ -557,38 +703,44 @@ if __name__ == "__main__":
 '''
 Example usage:
 
-python train_mapping_network.py \
+python failure_detection_eval.py \
 --data_dir './data' \
 --dataset_name Waterbirds \
 --num_classes 2 \
---use_saved_features \
---batch_size 128 \
---img_size 224 \
+--batch_size 512 \
+--img_size 32 \
 --seed 42 \
 --task_layer_name model.layer1 \
 --cutmix_alpha 1.0 \
 --warmup_epochs 10 \
 --discrepancy_weight 1.0 \
---attributes_path clip-dissect/Waterbirds_concepts.json \
+--attributes_path clip-dissect/Waterbirds_core_concepts.json \
 --attributes_embeddings_path data/Waterbirds/Waterbirds_attributes_CLIP_ViT-B_32_text_embeddings.pth \
 --classifier_name resnet18 \
---classifier_checkpoint_path logs/Waterbirds/failure_estimation/None/resnet18/classifier/checkpoint_99.pth \
+--classifier_checkpoint_path logs/Waterbirds/resnet18/classifier/checkpoint_99.pth \
 --use_imagenet_pretrained \
+--attribute_aggregation mean \
 --clip_model_name ViT-B/32 \
 --prompt_path data/Waterbirds/Waterbirds_CLIP_ViT-B_32_text_embeddings.pth \
---num_epochs 100 \
+--num_epochs 200 \
 --optimizer adamw \
 --learning_rate 1e-3 \
+--aggregator_learning_rate 1e-3 \
+--scheduler MultiStepLR \
 --val_freq 1 \
 --save_dir ./logs \
 --prefix '' \
 --vlm_dim 512 \
 --num_gpus 1 \
---num_nodes 1 
+--num_nodes 1 \
+--augmix_prob 0.2 \
+--cutmix_prob 0.2 \
+--resume_checkpoint_path logs/Waterbirds/resnet18/mapper/_agg_mean_bs_512_lr_0.001_augmix_prob_0.2_cutmix_prob_0.2_scheduler_warmup_epoch_10_layer_model.layer1/pim_weights_best.pth \
+--method pim \
+--score cross_entropy \
+# --eval_dataset cifar100c \
+# --filename cifar100c.log
 
-
-'''
-'''
 
 python failure_detection_eval.py \
 --data_dir './data' \
@@ -597,7 +749,7 @@ python failure_detection_eval.py \
 --batch_size 512 \
 --img_size 32 \
 --seed 42 \
---task_layer_name model.layer2 \
+--task_layer_name model.layer3 \
 --cutmix_alpha 1.0 \
 --warmup_epochs 10 \
 --discrepancy_weight 1.0 \
@@ -606,7 +758,7 @@ python failure_detection_eval.py \
 --classifier_name resnet18 \
 --classifier_checkpoint_path logs/cifar100/resnet18/classifier/checkpoint_199.pth \
 --use_imagenet_pretrained \
---attribute_aggregation mean \
+--attribute_aggregation max \
 --clip_model_name ViT-B/32 \
 --prompt_path data/cifar100/cifar100_CLIP_ViT-B_32_text_embeddings.pth \
 --num_epochs 200 \
@@ -622,11 +774,11 @@ python failure_detection_eval.py \
 --num_nodes 1 \
 --augmix_prob 0.2 \
 --cutmix_prob 0.2 \
---resume_checkpoint_path logs/cifar100/mapper/_agg_mean_bs_512_lr_0.001_augmix_prob_0.2_cutmix_prob_0.2_scheduler_layer_model.layer4/pim_weights_best.pth \
---method baseline \
---score pe \
---eval_dataset cifar100c
---filename cifar100c.log
+--resume_checkpoint_path logs/cifar100/mapper/_agg_mean_bs_512_lr_0.001_augmix_prob_0.2_cutmix_prob_0.2_scheduler_layer_model.layer3/pim_weights_11.pth \
+--method pim \
+--score cross_entropy \
+# --eval_dataset cifar100c \
+# --filename cifar100c.log
 
 
 '''

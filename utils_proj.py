@@ -17,6 +17,63 @@ import random
 
 from data_utils.cifar10_data import get_CIFAR10_dataloader
 
+def entropy(prob):
+    """
+    Compute the entropy of the mean of the predictive distribution
+    obtained from Monte Carlo sampling during prediction phase.
+    """
+    return -1 * torch.sum(prob * torch.log(prob + 1e-15), axis=-1)
+
+def compute_msp(p):
+    msp = torch.max(p, dim=1)[0]
+    return msp
+
+def compute_energy(logits, T=1.0):
+    return -T*torch.logsumexp(logits/T, dim=1)
+
+def get_score(score, logits, ref_logits=None):
+    #NOTE: Scores have their sign appropraitely modified to reflect the fact that ID data always has higher scores than OOD data
+    if score == 'msp':
+        scores = compute_msp(F.softmax(logits, dim=1))
+    elif score == 'energy':
+        scores = -compute_energy(logits)
+    elif score == 'pe':
+        scores = -entropy(F.softmax(logits, dim=1))
+    elif score =='cross_entropy':
+        # ref_logits is the logits of the PIM model
+        ref_probs = F.softmax(ref_logits, dim=1)
+        scores = -F.cross_entropy(logits, ref_probs, reduction='none')
+        scores = -F.cross_entropy(logits, ref_probs, reduction='none')
+    return scores
+
+def calc_gen_threshold(scores, logits, labels, name='classifier'):
+    """
+    Calculate the threshold for generalization error based on the scores
+    """
+    #NOTE: To be used only with ID data
+    scores = scores.cpu().data.numpy()
+    probs = F.softmax(logits, dim=1).cpu().data.numpy()
+    labels = labels.cpu().data.numpy()
+
+    scores = scores.reshape(-1)
+    err = np.argmax(np.array(probs), 1) != np.array(labels)
+    thresholds = np.linspace(-40, 40,5000)  # Possible thresholds
+    max_loss = 10000
+    for t in thresholds:
+        l = np.abs(np.mean((scores<t)) - np.mean(err))  #np.abs(
+        # print(l, t)
+        if l < max_loss:
+            max_loss = l
+            threshold = t
+
+    print('Threshold for {} = {}'.format(name, threshold))
+    return threshold
+
+def calc_accuracy_from_scores(scores, threshold):
+    idx = (scores<threshold)
+    gen_error = (idx.sum())/len(scores)
+    gen_accuracy = 1.0-gen_error
+    return gen_accuracy, ~idx
 
 class SimpleDINOLoss(nn.Module):
     def __init__(self, student_temp=0.1, teacher_temp=0.5):
@@ -276,8 +333,7 @@ class MyAugMix:
         augmented_image = T.Normalize(mean = self.mean, std = self.std)(augmented_image)
 
         return augmented_image
-
-                 
+                
 class CutMix:
     def __init__(self, alpha=1.0, num_classes=None):
         """
@@ -342,12 +398,14 @@ class CutMix:
         mixed_labels = lam * labels_one_hot + (1 - lam) * labels_one_hot_perm
 
         return mixed_features, mixed_labels
+
 def find_normalization_parameters(transform_pipeline):
     for transform in transform_pipeline.transforms:
         if isinstance(transform, T.Normalize):
             mean, std = transform.mean, transform.std
             return mean, std
     return None, None  # Returns None if no Normalize transform is found
+
 if __name__ == "__main__":
 
     # import clip
