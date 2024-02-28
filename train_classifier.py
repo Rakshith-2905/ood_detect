@@ -235,7 +235,7 @@ def main(args):
         scheduler = None
     
     # Make directory for saving results
-    if args.dataset_name == 'domainnet':
+    if args.dataset_name in ['domainnet', 'pacs']:
         args.save_dir = f"logs/{args.dataset_name}-{args.domain}/{args.classifier_model}/classifier"
     elif args.dataset_name in subpop_bench.DATASETS:   
         args.save_dir = f"logs/{args.dataset_name}/failure_estimation/{args.domain}/{args.classifier_model}/classifier"
@@ -374,9 +374,10 @@ if __name__ == "__main__":
 """
 Sample command to run:
 python train_classifier.py \
-        --dataset_name cifar100 \
+        --dataset_name pacs \
+        --domain photo \
         --data_path ./data \
-        --image_size 32 \
+        --image_size 224 \
         --batch_size 128 \
         --seed 42 \
         --num_epochs 200 \
@@ -384,6 +385,5 @@ python train_classifier.py \
         --scheduler MultiStepLR \
         --learning_rate 0.1 \
         --classifier_model resnet18
-
 
 """

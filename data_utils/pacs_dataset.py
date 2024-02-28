@@ -58,24 +58,24 @@ def get_pacs_dataloader(domain_name, batch_size=512, data_dir='data/',
     available_domains = ['art_painting', 'cartoon', 'photo', 'sketch']
     assert domain_name in available_domains, f"Domain name must be one of {available_domains}"
     
-    if train_transform is None:
-        train_transform = transforms.Compose([
-                transforms.RandomResizedCrop(224),
-                transforms.RandomHorizontalFlip(),
-                transforms.ToTensor(),
-                transforms.Normalize(mean=[0.485, 0.456, 0.406],
-                                    std=[0.229, 0.224, 0.225]),
-            ])
-    if test_transform is None:
-        test_transform = transforms.Compose([
-                transforms.Resize(256),
-                transforms.CenterCrop(224),
-                transforms.ToTensor(),
-                transforms.Normalize(mean=[0.485, 0.456, 0.406],
-                                    std=[0.229, 0.224, 0.225]),
+    # https://github.com/microsoft/robustdg/blob/master/data/pacs_loader.py 
+    if train_transform == None:
+        train_transform=  transforms.Compose([
+            transforms.Resize((224, 224)),
+            transforms.RandomResizedCrop(224, scale=(0.7,1.0)),
+            transforms.RandomHorizontalFlip(),
+            transforms.ColorJitter(0.3, 0.3, 0.3, 0.3),
+            transforms.RandomGrayscale(),                
+            transforms.ToTensor(),
+            transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
+        ])
+    if test_transform == None:
+        test_transform=  transforms.Compose([
+            transforms.Resize((224, 224)),
+            transforms.ToTensor(),
+            transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
+        ])
 
-            ])
-    
     train_domain_name = domain_name
     if use_real:
         train_domain_name = 'photo'
@@ -86,7 +86,7 @@ def get_pacs_dataloader(domain_name, batch_size=512, data_dir='data/',
     test_dataset= PACSDataset(data_dir=data_dir, domain=domain_name,
                                     split='test', transform1=test_transform, transform2=clip_transform)
     temp_valset = PACSDataset(data_dir=data_dir, domain=train_domain_name,
-                                    split='val', transform1=train_transform, transform2=clip_transform)
+                                    split='val', transform1=test_transform, transform2=clip_transform)
 
     # Split the valset into val and failure
     failure_size = int(0.50 * len(temp_valset))
