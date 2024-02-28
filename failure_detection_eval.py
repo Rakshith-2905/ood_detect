@@ -41,7 +41,7 @@ from train_task_distillation import get_dataset, get_CLIP_text_encodings, build_
 from models.mapping import TaskMapping, MultiHeadedAttentionSimilarity, MultiHeadedAttention, print_layers, MeanAggregator, MaxAggregator
 from utils_proj import SimpleDINOLoss, compute_accuracy, compute_similarities, CutMix, MyAugMix, find_normalization_parameters, get_score, calc_gen_threshold, calc_accuracy_from_scores
 from models.cluster import ClusterCreater
-from sklearn.metrics import confusion_matrix
+from sklearn.metrics import confusion_matrix, matthews_corrcoef
 CLIP_LOGIT_SCALE = 100
 
 
