@@ -74,80 +74,164 @@ def kl_divergence_pytorch(p, q):
     """
     return (p * (p / q).log()).sum(dim=1)
 
-def exhaustive_selection_for_samples(task_model_logits, clip_model_logits, num_classes, num_attributes_per_class, aggregation='mean'):
+def optimize_attribute_weights(predictions_dict, true_classes, num_attributes_per_class, learning_rate=0.01, num_optimization_steps=50, aggregation_fn=None):
     """
-    Performs exhaustive selection to minimize KL divergence across samples between aggregated attribute predictions (via mean or max) and task model predictions after removing each attribute for each class.
+    Optimize attribute weights for each top-ranked class per instance such that the true class's logit is maximized.
     
-    :param task_model_logits: A PyTorch tensor of shape (num_samples, num_classes) with the task model's class probabilities for each sample.
-    :param clip_model_logits: A PyTorch tensor of shape (num_samples, sum(num_attributes_per_class)) with the CLIP model's attribute predictions.
-    :param num_classes: The number of classes.
-    :param num_attributes_per_class: A list specifying the number of attributes per class.
-    :param aggregation: A string specifying the type of aggregation ('mean' or 'max').
-    :return: A list of lists, containing the selected attributes for each class that minimizes KL divergence when removed.
+    :param predictions_dict: A class specific dictionary of tensors of shape [batch_size, num_attributes] with the attribute logits for each class.
+    :param true_classes: A tensor of shape [batch_size] with the indices of the true classes for each instance.
+    :param num_attributes_per_class: list of number of attributes for each class
+    :param learning_rate: The learning rate for the optimizer.
+    :param num_optimization_steps: The number of steps for the optimization process.
+    :return: A tensor of shape [batch_size, num_classes, num_attributes] with the optimized weights.
     """
-    num_samples = task_model_logits.shape[0]
-    selected_attributes = [set(range(n)) for n in num_attributes_per_class]
+    
+    batch_size = true_classes.shape[0]
+    # Initialize a dictionary to store optimized weights for each instance
+    optimized_attribute_weights = {class_idx: torch.ones(batch_size, num_attributes_per_class[class_idx]) for class_idx in range(len(num_attributes_per_class))}
+    
+    # Main loop over the batch
+    for i in range(batch_size):
+        
+        # Extract predictions for the current instance
+        instance_predictions = {class_idx: predictions_dict[class_idx][i] for class_idx in range(len(num_attributes_per_class))} # dict of class specific attribute logits for the current instance
+        
+        # Compute aggregated logits by agreegating the attributes for each class using the aggregation function
+        aggregated_logits = aggregation_fn(instance_predictions) # The function should take a dictionary of class specific attribute logits and return a tensor of shape [num_classes]
 
-    # Helper function to aggregate logits based on specified method
-    def aggregate(logits, dim, method='mean'):
-        if method == 'mean':
-            return logits.mean(dim=dim)
-        elif method == 'max':
-            return logits.max(dim=dim).values
+        # Get the ranking of classes based on logits
+        _, ranked_classes = aggregated_logits.sort(descending=True)
+        
+        # Find index of the true class
+        true_class_idx = (ranked_classes == true_classes[i]).nonzero(as_tuple=True)[0].item()
 
-    # Compute the starting index of each class in the CLIP logits tensor
-    class_start_indices = [0]
-    for i in range(1, num_classes):
-        class_start_indices.append(class_start_indices[i-1] + num_attributes_per_class[i-1])
+        # Iterate over each class that ranks higher than the true class
+        for rank, top_class in enumerate(ranked_classes):
+            if rank >= true_class_idx:  # Skip if not ranked above the true class
+                break
 
-    # Precompute base_modified_logits for all classes
-    base_modified_logits = []
-    for idx in range(num_classes):
-        start_idx = class_start_indices[idx]
-        end_idx = start_idx + num_attributes_per_class[idx]
-        if aggregation == 'mean':
-            aggregated_logits = clip_model_logits[:, start_idx:end_idx].mean(dim=1)
-        elif aggregation == 'max':
-            aggregated_logits = clip_model_logits[:, start_idx:end_idx].max(dim=1).values
-        base_modified_logits.append(aggregated_logits)
-
-    # Iterating through each class
-    for class_index in range(num_classes):
-        best_kl = float('inf')
-        best_attribute_set = set(range(num_attributes_per_class[class_index]))
-
-        # Iterating through each attribute for the current class
-        for attribute_index in range(num_attributes_per_class[class_index]):
-            test_attributes = set(range(num_attributes_per_class[class_index])) - {attribute_index}
+            # Initialize weights for optimization for the current top class
+            weights = torch.ones(num_attributes_per_class[top_class], requires_grad=True)
             
-            # Create a copy of base_modified_logits for the current iteration
-            modified_logits = base_modified_logits.copy()
+            # Set up the optimizer for the weights
+            optimizer = torch.optim.Adam([weights], lr=learning_rate)
 
-            # Update the logits for the current class after removing the attribute
-            if test_attributes:  # Ensure there are attributes to aggregate
-                indices = [class_start_indices[class_index] + idx for idx in test_attributes]
-                cls_aggregated_logits = aggregate(clip_model_logits[:, indices], dim=1, method=aggregation)
-                modified_logits[class_index] = cls_aggregated_logits
+            # Optimization loop for adjusting weights for the current top class
+            for _ in range(num_optimization_steps):
+                optimizer.zero_grad()
+                
+                # Adjust logits for the top class based on current weights
+                adjusted_predictions = instance_predictions[top_class] * weights
+                # Re-aggregate the logits for the top class
+                adjusted_logit = aggregation_fn({top_class: adjusted_predictions})
+                
+                # Calculate the loss to ensure true class logit is higher than top class logit using leaky relu
+                loss = F.leaky_relu(adjusted_logit - aggregated_logits[true_classes[i]], negative_slope=0.1) 
 
-            # Recompute the all_class_logits and all_class_probs using modified_logits
-            all_class_logits = torch.stack(modified_logits, dim=1)
-            all_class_probs = F.softmax(all_class_logits, dim=1)
+                # Ensure each attribute weights is between 0 and 1
+                loss_weights = F.relu(weights.min()) + F.relu(1 - weights.max())
+                # # Ensure all the weights of the attributes sum to 1
+                # loss_weights = F.relu(weights.sum() - 1)
+                
+                loss += 0.01 * loss_weights
 
-            # Extract the probability distributions for the class of interest and calculate KL divergence
-            cls_probs = all_class_probs[:, class_index]
-            kl_divergence = kl_divergence_pytorch(task_model_logits[:, class_index], cls_probs).mean()
+                # Perform gradient descent
+                loss.backward()
+                optimizer.step()
 
-            # Check if this set of attributes results in lower KL divergence
-            if kl_divergence < best_kl:
-                best_kl = kl_divergence
-                best_attribute_set = test_attributes
+                # Apply non-negative constraint on weights
+                with torch.no_grad():
+                    weights.clamp_(min=0)
 
-        # Update the selected attributes list for the current class
-        selected_attributes[class_index] = best_attribute_set
+                # Break if the adjusted logit for the top class is less than the true class logit
+                if loss.item() < 0:
+                    break
 
-    return [list(s) for s in selected_attributes]  # Convert each set to a list for the output
+            # Store the optimized weights for the top class
+            optimized_attribute_weights[top_class][i] = weights.detach()
+
+    return optimized_attribute_weights
+
+def match_probabilities_to_task_model(pim_logits_dict, task_model_logits, num_attributes_per_class, learning_rate=0.01, num_optimization_steps=50, aggregation_fn=None):
+    """
+    Adjust attribute weights for all classes together for each sample such that the attribute-aggregated 
+    probabilities of the PIM match the task model's probabilities.
+    
+    :param pim_logits: A class specific dictionary of tensors of shape [batch_size, num_attributes] with thelogits attribute logits for each class.
+    :param task_model_logits: A tensor of shape [batch_size, num_classes] representing the task model's probabilities.
+    :param num_attributes_per_class: list of number of attributes for each class
+    :param learning_rate: The learning rate for the optimizer.
+    :param num_optimization_steps: The number of steps for the optimization process.
+    :return: A list containing optimized weights for each instance, where each element is a list of tensors corresponding to the optimized weights for each class.
+    """
+
+    # Initialize a dictionary to store optimized weights for each instance
+    optimized_attribute_weights = {class_idx: torch.ones(batch_size, num_attributes_per_class[class_idx]) for class_idx in range(len(num_attributes_per_class))}
+    
+
+    batch_size = task_model_logits.shape[0]
+    num_classes = task_model_logits.shape[1]
+
+    # Main loop over the batch
+    for i in range(batch_size):
+        # Initialize list of parameter tensors to weight all attributes for each class
+        weight_params = [torch.ones(num_attributes_per_class[class_idx], requires_grad=True) for class_idx in range(num_classes)]
+        
+        # Set up the optimizer for all weight parameters together
+        optimizer = torch.optim.Adam(weight_params, lr=learning_rate)
+
+        # Extract predictions for the current instance from PIM
+        instance_predictions = {class_idx: pim_logits_dict[class_idx][i] for class_idx in range(len(num_attributes_per_class))} # dict of class specific attribute logits for the current instance
+
+        # Optimization loop for adjusting weights for all classes together
+        for _ in range(num_optimization_steps):
+            optimizer.zero_grad()
+
+            # Initialize a tensor to store adjusted logits for all classes
+            adjusted_logits = torch.zeros(num_classes)
+
+            # Adjust logits for all classes based on current weights
+            for class_idx in range(num_classes):
+                # Use only the relevant attributes for each class
+                num_attributes = num_attributes_per_class[class_idx]
+                
+                # Adjust logits for the current class based on current weights
+                adjusted_predictions = instance_predictions[class_idx] * weight_params[class_idx]
+                # Re-aggregate the logits for the current class
+                adjusted_logits[class_idx] = aggregation_fn({class_idx: adjusted_predictions})
+
+            adjusted_probs = F.softmax(adjusted_logits, dim=-1).unsqueeze(0)
+            task_model_probs = F.softmax(task_model_logits[i].unsqueeze(0), dim=-1)    
+
+            # Calculate the KL divergence to match the task model's probabilities of this instance
+            loss = kl_divergence_pytorch(task_model_probs, adjusted_probs)
 
 
+            ## Ensure each attribute weights is between 0 and 1
+            loss_weights = 0
+            for weights in weight_params:
+                loss_weights += F.relu(weights.min()) + F.relu(1 - weights.max())
+
+            # # ensure weights sum to 1
+            # for weights in weight_params:
+            #     loss += 0.01 * F.relu(weights.sum() - 1)
+
+            loss += 0.01 * loss_weights
+
+            # Perform gradient descent
+            loss.backward()
+            optimizer.step()
+
+            # Apply non-negative constraint on weights
+            with torch.no_grad():
+                for weights in weight_params:
+                    weights.clamp_(min=0)
+
+        # Detach optimized weights and store them for the current instance
+        optimized_weights_instance = [weights.detach() for weights in weight_params]
+        optimized_attribute_weights[i] = optimized_weights_instance
+
+    return optimized_attribute_weights
 
 @torch.no_grad()
 def clip_attribute_classifier(data_loader, class_attributes_embeddings, class_attribute_prompt_list,
@@ -439,7 +523,7 @@ def main(args):
         
         # Evaluating task model
         print('Evaluating on Validation Data')
-        val_acc, val_labels_list, val_logits_list, val_probs_list = evaluate_classifier(val_loader, classifier, device=device)
+        val_task_model_acc, val_labels_list, val_logits_list, val_probs_list = evaluate_classifier(val_loader, classifier, device=device)
         val_scores = get_score(args.score, val_logits_list)
         threshold = calc_gen_threshold(val_scores, val_logits_list, val_labels_list, name='classifier')
 
@@ -448,12 +532,12 @@ def main(args):
 
         # Repeating this for test data
         print('Evaluating on Test Data')
-        test_acc, test_labels_list, test_logits_list, test_probs_list = evaluate_classifier(test_loader, classifier, device=device)
+        test_task_model_acc, test_labels_list, test_logits_list, test_probs_list = evaluate_classifier(test_loader, classifier, device=device)
         test_scores = get_score(args.score, test_logits_list)
         estimated_test_acc, test_estimated_success_failure_idx = calc_accuracy_from_scores(test_scores, threshold)
 
         print(f'Score = {args.score}')
-        print(f'True Validation Accuracy = {val_acc}, Estimated Validation Accuracy = {estimated_val_acc}, True Test Accuracy = {test_acc}, Estimated Test Accuracy = {estimated_test_acc}')
+        print(f'True Validation Accuracy = {val_task_model_acc}, Estimated Validation Accuracy = {estimated_val_acc}, True Test Accuracy = {test_task_model_acc}, Estimated Test Accuracy = {estimated_test_acc}')
         val_true_success_failure_idx = torch.argmax(val_probs_list, 1) == val_labels_list
         test_true_success_failure_idx = torch.argmax(test_probs_list, 1) == test_labels_list
 
@@ -461,44 +545,61 @@ def main(args):
         cm_val = confusion_matrix(val_true_success_failure_idx.cpu().numpy(), val_estimated_success_failure_idx.cpu().numpy())
         cm_test = confusion_matrix(test_true_success_failure_idx.cpu().numpy(), test_estimated_success_failure_idx.cpu().numpy())
 
+        failure_recall_val = cm_val[0,0]/(cm_val[0,0]+cm_val[0,1])
+        success_recall_val = cm_val[1,1]/(cm_val[1,0]+cm_val[1,1])
+
+        failure_recall_test = cm_test[0,0]/(cm_test[0,0]+cm_test[0,1])
+        success_recall_test = cm_test[1,1]/(cm_test[1,0]+cm_test[1,1])
+
+        mathews_corr_val = matthews_corrcoef(val_true_success_failure_idx.cpu().numpy(), val_estimated_success_failure_idx.cpu().numpy())
+        mathews_corr_test = matthews_corrcoef(test_true_success_failure_idx.cpu().numpy(), test_estimated_success_failure_idx.cpu().numpy())
+
         print('Validation Data')
         print(cm_val)
-        print(f'Gen Gap = {torch.abs(val_acc-estimated_val_acc)}')
-        print(f'Failure Recall = {cm_val[0,0]/(cm_val[0,0]+cm_val[0,1])}')
-        print(f'Success Recall = {cm_val[1,1]/(cm_val[1,0]+cm_val[1,1])}')
+        print(f'Gen Gap = {torch.abs(val_task_model_acc-estimated_val_acc)}')
+        print(f'Failure Recall = {failure_recall_val}')
+        print(f'Success Recall = {success_recall_val}')
+        print(f'Mathews Correlation = {mathews_corr_val}')
 
         print('Test Data')
         print(cm_test)
-        print(f'Gen Gap = {torch.abs(test_acc-estimated_test_acc)}')
-        print(f'Failure Recall = {cm_test[0,0]/(cm_test[0,0]+cm_test[0,1])}')
-        print(f'Success Recall = {cm_test[1,1]/(cm_test[1,0]+cm_test[1,1])}')
+        print(f'Gen Gap = {torch.abs(test_task_model_acc-estimated_test_acc)}')
+        print(f'Failure Recall = {failure_recall_test}')
+        print(f'Success Recall = {success_recall_test}')
+        print(f'Mathews Correlation = {mathews_corr_test}')
+
+        # convert confusion matrix to list
+        cm_val_list = cm_val.tolist()
+        cm_test_list = cm_test.tolist()
+        # Convert the results to a dictionary
+        results = {
+            "true_val_acc": val_task_model_acc,
+            "estimated_val_acc": estimated_val_acc.item(),
+            "true_test_acc": test_task_model_acc,
+            "estimated_test_acc": estimated_test_acc.item(),
+            "val_cm": cm_val_list, # Confusion matrix for validation data as a list
+            "test_cm": cm_test_list,
+            "val_failure_recall": failure_recall_val,
+            "val_success_recall": success_recall_val,
+            "test_failure_recall": failure_recall_test,
+            "test_success_recall": success_recall_test,
+            "val_mathews_corr": mathews_corr_val,
+            "test_mathews_corr": mathews_corr_test
+        }
+
+        # Save it as a CSV file
+        results_file = f'{args.save_dir}/{args.score}_results.json'
 
         if args.eval_dataset == 'cifar100c':
-            # convert confusion matrix to list
-            cm_val_list = cm_val.tolist()
-            cm_test_list = cm_test.tolist()
-            # Convert the results to a dictionary
-            results = {
-                "cifar100c_corruption": args.cifar100c_corruption,
-                "severity": args.severity,
-                "true_val_acc": val_acc,
-                "estimated_val_acc": estimated_val_acc.item(),
-                "true_test_acc": test_acc,
-                "estimated_test_acc": estimated_test_acc.item(),
-                "val_cm": cm_val_list, # Confusion matrix for validation data as a list
-                "test_cm": cm_test_list,
-                "val_failure_recall": cm_val[0,0]/(cm_val[0,0]+cm_val[0,1]),
-                "val_success_recall": cm_val[1,1]/(cm_val[1,0]+cm_val[1,1]),
-                "test_failure_recall": cm_test[0,0]/(cm_test[0,0]+cm_test[0,1]),
-                "test_success_recall": cm_test[1,1]/(cm_test[1,0]+cm_test[1,1]),
-            }
+            # update the results dictionary
+            results["cifar100c_corruption"] = args.cifar100c_corruption
+            results["severity"] = args.severity
 
-            # Save the results to a file
             results_file = f'{args.save_dir}/{args.score}_cifar100c_results.json'
-            with open(results_file, 'a') as f:
-                json.dump(results, f)
-                f.write('\n')
 
+        with open(results_file, 'a') as f:
+            json.dump(results, f)
+            f.write('\n')
     elif args.method == 'pim':
         class_attributes_embeddings_prompts = torch.load(args.attributes_embeddings_path)
         class_attribute_prompts = class_attributes_embeddings_prompts["class_attribute_prompts"]
@@ -569,47 +670,64 @@ def main(args):
         val_true_success_failure_idx = torch.argmax(val_task_logits_list, 1) == val_labels_list
         test_true_success_failure_idx = torch.argmax(test_task_logits_list, 1) == test_labels_list
 
-        print('Confusion Matrices')
         cm_val = confusion_matrix(val_true_success_failure_idx.cpu().numpy(), val_estimated_success_failure_idx.cpu().numpy())
         cm_test = confusion_matrix(test_true_success_failure_idx.cpu().numpy(), test_estimated_success_failure_idx.cpu().numpy())
+
+        failure_recall_val = cm_val[0,0]/(cm_val[0,0]+cm_val[0,1])
+        success_recall_val = cm_val[1,1]/(cm_val[1,0]+cm_val[1,1])
+
+        failure_recall_test = cm_test[0,0]/(cm_test[0,0]+cm_test[0,1])
+        success_recall_test = cm_test[1,1]/(cm_test[1,0]+cm_test[1,1])
+
+        mathews_corr_val = matthews_corrcoef(val_true_success_failure_idx.cpu().numpy(), val_estimated_success_failure_idx.cpu().numpy())
+        mathews_corr_test = matthews_corrcoef(test_true_success_failure_idx.cpu().numpy(), test_estimated_success_failure_idx.cpu().numpy())
 
         print('Validation Data')
         print(cm_val)
         print(f'Gen Gap = {torch.abs(val_task_model_acc-estimated_val_acc)}')
-        print(f'Failure Recall = {cm_val[0,0]/(cm_val[0,0]+cm_val[0,1])}')
-        print(f'Success Recall = {cm_val[1,1]/(cm_val[1,0]+cm_val[1,1])}')
+        print(f'Failure Recall = {failure_recall_val}')
+        print(f'Success Recall = {success_recall_val}')
+        print(f'Mathews Correlation = {mathews_corr_val}')
 
         print('Test Data')
         print(cm_test)
         print(f'Gen Gap = {torch.abs(test_task_model_acc-estimated_test_acc)}')
-        print(f'Failure Recall = {cm_test[0,0]/(cm_test[0,0]+cm_test[0,1])}')
-        print(f'Success Recall = {cm_test[1,1]/(cm_test[1,0]+cm_test[1,1])}')
+        print(f'Failure Recall = {failure_recall_test}')
+        print(f'Success Recall = {success_recall_test}')
+        print(f'Mathews Correlation = {mathews_corr_test}')
+
+        # convert confusion matrix to list
+        cm_val_list = cm_val.tolist()
+        cm_test_list = cm_test.tolist()
+        # Convert the results to a dictionary
+        results = {
+            "true_val_acc": val_task_model_acc,
+            "estimated_val_acc": estimated_val_acc.item(),
+            "true_test_acc": test_task_model_acc,
+            "estimated_test_acc": estimated_test_acc.item(),
+            "val_cm": cm_val_list, # Confusion matrix for validation data as a list
+            "test_cm": cm_test_list,
+            "val_failure_recall": failure_recall_val,
+            "val_success_recall": success_recall_val,
+            "test_failure_recall": failure_recall_test,
+            "test_success_recall": success_recall_test,
+            "val_mathews_corr": mathews_corr_val,
+            "test_mathews_corr": mathews_corr_test
+        }
+
+        # Save it as a CSV file
+        results_file = f'{args.save_dir}/{args.score}_results.json'
 
         if args.eval_dataset == 'cifar100c':
-            # convert confusion matrix to list
-            cm_val_list = cm_val.tolist()
-            cm_test_list = cm_test.tolist()
-            # Convert the results to a dictionary
-            results = {
-                "cifar100c_corruption": args.cifar100c_corruption,
-                "severity": args.severity,
-                "true_val_acc": val_task_model_acc,
-                "estimated_val_acc": estimated_val_acc.item(),
-                "true_test_acc": test_task_model_acc,
-                "estimated_test_acc": estimated_test_acc.item(),
-                "val_cm": cm_val_list, # Confusion matrix for validation data as a list
-                "test_cm": cm_test_list,
-                "val_failure_recall": cm_val[0,0]/(cm_val[0,0]+cm_val[0,1]),
-                "val_success_recall": cm_val[1,1]/(cm_val[1,0]+cm_val[1,1]),
-                "test_failure_recall": cm_test[0,0]/(cm_test[0,0]+cm_test[0,1]),
-                "test_success_recall": cm_test[1,1]/(cm_test[1,0]+cm_test[1,1])
-            }
+            # update the results dictionary
+            results["cifar100c_corruption"] = args.cifar100c_corruption
+            results["severity"] = args.severity
 
-            # Save it as a CSV file
-            results_file = f'{args.save_dir}/cifar100c_results.json'
-            with open(results_file, 'a') as f:
-                json.dump(results, f)
-                f.write('\n')
+            results_file = f'{args.save_dir}/{args.score}_cifar100c_results.json'
+
+        with open(results_file, 'a') as f:
+            json.dump(results, f)
+            f.write('\n')
     else:
         raise NotImplementedError
 
@@ -710,9 +828,9 @@ python failure_detection_eval.py \
 --batch_size 512 \
 --img_size 32 \
 --seed 42 \
---task_layer_name model.layer1 \
+--task_layer_name model.layer2 \
 --cutmix_alpha 1.0 \
---warmup_epochs 10 \
+--warmup_epochs 0 \
 --discrepancy_weight 1.0 \
 --attributes_path clip-dissect/Waterbirds_core_concepts.json \
 --attributes_embeddings_path data/Waterbirds/Waterbirds_attributes_CLIP_ViT-B_32_text_embeddings.pth \
@@ -735,7 +853,7 @@ python failure_detection_eval.py \
 --num_nodes 1 \
 --augmix_prob 0.2 \
 --cutmix_prob 0.2 \
---resume_checkpoint_path logs/Waterbirds/resnet18/mapper/_agg_mean_bs_512_lr_0.001_augmix_prob_0.2_cutmix_prob_0.2_scheduler_warmup_epoch_10_layer_model.layer1/pim_weights_best.pth \
+--resume_checkpoint_path logs/Waterbirds/resnet18/mapper/_agg_mean_bs_512_lr_0.001_augmix_prob_0.2_cutmix_prob_0.2_scheduler_warmup_epoch_0_layer_model.layer2/pim_weights_final.pth \
 --method pim \
 --score cross_entropy \
 # --eval_dataset cifar100c \
