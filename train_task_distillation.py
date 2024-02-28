@@ -66,6 +66,9 @@ def get_dataset(data_name, train_transforms, test_transforms, clip_transform, da
                                                                         train_transform=None, test_transform=None, clip_transform=clip_transform,
                                                                         subsample_trainset=False, return_dataset=True, use_real=use_real)
 
+    elif data_name == 'pacs':
+        pass
+
     elif data_name == 'cifar10':
         train_dataset, val_dataset, test_dataset, failure_dataset, class_names = get_CIFAR10_dataloader(data_dir='./data',    
                                                                     train_transform=None, test_transform=None, clip_transform=clip_transform,
