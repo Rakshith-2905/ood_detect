@@ -330,6 +330,8 @@ def clip_attribute_classifier(data_loader, class_attributes_embeddings, class_at
     task_model_acc = compute_accuracy(task_model_probs_list, labels_list)
     print(f'clip Attribute level Accuracy on {args.dataset_name} = {clip_acc} Clip Class Level Accuracy = {clip_class_level_acc} and Task Model Accuracy = {task_model_acc}')
 
+    return clip_class_level_acc, clip_acc
+
 def get_save_dir(args):
     
     if args.method == 'pim':
@@ -469,8 +471,6 @@ def evaluate_pim(data_loader, class_attributes_embeddings, class_attribute_promp
 
 def main(args):
 
-    log_path = f'{args.save_dir}/gen'
-        
     ########################### Create the model ############################
     clip_model, clip_transform = clip.load(args.clip_model_name, device=args.device)
     clip_model.eval()
@@ -487,12 +487,17 @@ def main(args):
                               task_layer_name=args.task_layer_name, vlm_dim=args.vlm_dim, 
                               mapping_output_size=mapper.feature_dim, cutmix_fn=cutmix)
     
-    ########################### Load the dataset ############################
 
+    print(f"Loaded Classifier checkpoint from {args.classifier_checkpoint_path}")
+    
+    ########################### Load the dataset ############################
+    
+    # This will be in train domain
     train_dataset, val_dataset, test_dataset, failure_dataset, class_names = get_dataset(args.dataset_name, train_transform, test_transform, 
                                                             data_dir=args.data_dir, clip_transform=clip_transform, 
                                                             img_size=args.img_size, domain_name=args.domain_name, 
                                                             return_failure_set=True)
+ 
     
 
     if args.dataset_name in ['cifar100']:
@@ -503,19 +508,26 @@ def main(args):
 
     train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True, num_workers=8, pin_memory=True)
     val_loader = torch.utils.data.DataLoader(val_dataset, batch_size=args.batch_size, shuffle=False, num_workers=8, pin_memory=True)
-
-    if args.eval_dataset == 'cifar100':
+    
+    if args.eval_dataset == 'cifar100':     
         test_loader = torch.utils.data.DataLoader(test_dataset, batch_size=args.batch_size, shuffle=False, num_workers=8, pin_memory=True)
     elif args.eval_dataset == 'cifar100c':
         transform_test = transforms.Compose([transforms.ToTensor(),transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010))])
         testset = CIFAR100C(corruption=args.cifar100c_corruption, transform=transform_test,clip_transform=clip_transform, level=args.severity)
         test_loader = torch.utils.data.DataLoader(testset, batch_size=args.batch_size, shuffle=False, num_workers=8, pin_memory=True)
+    elif args.eval_dataset == 'pacs':
+        _, val_dataset, _, failure_dataset, class_names = get_dataset(args.dataset_name, train_transform, test_transform, 
+                                                            data_dir=args.data_dir, clip_transform=clip_transform, 
+                                                            img_size=args.img_size, domain_name='sketch', 
+                                                            return_failure_set=True,use_real=False)
+        #concat val and failure
+        val_dataset = ConcatDataset([val_dataset, failure_dataset])
+        val_loader = torch.utils.data.DataLoader(val_dataset, batch_size=args.batch_size, shuffle=False, num_workers=8, pin_memory=True)
+        test_loader = torch.utils.data.DataLoader(test_dataset, batch_size=args.batch_size, shuffle=False, num_workers=8, pin_memory=True)
 
     print(f"Number of validation examples: {len(val_loader.dataset)}")
     print(f"Number of test examples: {len(test_loader.dataset)}")
 
-
-    print(f"Loaded checkpoint from {args.classifier_checkpoint_path}")
     
     if args.method == 'baseline':
         classifier.to(device)
@@ -573,6 +585,7 @@ def main(args):
         cm_test_list = cm_test.tolist()
         # Convert the results to a dictionary
         results = {
+            "domain_name": args.domain_name,
             "true_val_acc": val_task_model_acc,
             "estimated_val_acc": estimated_val_acc.item(),
             "true_test_acc": test_task_model_acc,
@@ -589,7 +602,7 @@ def main(args):
 
         # Save it as a CSV file
         results_file = f'{args.save_dir}/{args.score}_results.json'
-
+        print (f'************* Saving results to {results_file} *************')
         if args.eval_dataset == 'cifar100c':
             # update the results dictionary
             results["cifar100c_corruption"] = args.cifar100c_corruption
@@ -641,7 +654,7 @@ def main(args):
         aggregator.to(device)
 
         # # This evaluates CLIP attribute classifier, NOTE: use only with mean and max aggregators
-        # clip_attribute_classifier(test_loader, class_attributes_embeddings, class_attribute_prompts, clip_model, classifier, pim_model, aggregator)
+        clip_class_level_acc, clip_attribute_level_acc = clip_attribute_classifier(test_loader, class_attributes_embeddings, class_attribute_prompts, clip_model, classifier, pim_model, aggregator)
 
         # Evaluating task model
         print('Evaluating on Validation Data')
@@ -701,6 +714,8 @@ def main(args):
         cm_test_list = cm_test.tolist()
         # Convert the results to a dictionary
         results = {
+            "domain_name": args.domain_name,
+            "aggregator": args.attribute_aggregation,
             "true_val_acc": val_task_model_acc,
             "estimated_val_acc": estimated_val_acc.item(),
             "true_test_acc": test_task_model_acc,
@@ -712,7 +727,10 @@ def main(args):
             "test_failure_recall": failure_recall_test,
             "test_success_recall": success_recall_test,
             "val_mathews_corr": mathews_corr_val,
-            "test_mathews_corr": mathews_corr_test
+            "test_mathews_corr": mathews_corr_test,
+            "pim_model_test_acc": test_pim_acc.item(),
+            "clip_class_level_acc": clip_class_level_acc.item(),
+            "clip_attribute_level_acc": clip_attribute_level_acc.item()
         }
 
         # Save it as a CSV file
@@ -760,7 +778,8 @@ if __name__ == "__main__":
     parser.add_argument('--cutmix_prob', type=float, default=0.2, help='Probability of using cutmix')
 
     parser.add_argument('--warmup_epochs', type=int, default=10, help='Number of warmup epochs before using cutmix')
-    parser.add_argument('--discrepancy_weight', type=float, default=1.0, help='Weight to multiply the loss by for samples where the task model is correct and the pim model is incorrect')
+    parser.add_argument('--task_failure_discrepancy_weight', type=float, default=2.0, help='Weight for the discrepancy loss')
+    parser.add_argument('--task_success_discrepancy_weight', type=float, default=1.5, help='Weight for the discrepancy loss')
 
     parser.add_argument('--attributes_path', type=str, help='Path to the attributes file')
     parser.add_argument('--attributes_embeddings_path', type=str, help='Path to the attributes embeddings file')
@@ -814,6 +833,21 @@ if __name__ == "__main__":
                 print(f'Corruption = {args.cifar100c_corruption}, Severity = {args.severity}')
                 seed_everything(args.seed)
                 main(args)
+    elif args.eval_dataset =='pacs':
+        if args.method=='baseline':
+            scores_all = ['msp', 'energy', 'pe']
+            for score in scores_all:
+                args.score = score
+                for dn in ['art_painting', 'cartoon', 'photo', 'sketch']:
+                    args.domain_name = dn
+                    seed_everything(args.seed)
+                    main(args)
+        else:
+            for dn in ['art_painting', 'cartoon', 'photo', 'sketch']:
+                    args.domain_name = dn
+                    seed_everything(args.seed)
+                    main(args)
+
     else:
         seed_everything(args.seed)
         main(args)
@@ -899,4 +933,47 @@ python failure_detection_eval.py \
 # --filename cifar100c.log
 
 
+'''
+'''
+
+python failure_detection_eval.py \
+--data_dir './data' \
+--dataset_name pacs \
+--eval_dataset pacs \
+--num_classes 7 \
+--batch_size 512 \
+--img_size 32 \
+--seed 42 \
+--task_layer_name model.layer1 \
+--cutmix_alpha 1.0 \
+--warmup_epochs 0 \
+--task_failure_discrepancy_weight 2.0 \
+--task_success_discrepancy_weight 1.5 \
+--attributes_path clip-dissect/pacs_core_concepts.json \
+--attributes_embeddings_path data/pacs/pacs_core_attributes_CLIP_ViT-B_32_text_embeddings.pth \
+--classifier_name resnet18 \
+--classifier_checkpoint_path logs/pacs-photo/resnet18/classifier/checkpoint_199.pth \
+--use_imagenet_pretrained \
+--attribute_aggregation mean \
+--clip_model_name ViT-B/32 \
+--prompt_path data/pacs/pacs_CLIP_ViT-B_32_text_embeddings.pth \
+--num_epochs 100 \
+--optimizer adamw \
+--learning_rate 1e-3 \
+--aggregator_learning_rate 1e-3 \
+--scheduler MultiStepLR \
+--val_freq 1 \
+--save_dir ./logs \
+--prefix '' \
+--vlm_dim 512 \
+--num_gpus 1 \
+--num_nodes 1 \
+--augmix_prob 0.2 \
+--cutmix_prob 0.2 \
+--resume_checkpoint_path /usr/workspace/KDML/2024/failure_detect/logs/pacs/resnet18/mapper/_agg_mean_bs_512_lr_0.001_augmix_prob_0.2_cutmix_prob_0.2_scheduler_warmup_epoch_0_layer_model.layer1/pim_weights_best.pth \
+--method pim \
+--score cross_entropy \
+--domain_name sketch \
+# --eval_dataset cifar100c \
+# --filename cifar100c.log
 '''
