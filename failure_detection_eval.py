@@ -896,23 +896,22 @@ python failure_detection_eval.py \
 
 python failure_detection_eval.py \
 --data_dir './data' \
---dataset_name cifar100 \
---num_classes 100 \
+--dataset_name MetaShift \
+--num_classes 2 \
 --batch_size 512 \
---img_size 32 \
+--img_size 225 \
 --seed 42 \
---task_layer_name model.layer3 \
+--task_layer_name model.layer1 \
 --cutmix_alpha 1.0 \
 --warmup_epochs 10 \
---discrepancy_weight 1.0 \
---attributes_path clip-dissect/cifar100_core_concepts.json \
---attributes_embeddings_path data/cifar100/cifar100_attributes_CLIP_ViT-B_32_text_embeddings.pth \
+--attributes_path clip-dissect/Metashift_core_concepts.json \
+--attributes_embeddings_path data/metashift/metashift_core_attributes_CLIP_ViT-B_32_text_embeddings.pth \
 --classifier_name resnet18 \
---classifier_checkpoint_path logs/cifar100/resnet18/classifier/checkpoint_199.pth \
+--classifier_checkpoint_path logs/MetaShift/resnet18/classifier/best_checkpoint.pth \
 --use_imagenet_pretrained \
---attribute_aggregation max \
+--attribute_aggregation mean \
 --clip_model_name ViT-B/32 \
---prompt_path data/cifar100/cifar100_CLIP_ViT-B_32_text_embeddings.pth \
+--prompt_path data/metashift/metashift_core_attributes_CLIP_ViT-B_32_text_embeddings.pth \
 --num_epochs 200 \
 --optimizer adamw \
 --learning_rate 1e-3 \
@@ -926,9 +925,9 @@ python failure_detection_eval.py \
 --num_nodes 1 \
 --augmix_prob 0.2 \
 --cutmix_prob 0.2 \
---resume_checkpoint_path logs/cifar100/mapper/_agg_mean_bs_512_lr_0.001_augmix_prob_0.2_cutmix_prob_0.2_scheduler_layer_model.layer3/pim_weights_11.pth \
+--resume_checkpoint_path logs/MetaShift/resnet18/mapper/_agg_mean_bs_512_lr_0.001_augmix_prob_0.2_cutmix_prob_0.2_scheduler_warmup_epoch_0_layer_model.layer1/pim_weights_best.pth \
 --method pim \
---score cross_entropy \
+--score cross_entropy
 # --eval_dataset cifar100c \
 # --filename cifar100c.log
 
