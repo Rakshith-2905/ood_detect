@@ -41,13 +41,15 @@ class PACSDataset(Dataset):
 
         img_name = os.path.join(self.data_dir, 'pacs_data', self.img_names[idx])  # Adjusted to include domain in path
         image = Image.open(img_name).convert('RGB')  # Convert image to RGB
+        image2 = image.copy()
         label = self.labels[idx] - 1  # Adjust label to start from 0
 
         if self.transform1:
             image = self.transform1(image)
-
+        
+    
         if self.transform2:
-            return image, label, self.transform2(image)
+            return image, label, self.transform2(image2)
         
         return image, label
 
@@ -75,6 +77,7 @@ def get_pacs_dataloader(domain_name, batch_size=512, data_dir='data/',
             transforms.ToTensor(),
             transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
         ])
+    
 
     train_domain_name = domain_name
     if use_real:
