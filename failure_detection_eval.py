@@ -330,6 +330,8 @@ def clip_attribute_classifier(data_loader, class_attributes_embeddings, class_at
     task_model_acc = compute_accuracy(task_model_probs_list, labels_list)
     print(f'clip Attribute level Accuracy on {args.dataset_name} = {clip_acc} Clip Class Level Accuracy = {clip_class_level_acc} and Task Model Accuracy = {task_model_acc}')
 
+    return clip_class_level_acc, clip_acc
+
 def get_save_dir(args):
     
     if args.method == 'pim':
@@ -469,8 +471,6 @@ def evaluate_pim(data_loader, class_attributes_embeddings, class_attribute_promp
 
 def main(args):
 
-    log_path = f'{args.save_dir}/gen'
-        
     ########################### Create the model ############################
     clip_model, clip_transform = clip.load(args.clip_model_name, device=args.device)
     clip_model.eval()
@@ -487,8 +487,12 @@ def main(args):
                               task_layer_name=args.task_layer_name, vlm_dim=args.vlm_dim, 
                               mapping_output_size=mapper.feature_dim, cutmix_fn=cutmix)
     
-    ########################### Load the dataset ############################
 
+    print(f"Loaded Classifier checkpoint from {args.classifier_checkpoint_path}")
+    
+    ########################### Load the dataset ############################
+    
+    # This will be in train domain
     train_dataset, val_dataset, test_dataset, failure_dataset, class_names = get_dataset(args.dataset_name, train_transform, test_transform, 
                                                             data_dir=args.data_dir, clip_transform=clip_transform, 
                                                             img_size=args.img_size, domain_name=args.domain_name, 
@@ -524,8 +528,6 @@ def main(args):
     print(f"Number of validation examples: {len(val_loader.dataset)}")
     print(f"Number of test examples: {len(test_loader.dataset)}")
 
-
-    print(f"Loaded checkpoint from {args.classifier_checkpoint_path}")
     
     if args.method == 'baseline':
         classifier.to(device)
@@ -652,7 +654,7 @@ def main(args):
         aggregator.to(device)
 
         # # This evaluates CLIP attribute classifier, NOTE: use only with mean and max aggregators
-        # clip_attribute_classifier(test_loader, class_attributes_embeddings, class_attribute_prompts, clip_model, classifier, pim_model, aggregator)
+        clip_class_level_acc, clip_attribute_level_acc = clip_attribute_classifier(test_loader, class_attributes_embeddings, class_attribute_prompts, clip_model, classifier, pim_model, aggregator)
 
         # Evaluating task model
         print('Evaluating on Validation Data')
@@ -725,7 +727,10 @@ def main(args):
             "test_failure_recall": failure_recall_test,
             "test_success_recall": success_recall_test,
             "val_mathews_corr": mathews_corr_val,
-            "test_mathews_corr": mathews_corr_test
+            "test_mathews_corr": mathews_corr_test,
+            "pim_model_test_acc": test_pim_acc.item(),
+            "clip_class_level_acc": clip_class_level_acc.item(),
+            "clip_attribute_level_acc": clip_attribute_level_acc.item()
         }
 
         # Save it as a CSV file
