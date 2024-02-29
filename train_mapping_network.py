@@ -192,7 +192,10 @@ def validate(data_loader, class_attributes_embeddings, class_attribute_prompt_li
     pbar = progbar_wrapper(
         data_loader, total=len(data_loader), desc=f"Test Epoch {epoch+1}"
     )
-    
+    correct_pim =0.
+    correct_task = 0.
+    total = 0.
+
     for i, (images_batch, labels, images_clip_batch) in enumerate(pbar):
         
         images_batch = fabric.to_device(images_batch)
@@ -224,6 +227,14 @@ def validate(data_loader, class_attributes_embeddings, class_attribute_prompt_li
         task_model_probs = F.softmax(task_model_logits, dim=-1)
         pim_probs = F.softmax(pim_logits, dim=-1)
         
+        
+        _, pim_predicted = pim_probs.max(1)
+        total += labels.size(0)
+        correct_pim += pim_predicted.eq(labels).sum().item()
+
+        _, task_predicted = task_model_probs.max(1)
+        correct_task += task_predicted.eq(labels).sum().item()
+
         task_model_acc = compute_accuracy(task_model_probs, labels)
         pim_acc = compute_accuracy(pim_probs, labels)
 
@@ -233,8 +244,14 @@ def validate(data_loader, class_attributes_embeddings, class_attribute_prompt_li
         total_loss += loss.item()
 
     total_loss = fabric.all_gather(total_loss).mean() / len(data_loader)
-    total_task_model_acc = fabric.all_gather(total_task_model_acc).mean() / len(data_loader)
-    total_pim_acc = fabric.all_gather(total_pim_acc).mean() / len(data_loader)
+    # total_task_model_acc = fabric.all_gather(total_task_model_acc).mean() / len(data_loader)
+    # total_pim_acc = fabric.all_gather(total_pim_acc).mean() / len(data_loader)
+    
+    total_correct_pim = fabric.all_gather(correct_pim).mean() 
+    total_correct_task = fabric.all_gather(correct_task).mean() 
+    total = fabric.all_gather(total).mean()
+    total_pim_acc = total_correct_pim/total
+    total_task_model_acc = total_correct_task/total
 
     performance_dict = {"total_loss": total_loss, "task_model_acc":total_task_model_acc *100., "pim_acc": total_pim_acc *100.}
 
@@ -321,10 +338,10 @@ def main(args):
     train_dataset, val_dataset, test_dataset, failure_dataset, class_names = get_dataset(args.dataset_name, train_transform, test_transform, 
                                                             data_dir=args.data_dir, clip_transform=clip_transform, 
                                                             img_size=args.img_size, domain_name=args.domain_name, 
-                                                            return_failure_set=True)
+                                                            return_failure_set=True)#FIXME: for PACS, clip_transform=clip_transform give this error AttributeError: 'Tensor' object has no attribute 'convert' return image.convert("RGB")
 
     try:
-        transform_pipeline =train_dataset.dataset.transform1 #TODO: check this
+        transform_pipeline =train_dataset.dataset.transform1 
     except:
         transform_pipeline =train_dataset.transform1
     mean, std = find_normalization_parameters (transform_pipeline)
@@ -587,6 +604,45 @@ python train_mapping_network.py \
 --clip_model_name ViT-B/32 \
 --prompt_path data/cifar100/cifar100_CLIP_ViT-B_32_text_embeddings.pth \
 --num_epochs 200 \
+--optimizer adamw \
+--learning_rate 1e-3 \
+--aggregator_learning_rate 1e-3 \
+--scheduler MultiStepLR \
+--val_freq 1 \
+--save_dir ./logs \
+--prefix '' \
+--vlm_dim 512 \
+--num_gpus 1 \
+--num_nodes 1 \
+--augmix_prob 0.2 \
+--cutmix_prob 0.2 
+
+
+'''
+
+'''
+python train_mapping_network.py \
+--data_dir './data' \
+--dataset_name pacs \
+--domain_name photo \
+--num_classes 7 \
+--batch_size 512 \
+--img_size 224 \
+--seed 42 \
+--task_layer_name model.layer1 \
+--cutmix_alpha 1.0 \
+--warmup_epochs 0 \
+--task_failure_discrepancy_weight 2.0 \
+--task_success_discrepancy_weight 1.5 \
+--attributes_path clip-dissect/pacs_core_concepts.json \
+--attributes_embeddings_path data/pacs/pacs_core_attributes_CLIP_ViT-B_32_text_embeddings.pth \
+--classifier_name resnet18 \
+--classifier_checkpoint_path logs/pacs-photo/resnet18/classifier/checkpoint_199.pth \
+--use_imagenet_pretrained \
+--attribute_aggregation mean \
+--clip_model_name ViT-B/32 \
+--prompt_path data/pacs/pacs_CLIP_ViT-B_32_text_embeddings.pth \
+--num_epochs 100 \
 --optimizer adamw \
 --learning_rate 1e-3 \
 --aggregator_learning_rate 1e-3 \

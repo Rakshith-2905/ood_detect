@@ -41,6 +41,7 @@ from data_utils.domainnet_data import DomainNetDataset, get_data_from_saved_file
 from data_utils.cifar100_data import CIFAR100C, CIFAR100TwoTransforms, get_CIFAR100_dataloader, get_CIFAR100C_dataloader
 from data_utils.cifar10_data import CIFAR10C, CIFAR10TwoTransforms, get_CIFAR10_dataloader, get_CIFAR10C_dataloader
 from data_utils.celebA_dataset import FilteredCelebADataset, get_celebA_datatransforms
+from data_utils.pacs_dataset import PACSDataset, get_pacs_dataloader
 from data_utils import subpop_bench
 from data_utils.imagenet_dataset import ImageNetTwoTransforms, get_imagenet_loaders
 
@@ -67,7 +68,9 @@ def get_dataset(data_name, train_transforms, test_transforms, clip_transform, da
                                                                         subsample_trainset=False, return_dataset=True, use_real=use_real)
 
     elif data_name == 'pacs':
-        pass
+        train_dataset,val_dataset, test_dataset, failure_dataset, class_names =  get_pacs_dataloader(domain_name, batch_size=512, data_dir=data_dir, 
+                                                                                train_transform=None, test_transform=None, clip_transform=clip_transform, 
+                                                                                return_dataset=True, use_real=True)
 
     elif data_name == 'cifar10':
         train_dataset, val_dataset, test_dataset, failure_dataset, class_names = get_CIFAR10_dataloader(data_dir='./data',    
