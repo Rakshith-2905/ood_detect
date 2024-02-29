@@ -142,8 +142,16 @@ def train_one_epoch(data_loader, class_attributes_embeddings, class_attribute_pr
             task_prediction = torch.argmax(task_model_logits, dim=-1)
             pim_prediction = torch.argmax(pim_logits, dim=-1)
             correct_task_pim_incorrect_idx= torch.where((task_prediction == labels) & (pim_prediction != labels))[0]
-            loss[correct_task_pim_incorrect_idx]= loss[correct_task_pim_incorrect_idx]*args.discrepancy_weight # Weight the loss by the number of such samples
+            loss[correct_task_pim_incorrect_idx]= loss[correct_task_pim_incorrect_idx]*args.task_success_discrepancy_weight # Weight the loss by the number of such samples
             print(f"Correct task, incorrect pim: {len(correct_task_pim_incorrect_idx)}")
+
+            incorrect_task_pim_incorrect_idx= torch.where((task_prediction != labels) & (pim_prediction != labels))[0]
+            loss[incorrect_task_pim_incorrect_idx]= loss[incorrect_task_pim_incorrect_idx]*args.task_failure_discrepancy_weight # Weight the loss by the number of such samples
+            print(f"incorrect task, incorrect pim: {len(incorrect_task_pim_incorrect_idx)}")
+        
+        
+        
+        
         loss= loss.mean()
 
         fabric.backward(loss)
@@ -453,7 +461,8 @@ if __name__ == "__main__":
     parser.add_argument('--cutmix_prob', type=float, default=0.2, help='Probability of using cutmix')
 
     parser.add_argument('--warmup_epochs', type=int, default=10, help='Number of warmup epochs before using cutmix')
-    parser.add_argument('--discrepancy_weight', type=float, default=1.0, help='Weight to multiply the loss by for samples where the task model is correct and the pim model is incorrect')
+    parser.add_argument('--task_failure_discrepancy_weight', type=float, default=2.0, help='Weight for the discrepancy loss')
+    parser.add_argument('--task_success_discrepancy_weight', type=float, default=1.5, help='Weight for the discrepancy loss')
 
     parser.add_argument('--attributes_path', type=str, help='Path to the attributes file')
     parser.add_argument('--attributes_embeddings_path', type=str, help='Path to the attributes embeddings file')
@@ -530,7 +539,8 @@ python train_mapping_network.py \
 --task_layer_name model.layer4 \
 --cutmix_alpha 1.0 \
 --warmup_epochs 10 \
---discrepancy_weight 1.0 \
+--task_failure_discrepancy_weight 1.0 \
+--task_success_discrepancy_weight 1.0 \
 --attributes_path clip-dissect/Waterbirds_core_concepts.json \
 --attributes_embeddings_path data/Waterbirds/Waterbirds_attributes_CLIP_ViT-B_32_text_embeddings.pth \
 --classifier_name resnet18 \
@@ -566,7 +576,8 @@ python train_mapping_network.py \
 --task_layer_name model.layer2 \
 --cutmix_alpha 1.0 \
 --warmup_epochs 10 \
---discrepancy_weight 1.0 \
+--task_failure_discrepancy_weight 1.0 \
+--task_success_discrepancy_weight 1.0 \
 --attributes_path clip-dissect/cifar100_core_concepts.json \
 --attributes_embeddings_path data/cifar100/cifar100_attributes_CLIP_ViT-B_32_text_embeddings.pth \
 --classifier_name resnet18 \
