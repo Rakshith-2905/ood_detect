@@ -59,7 +59,7 @@ def main():
     # Load cifar-100 classes
     with open('pacs_labels.json', 'r') as f:
         classes = json.load(f)
-    print(classes)
+    # print(classes)
     # # Load the classes from the text file
     # with open('data/domainnet_v1.0/class_names.txt', 'r') as f:
     #     classes = f.read().splitlines()  
@@ -71,6 +71,9 @@ def main():
     # classes = ['autumn',  'dim',  'grass',  'outdoor',  'rock',  'water']
         
     # classes = ['landbird', 'waterbird']
+        
+    # with open('Metashift_labels.json', 'r') as f:
+    #     classes = json.load(f)
     concept_set = {}
     # Iterate over all the classes
     for class_name in tqdm(classes):
