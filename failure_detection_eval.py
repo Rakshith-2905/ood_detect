@@ -511,8 +511,14 @@ def main(args):
         transform_test = transforms.Compose([transforms.ToTensor(),transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010))])
         testset = CIFAR100C(corruption=args.cifar100c_corruption, transform=transform_test,clip_transform=clip_transform, level=args.severity)
         test_loader = torch.utils.data.DataLoader(testset, batch_size=args.batch_size, shuffle=False, num_workers=8, pin_memory=True)
-    else:
-        
+    elif args.eval_dataset == 'pacs':
+        _, val_dataset, _, failure_dataset, class_names = get_dataset(args.dataset_name, train_transform, test_transform, 
+                                                            data_dir=args.data_dir, clip_transform=clip_transform, 
+                                                            img_size=args.img_size, domain_name='sketch', 
+                                                            return_failure_set=True,use_real=False)
+        #concat val and failure
+        val_dataset = ConcatDataset([val_dataset, failure_dataset])
+        val_loader = torch.utils.data.DataLoader(val_dataset, batch_size=args.batch_size, shuffle=False, num_workers=8, pin_memory=True)
         test_loader = torch.utils.data.DataLoader(test_dataset, batch_size=args.batch_size, shuffle=False, num_workers=8, pin_memory=True)
 
     print(f"Number of validation examples: {len(val_loader.dataset)}")
@@ -943,7 +949,7 @@ python failure_detection_eval.py \
 --classifier_name resnet18 \
 --classifier_checkpoint_path logs/pacs-photo/resnet18/classifier/checkpoint_199.pth \
 --use_imagenet_pretrained \
---attribute_aggregation max \
+--attribute_aggregation mean \
 --clip_model_name ViT-B/32 \
 --prompt_path data/pacs/pacs_CLIP_ViT-B_32_text_embeddings.pth \
 --num_epochs 100 \
@@ -959,7 +965,7 @@ python failure_detection_eval.py \
 --num_nodes 1 \
 --augmix_prob 0.2 \
 --cutmix_prob 0.2 \
---resume_checkpoint_path /usr/workspace/KDML/2024/failure_detect/logs/pacs/resnet18/mapper/_agg_max_bs_512_lr_0.001_augmix_prob_0.2_cutmix_prob_0.2_scheduler_warmup_epoch_0_layer_model.layer1/pim_weights_best.pth \
+--resume_checkpoint_path /usr/workspace/KDML/2024/failure_detect/logs/pacs/resnet18/mapper/_agg_mean_bs_512_lr_0.001_augmix_prob_0.2_cutmix_prob_0.2_scheduler_warmup_epoch_0_layer_model.layer1/pim_weights_best.pth \
 --method pim \
 --score cross_entropy \
 --domain_name sketch \
