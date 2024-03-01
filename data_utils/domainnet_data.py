@@ -110,7 +110,11 @@ def get_domainnet_loaders(domain_name, batch_size=512, data_dir='data/',
     train_domain_name = domain_name
     if use_real:
         train_domain_name = 'real'
-    data_dir = os.path.join(data_dir, 'domainnet_v1.0')
+    if os.path.exists(os.path.join(data_dir, 'domainnet_v1.0')):
+        data_dir = os.path.join(data_dir, 'domainnet_v1.0')
+    else:
+        data_dir = data_dir
+    
     temp_train_dataset = DomainNetDataset(root_dir=data_dir, domain=train_domain_name,
                                     split='train', transform=train_transform, transform2=clip_transform)
     test_dataset= DomainNetDataset(root_dir=data_dir, domain=domain_name, 
