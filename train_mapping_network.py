@@ -270,8 +270,10 @@ def main(args):
     classifier, train_transform, test_transform = build_classifier(args.classifier_name, num_classes=args.num_classes, 
                                                                     pretrained=args.use_imagenet_pretrained, 
                                                                     checkpoint_path=args.classifier_checkpoint_path)
-    
-    mapper,_, _ = build_classifier(args.classifier_name, num_classes=args.num_classes, pretrained=True, checkpoint_path=None)
+    mapping_name = args.classifier_name
+    if args.dataset =="imagenet":
+        mapping_name= f"{mapping_name}_v2"
+    mapper,_, _ = build_classifier(mapping_name, num_classes=args.num_classes, pretrained=True, checkpoint_path=None)
     
     cutmix = CutMix(args.cutmix_alpha, args.num_classes)
     pim_model = TaskMapping(task_model=classifier, mapping_model=mapper, 
@@ -517,8 +519,8 @@ if __name__ == "__main__":
     args = parser.parse_args()
     device='cuda' if torch.cuda.is_available() else 'cpu'
     args.device = device
-    print(f"Using device: {args.device}")
-    print(f"torch.cuda.is_available(): {torch.cuda.is_available()}, torch.cuda.device_count(): {torch.cuda.device_count()}")
+    # print(f"Using device: {args.device}")
+    # print(f"torch.cuda.is_available(): {torch.cuda.is_available()}, torch.cuda.device_count(): {torch.cuda.device_count()}")
    
     # from lightning.fabric.strategies import DDPStrategy
     # strategy = DDPStrategy(timeout=datetime.timedelta(seconds=3600))
