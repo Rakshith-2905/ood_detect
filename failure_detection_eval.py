@@ -498,8 +498,6 @@ def main(args):
                                                             img_size=args.img_size, domain_name=args.domain_name, 
                                                             return_failure_set=True)
  
-    
-
     if args.dataset_name in ['cifar100']:
         # Merge falure dataset with train dataset
         train_dataset = ConcatDataset([train_dataset, val_dataset])
@@ -613,6 +611,7 @@ def main(args):
         with open(results_file, 'a') as f:
             json.dump(results, f)
             f.write('\n')
+    
     elif args.method == 'pim':
         class_attributes_embeddings_prompts = torch.load(args.attributes_embeddings_path)
         class_attribute_prompts = class_attributes_embeddings_prompts["class_attribute_prompts"]
@@ -621,7 +620,14 @@ def main(args):
         assert len(class_attribute_prompts) == args.num_classes, "Number of classes does not match the number of class attributes"
 
         num_attributes_per_cls = [len(attributes) for attributes in class_attribute_prompts]
+
+        attribute_names_per_class = {}
+        # Make the attribute names from the prompts
+        for i in range(len(class_attribute_prompts)):
+            attribute_names_per_class[class_names[i]] = [prompt.replace(f"This is a photo of {class_names[i]} with ", "") for prompt in class_attribute_prompts[i]]
         
+        print(attribute_names_per_class)
+        assert False
         
         if args.attribute_aggregation == "mha":
             aggregator = MultiHeadedAttentionSimilarity(args.num_classes, num_attributes_per_cls=num_attributes_per_cls, num_heads=1, out_dim=1)
@@ -677,6 +683,20 @@ def main(args):
         test_pim_acc, test_task_model_acc, test_labels_list, test_pim_logits_list, test_pim_probs_list, test_task_logits_list, test_task_probs_list = outs
         test_scores = get_score(args.score, test_task_logits_list, test_pim_logits_list)
         estimated_test_acc, test_estimated_success_failure_idx = calc_accuracy_from_scores(test_scores, threshold)
+
+
+        if plot_explanations:
+            # Class names  as key and list of attribute names as value
+            attribute_names_per_class = {class_names[i]: class_attribute_prompts[i] for i in range(len(class_names))}
+            num_attributes_per_cls = [len(attributes) for attributes in class_attribute_prompts]
+            # Create an instance of the PIM_Explanations class
+            pim_explanations = PIM_Explanations(attribute_names_per_class, num_attributes_per_class, aggregation_fn=aggregator)
+
+            # Get the explanations
+            pim_explanations.get_explanations(failed_images, task_model_logits, pim_logits_dict, 
+                                            true_classes, choice='logit_flip', save_path='explanations.png')
+
+
 
         print(f'Score = {args.score}')
         print(f'True Validation Accuracy = {val_task_model_acc}, Estimated Validation Accuracy = {estimated_val_acc}, True Test Accuracy = {test_task_model_acc}, Estimated Test Accuracy = {estimated_test_acc}')
@@ -862,7 +882,7 @@ python failure_detection_eval.py \
 --batch_size 512 \
 --img_size 32 \
 --seed 42 \
---task_layer_name model.layer2 \
+--task_layer_name model.layer1 \
 --cutmix_alpha 1.0 \
 --warmup_epochs 0 \
 --discrepancy_weight 1.0 \
@@ -896,23 +916,22 @@ python failure_detection_eval.py \
 
 python failure_detection_eval.py \
 --data_dir './data' \
---dataset_name cifar100 \
---num_classes 100 \
+--dataset_name MetaShift \
+--num_classes 2 \
 --batch_size 512 \
---img_size 32 \
+--img_size 225 \
 --seed 42 \
---task_layer_name model.layer3 \
+--task_layer_name model.layer1 \
 --cutmix_alpha 1.0 \
 --warmup_epochs 10 \
---discrepancy_weight 1.0 \
---attributes_path clip-dissect/cifar100_core_concepts.json \
---attributes_embeddings_path data/cifar100/cifar100_attributes_CLIP_ViT-B_32_text_embeddings.pth \
+--attributes_path clip-dissect/Metashift_core_concepts.json \
+--attributes_embeddings_path data/metashift/metashift_core_attributes_CLIP_ViT-B_32_text_embeddings.pth \
 --classifier_name resnet18 \
---classifier_checkpoint_path logs/cifar100/resnet18/classifier/checkpoint_199.pth \
+--classifier_checkpoint_path logs/MetaShift/resnet18/classifier/best_checkpoint.pth \
 --use_imagenet_pretrained \
---attribute_aggregation max \
+--attribute_aggregation mean \
 --clip_model_name ViT-B/32 \
---prompt_path data/cifar100/cifar100_CLIP_ViT-B_32_text_embeddings.pth \
+--prompt_path data/metashift/metashift_core_attributes_CLIP_ViT-B_32_text_embeddings.pth \
 --num_epochs 200 \
 --optimizer adamw \
 --learning_rate 1e-3 \
@@ -926,9 +945,9 @@ python failure_detection_eval.py \
 --num_nodes 1 \
 --augmix_prob 0.2 \
 --cutmix_prob 0.2 \
---resume_checkpoint_path logs/cifar100/mapper/_agg_mean_bs_512_lr_0.001_augmix_prob_0.2_cutmix_prob_0.2_scheduler_layer_model.layer3/pim_weights_11.pth \
+--resume_checkpoint_path logs/MetaShift/resnet18/mapper/_agg_mean_bs_512_lr_0.001_augmix_prob_0.2_cutmix_prob_0.2_scheduler_warmup_epoch_0_layer_model.layer1/pim_weights_best.pth \
 --method pim \
---score cross_entropy \
+--score cross_entropy
 # --eval_dataset cifar100c \
 # --filename cifar100c.log
 

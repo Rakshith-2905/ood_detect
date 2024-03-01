@@ -565,9 +565,9 @@ python train_mapping_network.py \
 --batch_size 512 \
 --img_size 224 \
 --seed 42 \
---task_layer_name model.layer4 \
+--task_layer_name model.layer1 \
 --cutmix_alpha 1.0 \
---warmup_epochs 10 \
+--warmup_epochs 0 \
 --task_failure_discrepancy_weight 1.0 \
 --task_success_discrepancy_weight 1.0 \
 --attributes_path clip-dissect/Waterbirds_core_concepts.json \
@@ -575,7 +575,7 @@ python train_mapping_network.py \
 --classifier_name resnet18 \
 --classifier_checkpoint_path logs/Waterbirds/resnet18/classifier/checkpoint_99.pth \
 --use_imagenet_pretrained \
---attribute_aggregation mean \
+--attribute_aggregation max \
 --clip_model_name ViT-B/32 \
 --prompt_path data/Waterbirds/Waterbirds_CLIP_ViT-B_32_text_embeddings.pth \
 --num_epochs 200 \
@@ -602,7 +602,7 @@ python train_mapping_network.py \
 --batch_size 512 \
 --img_size 32 \
 --seed 42 \
---task_layer_name model.layer2 \
+--task_layer_name model.layer1 \
 --cutmix_alpha 1.0 \
 --warmup_epochs 10 \
 --task_failure_discrepancy_weight 1.0 \
@@ -657,6 +657,87 @@ python train_mapping_network.py \
 --num_epochs 100 \
 --optimizer adamw \
 --learning_rate 1e-3 \
+--aggregator_learning_rate 1e-3 \
+--scheduler MultiStepLR \
+--val_freq 1 \
+--save_dir ./logs \
+--prefix '' \
+--vlm_dim 512 \
+--num_gpus 1 \
+--num_nodes 1 \
+--augmix_prob 0.2 \
+--cutmix_prob 0.2 
+
+
+'''
+
+
+
+'''
+python train_mapping_network.py \
+--data_dir './data' \
+--dataset_name MetaShift \
+--num_classes 2 \
+--batch_size 512 \
+--img_size 224 \
+--seed 42 \
+--task_layer_name model.layer1 \
+--cutmix_alpha 1.0 \
+--warmup_epochs 0 \
+--task_failure_discrepancy_weight 2.0 \
+--task_success_discrepancy_weight 1.5 \
+--attributes_path clip-dissect/Metashift_core_concepts.json \
+--attributes_embeddings_path data/metashift/metashift_core_attributes_CLIP_ViT-B_32_text_embeddings.pth \
+--classifier_name resnet18 \
+--classifier_checkpoint_path logs/MetaShift/resnet18/classifier/best_checkpoint.pth \
+--use_imagenet_pretrained \
+--attribute_aggregation max \
+--clip_model_name ViT-B/32 \
+--prompt_path data/metashift/metashift_CLIP_ViT-B_32_text_embeddings.pth \
+--num_epochs 100 \
+--optimizer adamw \
+--learning_rate 1e-4 \
+--aggregator_learning_rate 1e-3 \
+--scheduler MultiStepLR \
+--val_freq 1 \
+--save_dir ./logs \
+--prefix '' \
+--vlm_dim 512 \
+--num_gpus 1 \
+--num_nodes 1 \
+--augmix_prob 0.2 \
+--cutmix_prob 0.2 
+
+
+'''
+
+
+
+'''
+python train_mapping_network.py \
+--data_dir './data' \
+--dataset_name NICOpp \
+--domain_name autumn \
+--num_classes 60 \
+--batch_size 512 \
+--img_size 224 \
+--seed 42 \
+--task_layer_name model.layer1 \
+--cutmix_alpha 1.0 \
+--warmup_epochs 0 \
+--task_failure_discrepancy_weight 2.0 \
+--task_success_discrepancy_weight 1.5 \
+--attributes_path clip-dissect/NICOpp_core_concepts.json \
+--attributes_embeddings_path data/nicopp/nicopp_core_attributes_CLIP_ViT-B_32_text_embeddings.pth \
+--classifier_name resnet18 \
+--classifier_checkpoint_path logs/NICOpp/failure_estimation/autumn/resnet18/classifier/best_checkpoint.pth \
+--use_imagenet_pretrained \
+--attribute_aggregation max \
+--clip_model_name ViT-B/32 \
+--prompt_path data/nicopp/nicopp_CLIP_ViT-B_32_text_embeddings.pth \
+--num_epochs 100 \
+--optimizer adamw \
+--learning_rate 1e-3 \
 --aggregator_learning_rate 1e-2 \
 --scheduler MultiStepLR \
 --val_freq 1 \
@@ -669,5 +750,88 @@ python train_mapping_network.py \
 --cutmix_prob 0.2 
 
 
+<<<<<<< HEAD
+=======
+'''
+
+
+
+'''
+python train_mapping_network.py \
+--data_dir './data' \
+--dataset_name MetaShift \
+--num_classes 2 \
+--batch_size 512 \
+--img_size 224 \
+--seed 42 \
+--task_layer_name model.layer1 \
+--cutmix_alpha 1.0 \
+--warmup_epochs 0 \
+--task_failure_discrepancy_weight 2.0 \
+--task_success_discrepancy_weight 1.5 \
+--attributes_path clip-dissect/Metashift_core_concepts.json \
+--attributes_embeddings_path data/metashift/metashift_core_attributes_CLIP_ViT-B_32_text_embeddings.pth \
+--classifier_name resnet18 \
+--classifier_checkpoint_path logs/MetaShift/resnet18/classifier/best_checkpoint.pth \
+--use_imagenet_pretrained \
+--attribute_aggregation max \
+--clip_model_name ViT-B/32 \
+--prompt_path data/metashift/metashift_CLIP_ViT-B_32_text_embeddings.pth \
+--num_epochs 100 \
+--optimizer adamw \
+--learning_rate 1e-4 \
+--aggregator_learning_rate 1e-3 \
+--scheduler MultiStepLR \
+--val_freq 1 \
+--save_dir ./logs \
+--prefix '' \
+--vlm_dim 512 \
+--num_gpus 1 \
+--num_nodes 2 \
+--augmix_prob 0.2 \
+--cutmix_prob 0.2 
+
+
+'''
+
+
+
+'''
+python train_mapping_network.py \
+--data_dir './data' \
+--dataset_name NICOpp \
+--domain_name autumn \
+--num_classes 60 \
+--batch_size 512 \
+--img_size 224 \
+--seed 42 \
+--task_layer_name model.layer1 \
+--cutmix_alpha 1.0 \
+--warmup_epochs 0 \
+--task_failure_discrepancy_weight 2.0 \
+--task_success_discrepancy_weight 1.5 \
+--attributes_path clip-dissect/NICOpp_core_concepts.json \
+--attributes_embeddings_path data/nicopp/nicopp_core_attributes_CLIP_ViT-B_32_text_embeddings.pth \
+--classifier_name resnet18 \
+--classifier_checkpoint_path logs/NICOpp/failure_estimation/autumn/resnet18/classifier/best_checkpoint.pth \
+--use_imagenet_pretrained \
+--attribute_aggregation max \
+--clip_model_name ViT-B/32 \
+--prompt_path data/nicopp/nicopp_CLIP_ViT-B_32_text_embeddings.pth \
+--num_epochs 100 \
+--optimizer adamw \
+--learning_rate 1e-3 \
+--aggregator_learning_rate 1e-3 \
+--scheduler MultiStepLR \
+--val_freq 1 \
+--save_dir ./logs \
+--prefix '' \
+--vlm_dim 512 \
+--num_gpus 1 \
+--num_nodes 1 \
+--augmix_prob 0.2 \
+--cutmix_prob 0.2 
+
+>>>>>>> 1c65f8d4b53cffe1644018ca4dca0af5126ca76d
 
 '''
