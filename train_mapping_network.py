@@ -26,7 +26,7 @@ from lightning.fabric.loggers import TensorBoardLogger, CSVLogger
 import argparse
 from tqdm import tqdm
 from functools import partial
-
+from datetime import datetime
 
 import clip
 import csv
