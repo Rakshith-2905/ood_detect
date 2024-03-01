@@ -1,11 +1,12 @@
 import os
 import sys
 import copy
-try:
-    del os.environ['OMP_PLACES']
-    del os.environ['OMP_PROC_BIND']
-except:
-    pass
+
+# try:
+#     del os.environ['OMP_PLACES']
+#     del os.environ['OMP_PROC_BIND']
+# except:
+#     pass
 
 import time
 import torch
@@ -93,7 +94,7 @@ def train_one_epoch(data_loader, class_attributes_embeddings, class_attribute_pr
     pbar = progbar_wrapper(
         data_loader, total=len(data_loader), desc=f"Training Epoch {epoch+1}"
     )
-    
+    class_attributes_embeddings = fabric.to_device(class_attributes_embeddings)
     for i, (images_batch, labels, images_clip_batch) in enumerate(pbar):
         labels_orig = labels.clone()
         augmix_flag =bool(torch.bernoulli(torch.tensor(args.augmix_prob)))
@@ -196,6 +197,8 @@ def validate(data_loader, class_attributes_embeddings, class_attribute_prompt_li
     correct_task = 0.
     total = 0.
 
+    class_attributes_embeddings = fabric.to_device(class_attributes_embeddings)
+    
     for i, (images_batch, labels, images_clip_batch) in enumerate(pbar):
         
         images_batch = fabric.to_device(images_batch)
@@ -208,6 +211,7 @@ def validate(data_loader, class_attributes_embeddings, class_attribute_prompt_li
         normalized_pim_image_embeddings = F.normalize(pim_image_embeddings, dim=-1)
         normalized_class_attributes_embeddings = F.normalize(class_attributes_embeddings, dim=-1)
         normalized_pim_image_embeddings = normalized_pim_image_embeddings.to(normalized_class_attributes_embeddings.dtype)
+        normalized_pim_image_embeddings = fabric.to_device(normalized_pim_image_embeddings)
         pim_similarities = CLIP_LOGIT_SCALE*(normalized_pim_image_embeddings @ normalized_class_attributes_embeddings.t()) # (batch_size, num_classes*num_attributes_perclass)
 
         # Split the similarities into class specific dictionary
@@ -513,6 +517,17 @@ if __name__ == "__main__":
     args = parser.parse_args()
     device='cuda' if torch.cuda.is_available() else 'cpu'
     args.device = device
+    print(f"Using device: {args.device}")
+    print(f"torch.cuda.is_available(): {torch.cuda.is_available()}, torch.cuda.device_count(): {torch.cuda.device_count()}")
+   
+    # from lightning.fabric.strategies import DDPStrategy
+    # strategy = DDPStrategy(timeout=datetime.timedelta(seconds=3600))
+    #accelarator = args.device
+    fabric = L.Fabric(accelerator="gpu",num_nodes=args.num_nodes, devices=args.num_gpus, strategy="auto")#, loggers=[tb_logger, csv_logger])
+    
+    fabric.launch()
+    print = fabric.print
+    
     # Print the arguments
     print(args)
     sys.stdout.flush()
@@ -529,12 +544,9 @@ if __name__ == "__main__":
 
     tb_logger = TensorBoardLogger(args.save_dir)
     csv_logger = CSVLogger(args.save_dir, flush_logs_every_n_steps=1)
-
-    fabric = L.Fabric(accelerator=args.device,num_nodes=args.num_nodes, devices=args.num_gpus, strategy="auto", loggers=[tb_logger, csv_logger])
-   
-    fabric.launch()
-
-    print = fabric.print
+    # use strategy as DDPS and increase timedelta
+    
+    
 
     # The total number of processes running across all devices and nodes
     fabric.print(f"World size: {fabric.world_size}")  # 2 * 3 = 6
@@ -726,6 +738,89 @@ python train_mapping_network.py \
 --num_epochs 100 \
 --optimizer adamw \
 --learning_rate 1e-3 \
+--aggregator_learning_rate 1e-2 \
+--scheduler MultiStepLR \
+--val_freq 1 \
+--save_dir ./logs \
+--prefix '' \
+--vlm_dim 512 \
+--num_gpus 1 \
+--num_nodes 2 \
+--augmix_prob 0.2 \
+--cutmix_prob 0.2 
+
+
+<<<<<<< HEAD
+=======
+'''
+
+
+
+'''
+python train_mapping_network.py \
+--data_dir './data' \
+--dataset_name MetaShift \
+--num_classes 2 \
+--batch_size 512 \
+--img_size 224 \
+--seed 42 \
+--task_layer_name model.layer1 \
+--cutmix_alpha 1.0 \
+--warmup_epochs 0 \
+--task_failure_discrepancy_weight 2.0 \
+--task_success_discrepancy_weight 1.5 \
+--attributes_path clip-dissect/Metashift_core_concepts.json \
+--attributes_embeddings_path data/metashift/metashift_core_attributes_CLIP_ViT-B_32_text_embeddings.pth \
+--classifier_name resnet18 \
+--classifier_checkpoint_path logs/MetaShift/resnet18/classifier/best_checkpoint.pth \
+--use_imagenet_pretrained \
+--attribute_aggregation max \
+--clip_model_name ViT-B/32 \
+--prompt_path data/metashift/metashift_CLIP_ViT-B_32_text_embeddings.pth \
+--num_epochs 100 \
+--optimizer adamw \
+--learning_rate 1e-4 \
+--aggregator_learning_rate 1e-3 \
+--scheduler MultiStepLR \
+--val_freq 1 \
+--save_dir ./logs \
+--prefix '' \
+--vlm_dim 512 \
+--num_gpus 1 \
+--num_nodes 2 \
+--augmix_prob 0.2 \
+--cutmix_prob 0.2 
+
+
+'''
+
+
+
+'''
+python train_mapping_network.py \
+--data_dir './data' \
+--dataset_name NICOpp \
+--domain_name autumn \
+--num_classes 60 \
+--batch_size 512 \
+--img_size 224 \
+--seed 42 \
+--task_layer_name model.layer1 \
+--cutmix_alpha 1.0 \
+--warmup_epochs 0 \
+--task_failure_discrepancy_weight 2.0 \
+--task_success_discrepancy_weight 1.5 \
+--attributes_path clip-dissect/NICOpp_core_concepts.json \
+--attributes_embeddings_path data/nicopp/nicopp_core_attributes_CLIP_ViT-B_32_text_embeddings.pth \
+--classifier_name resnet18 \
+--classifier_checkpoint_path logs/NICOpp/failure_estimation/autumn/resnet18/classifier/best_checkpoint.pth \
+--use_imagenet_pretrained \
+--attribute_aggregation max \
+--clip_model_name ViT-B/32 \
+--prompt_path data/nicopp/nicopp_CLIP_ViT-B_32_text_embeddings.pth \
+--num_epochs 100 \
+--optimizer adamw \
+--learning_rate 1e-3 \
 --aggregator_learning_rate 1e-3 \
 --scheduler MultiStepLR \
 --val_freq 1 \
@@ -737,5 +832,6 @@ python train_mapping_network.py \
 --augmix_prob 0.2 \
 --cutmix_prob 0.2 
 
+>>>>>>> 1c65f8d4b53cffe1644018ca4dca0af5126ca76d
 
 '''

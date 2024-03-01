@@ -573,9 +573,9 @@ def main(args):
             "test_success_recall": success_recall_test,
             "val_mathews_corr": mathews_corr_val,
             "test_mathews_corr": mathews_corr_test,
-            "pim_model_test_acc": test_pim_acc.item(),
-            "clip_class_level_acc": clip_class_level_acc.item(),
-            "clip_attribute_level_acc": clip_attribute_level_acc.item()
+            "pim_model_test_acc": test_pim_acc,
+            "clip_class_level_acc": clip_class_level_acc,
+            "clip_attribute_level_acc": clip_attribute_level_acc
         }
 
         # Save it as a CSV file
@@ -834,7 +834,7 @@ python failure_detection_eval.py \
 --classifier_name resnet18 \
 --classifier_checkpoint_path logs/pacs-photo/resnet18/classifier/checkpoint_199.pth \
 --use_imagenet_pretrained \
---attribute_aggregation mean \
+--attribute_aggregation max \
 --clip_model_name ViT-B/32 \
 --prompt_path data/pacs/pacs_CLIP_ViT-B_32_text_embeddings.pth \
 --num_epochs 100 \
@@ -850,7 +850,7 @@ python failure_detection_eval.py \
 --num_nodes 1 \
 --augmix_prob 0.2 \
 --cutmix_prob 0.2 \
---resume_checkpoint_path /usr/workspace/KDML/2024/failure_detect/logs/pacs/resnet18/mapper/_agg_mean_bs_512_lr_0.001_augmix_prob_0.2_cutmix_prob_0.2_scheduler_warmup_epoch_0_layer_model.layer1/pim_weights_best.pth \
+--resume_checkpoint_path /usr/workspace/KDML/2024/failure_detect/logs/pacs/resnet18/mapper/_agg_max_bs_512_lr_0.001_augmix_prob_0.2_cutmix_prob_0.2_scheduler_warmup_epoch_0_layer_model.layer1/pim_weights_best.pth \
 --method pim \
 --score cross_entropy \
 --domain_name sketch \
