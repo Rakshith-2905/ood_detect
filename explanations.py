@@ -63,7 +63,7 @@ def optimize_attribute_weights(pim_attribute_dict, reference_classes, num_attrib
         # convert to numpy
         ranked_classes = ranked_classes.cpu().numpy()
 
-        print(f"\nRanked classes: {ranked_classes}, True class: {reference_class}")
+        # print(f"\nRanked classes: {ranked_classes}, True class: {reference_class}")
 
         # Iterate over each class that ranks higher than the true class
         for rank, top_class in enumerate(ranked_classes):
@@ -231,9 +231,9 @@ class PIM_Explanations(nn.Module):
                                     class names as keys and a dictionary with 'attribute'(attribute names)  and 'weights' as values.
         """
         
-        for i in range(len(attribute_weights)):
-            for class_idx, weights in attribute_weights[i].items():
-                print(f"Instance {i+1}, Class {class_idx}: {weights}")
+        # for i in range(len(attribute_weights)):
+        #     for class_idx, weights in attribute_weights[i].items():
+        #         print(f"Instance {i+1}, Class {class_idx}: {weights}")
 
         batch_size = reference_classes.shape[0]
         identified_attributes_per_instance = []
@@ -252,67 +252,71 @@ class PIM_Explanations(nn.Module):
                     'weights': attribute_weights[i][class_idx]  
                 }
 
-                # # Get the top-k attributes for the current class
-                # w, idx = torch.topk(attribute_weights[i][class_id], k, largest=False, dim=0)  # w: [k], idx: [k]
-
-                # idx = idx.cpu().numpy()
-                # identified_attributes[class_name] = {
-                #     'attributes': [self.attribute_names_per_class[class_name][i] for i in idx],  # attribute names with -top-k weights
-                #     'weights': w  # top-k weights
-                # }
             identified_attributes_per_instance.append(identified_attributes)
         
-        for i in range(batch_size):
-            print(f"Instance {i+1}:")
-            for class_name, attributes in identified_attributes_per_instance[i].items():
-                print(f"Class: {class_name}")
-                for attr, weight in zip(attributes['attributes'], attributes['weights']):
-                    print(f"{attr}: {weight:.2f}")
-
         return identified_attributes_per_instance
 
     def plot_explanations(self, failed_images, identified_attributes_per_instance,
-                          true_class_names, pim_class_names, predicted_class_names, save_path=None):
+                        true_class_names, pim_class_names, predicted_class_names, max_description_length=800, 
+                        save_path=None, choice="KLD"):
         
         failed_images = self.inverse_normalization(failed_images)
-        # convert to PIL
+        # Convert to uint8
         failed_images = (failed_images * 255.).type(torch.uint8)
         images_np = failed_images.permute(0, 2, 3, 1).cpu().numpy()
         
         # Number of images
         batch_size = failed_images.shape[0]
         
-        # Setting up the plot
-        fig, axes = plt.subplots(nrows=batch_size, ncols=2, figsize=(16, batch_size * 6), gridspec_kw={'width_ratios': [3, 1]})
-        if batch_size == 1:  # If there's only one image, axes will not be an array
+        # Determine the necessary number of columns for each image based on the length of its description
+        num_columns = [2] * batch_size  # Start with 2 columns for each: one for the image, one for text
+        for i, attributes in enumerate(identified_attributes_per_instance):
+            description_text = 'Classes Flipped: \n'
+            for class_name, attr_details in attributes.items():
+                description_text += f'\nAttributes Weights of {class_name}:\n'
+                for attr, weight in zip(attr_details['attributes'], attr_details['weights']):
+                    description_text += f"{attr}: {weight:.2f}\n"
+            # Determine if additional columns are needed based on the description length
+            extra_columns = int(len(description_text) / max_description_length)
+            num_columns[i] += extra_columns
+
+        # Set up the plot with a dynamic number of columns
+        max_columns = max(num_columns)  # Find the max number of columns needed
+        fig, axes = plt.subplots(nrows=batch_size, ncols=max_columns, figsize=(8 * max_columns, batch_size * 6),
+                                gridspec_kw={'width_ratios': [3] + [1] * (max_columns - 1)})
+
+        if batch_size == 1:  # Make sure axes is iterable
             axes = [axes]
+        axes = np.array(axes)  # Ensure axes is a NumPy array for easy indexing
 
         # Iterate through each image
         for i, ax_row in enumerate(axes):
-            ax_img, ax_text = ax_row
-            # Display the image
+            ax_img = ax_row[0]  # Image column is always the first one
             img = images_np[i]
             ax_img.imshow(img)
-            ax_img.axis('off')  # Turn off axis for the image
+            ax_img.axis('off')
             
-            # Set title as class name
+            # Set the title with class names
             ax_img.set_title(f'True: {true_class_names[i]}, PIM: {pim_class_names[i]}\nTask Model: {predicted_class_names[i]}', fontsize=14)
+            
             # Prepare and set the text description for attributes and weights
             identified_attributes = identified_attributes_per_instance[i]
-            description_text = 'Classes Flipped: \n'
+            description_text = f'{choice}: \n'
             for class_name, attributes in identified_attributes.items():
-                # Append attributes and weights to the description text
                 description_text += f'\nAttributes Weights of {class_name}:\n'
                 for attr, weight in zip(attributes['attributes'], attributes['weights']):
                     description_text += f"{attr}: {weight:.2f}\n"
             
-            # Set text box with attribute weights next to the image
-            anchored_text = AnchoredText(description_text, loc="upper left", frameon=False, pad=0.5)
-            ax_text.add_artist(anchored_text)
-            ax_text.axis('off')  # Turn off axis for the text
-            
-        plt.tight_layout()
+            # Splitting text into chunks for each necessary column
+            text_chunks = [description_text[j:j + max_description_length] for j in range(0, len(description_text), max_description_length)]
+            for j, text_chunk in enumerate(text_chunks):
+                anchored_text = AnchoredText(text_chunk, loc="upper left", frameon=False, pad=0.5)
+                ax_row[j + 1].add_artist(anchored_text)  # j+1 since the first column is for the image
+                ax_row[j + 1].axis('off')  # Turn off axis for the text columns
 
+        plt.tight_layout(pad=3, w_pad=0.5, h_pad=0.5)
+
+        plt.subplots_adjust(left=0.5, right=0.95, top=0.95, bottom=0.05, wspace=0.2, hspace=0.4)
         if save_path:
             plt.savefig(save_path, bbox_inches='tight')
         plt.close()
@@ -364,7 +368,8 @@ class PIM_Explanations(nn.Module):
                                                                            task_model_logits, k=3)
         
         self.plot_explanations(images, identified_attributes_per_instance, 
-                               true_class_names, pim_class_names, predicted_class_names, save_path=save_path)
+                               true_class_names, pim_class_names, predicted_class_names, 
+                               save_path=save_path, choice=choice)
         
         return identified_attributes_per_instance
 
@@ -374,7 +379,7 @@ if __name__ == '__main__':
     batch_size = 1
     num_classes = 5
     num_attributes_per_class = [5, 6, 7, 8, 9]
-    aggregator = MaxAggregator(num_classes=num_classes, num_attributes_per_cls=num_attributes_per_class)
+    aggregator = MeanAggregator(num_classes=num_classes, num_attributes_per_cls=num_attributes_per_class)
 
     
     # Create a dummy task model logits
@@ -402,4 +407,4 @@ if __name__ == '__main__':
 
     # Get the explanations
     pim_explanations.get_explanations(failed_images, task_model_logits, pim_logits_dict, 
-                                      true_classes, choice='kld', save_path='explanations.png')
+                                      true_classes, choice='logit_flip', save_path='explanations.png')
