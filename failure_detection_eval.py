@@ -42,6 +42,7 @@ from models.mapping import TaskMapping, MultiHeadedAttentionSimilarity, MultiHea
 from utils_proj import SimpleDINOLoss, compute_accuracy, compute_similarities, CutMix, MyAugMix, find_normalization_parameters, get_score, calc_gen_threshold, calc_accuracy_from_scores
 from models.cluster import ClusterCreater
 from sklearn.metrics import confusion_matrix, matthews_corrcoef
+
 CLIP_LOGIT_SCALE = 100
 
 
@@ -67,171 +68,6 @@ class CIFAR100C(torch.utils.data.Dataset):
             image_to_clip = self.clip_transform(self.np_PIL(image_))
         targets = self.targets[idx]
         return image, targets, image_to_clip
-
-def kl_divergence_pytorch(p, q):
-    """
-    Compute the KL divergence between two probability distributions.
-    """
-    return (p * (p / q).log()).sum(dim=1)
-
-def optimize_attribute_weights(predictions_dict, true_classes, num_attributes_per_class, learning_rate=0.01, num_optimization_steps=50, aggregation_fn=None):
-    """
-    Optimize attribute weights for each top-ranked class per instance such that the true class's logit is maximized.
-    
-    :param predictions_dict: A class specific dictionary of tensors of shape [batch_size, num_attributes] with the attribute logits for each class.
-    :param true_classes: A tensor of shape [batch_size] with the indices of the true classes for each instance.
-    :param num_attributes_per_class: list of number of attributes for each class
-    :param learning_rate: The learning rate for the optimizer.
-    :param num_optimization_steps: The number of steps for the optimization process.
-    :return: A tensor of shape [batch_size, num_classes, num_attributes] with the optimized weights.
-    """
-    
-    batch_size = true_classes.shape[0]
-    # Initialize a dictionary to store optimized weights for each instance
-    optimized_attribute_weights = {class_idx: torch.ones(batch_size, num_attributes_per_class[class_idx]) for class_idx in range(len(num_attributes_per_class))}
-    
-    # Main loop over the batch
-    for i in range(batch_size):
-        
-        # Extract predictions for the current instance
-        instance_predictions = {class_idx: predictions_dict[class_idx][i] for class_idx in range(len(num_attributes_per_class))} # dict of class specific attribute logits for the current instance
-        
-        # Compute aggregated logits by agreegating the attributes for each class using the aggregation function
-        aggregated_logits = aggregation_fn(instance_predictions) # The function should take a dictionary of class specific attribute logits and return a tensor of shape [num_classes]
-
-        # Get the ranking of classes based on logits
-        _, ranked_classes = aggregated_logits.sort(descending=True)
-        
-        # Find index of the true class
-        true_class_idx = (ranked_classes == true_classes[i]).nonzero(as_tuple=True)[0].item()
-
-        # Iterate over each class that ranks higher than the true class
-        for rank, top_class in enumerate(ranked_classes):
-            if rank >= true_class_idx:  # Skip if not ranked above the true class
-                break
-
-            # Initialize weights for optimization for the current top class
-            weights = torch.ones(num_attributes_per_class[top_class], requires_grad=True)
-            
-            # Set up the optimizer for the weights
-            optimizer = torch.optim.Adam([weights], lr=learning_rate)
-
-            # Optimization loop for adjusting weights for the current top class
-            for _ in range(num_optimization_steps):
-                optimizer.zero_grad()
-                
-                # Adjust logits for the top class based on current weights
-                adjusted_predictions = instance_predictions[top_class] * weights
-                # Re-aggregate the logits for the top class
-                adjusted_logit = aggregation_fn({top_class: adjusted_predictions})
-                
-                # Calculate the loss to ensure true class logit is higher than top class logit using leaky relu
-                loss = F.leaky_relu(adjusted_logit - aggregated_logits[true_classes[i]], negative_slope=0.1) 
-
-                # Ensure each attribute weights is between 0 and 1
-                loss_weights = F.relu(weights.min()) + F.relu(1 - weights.max())
-                # # Ensure all the weights of the attributes sum to 1
-                # loss_weights = F.relu(weights.sum() - 1)
-                
-                loss += 0.01 * loss_weights
-
-                # Perform gradient descent
-                loss.backward()
-                optimizer.step()
-
-                # Apply non-negative constraint on weights
-                with torch.no_grad():
-                    weights.clamp_(min=0)
-
-                # Break if the adjusted logit for the top class is less than the true class logit
-                if loss.item() < 0:
-                    break
-
-            # Store the optimized weights for the top class
-            optimized_attribute_weights[top_class][i] = weights.detach()
-
-    return optimized_attribute_weights
-
-def match_probabilities_to_task_model(pim_logits_dict, task_model_logits, num_attributes_per_class, learning_rate=0.01, num_optimization_steps=50, aggregation_fn=None):
-    """
-    Adjust attribute weights for all classes together for each sample such that the attribute-aggregated 
-    probabilities of the PIM match the task model's probabilities.
-    
-    :param pim_logits: A class specific dictionary of tensors of shape [batch_size, num_attributes] with thelogits attribute logits for each class.
-    :param task_model_logits: A tensor of shape [batch_size, num_classes] representing the task model's probabilities.
-    :param num_attributes_per_class: list of number of attributes for each class
-    :param learning_rate: The learning rate for the optimizer.
-    :param num_optimization_steps: The number of steps for the optimization process.
-    :return: A list containing optimized weights for each instance, where each element is a list of tensors corresponding to the optimized weights for each class.
-    """
-
-    # Initialize a dictionary to store optimized weights for each instance
-    optimized_attribute_weights = {class_idx: torch.ones(batch_size, num_attributes_per_class[class_idx]) for class_idx in range(len(num_attributes_per_class))}
-    
-
-    batch_size = task_model_logits.shape[0]
-    num_classes = task_model_logits.shape[1]
-
-    # Main loop over the batch
-    for i in range(batch_size):
-        # Initialize list of parameter tensors to weight all attributes for each class
-        weight_params = [torch.ones(num_attributes_per_class[class_idx], requires_grad=True) for class_idx in range(num_classes)]
-        
-        # Set up the optimizer for all weight parameters together
-        optimizer = torch.optim.Adam(weight_params, lr=learning_rate)
-
-        # Extract predictions for the current instance from PIM
-        instance_predictions = {class_idx: pim_logits_dict[class_idx][i] for class_idx in range(len(num_attributes_per_class))} # dict of class specific attribute logits for the current instance
-
-        # Optimization loop for adjusting weights for all classes together
-        for _ in range(num_optimization_steps):
-            optimizer.zero_grad()
-
-            # Initialize a tensor to store adjusted logits for all classes
-            adjusted_logits = torch.zeros(num_classes)
-
-            # Adjust logits for all classes based on current weights
-            for class_idx in range(num_classes):
-                # Use only the relevant attributes for each class
-                num_attributes = num_attributes_per_class[class_idx]
-                
-                # Adjust logits for the current class based on current weights
-                adjusted_predictions = instance_predictions[class_idx] * weight_params[class_idx]
-                # Re-aggregate the logits for the current class
-                adjusted_logits[class_idx] = aggregation_fn({class_idx: adjusted_predictions})
-
-            adjusted_probs = F.softmax(adjusted_logits, dim=-1).unsqueeze(0)
-            task_model_probs = F.softmax(task_model_logits[i].unsqueeze(0), dim=-1)    
-
-            # Calculate the KL divergence to match the task model's probabilities of this instance
-            loss = kl_divergence_pytorch(task_model_probs, adjusted_probs)
-
-
-            ## Ensure each attribute weights is between 0 and 1
-            loss_weights = 0
-            for weights in weight_params:
-                loss_weights += F.relu(weights.min()) + F.relu(1 - weights.max())
-
-            # # ensure weights sum to 1
-            # for weights in weight_params:
-            #     loss += 0.01 * F.relu(weights.sum() - 1)
-
-            loss += 0.01 * loss_weights
-
-            # Perform gradient descent
-            loss.backward()
-            optimizer.step()
-
-            # Apply non-negative constraint on weights
-            with torch.no_grad():
-                for weights in weight_params:
-                    weights.clamp_(min=0)
-
-        # Detach optimized weights and store them for the current instance
-        optimized_weights_instance = [weights.detach() for weights in weight_params]
-        optimized_attribute_weights[i] = optimized_weights_instance
-
-    return optimized_attribute_weights
 
 @torch.no_grad()
 def clip_attribute_classifier(data_loader, class_attributes_embeddings, class_attribute_prompt_list,
@@ -411,6 +247,7 @@ def evaluate_pim(data_loader, class_attributes_embeddings, class_attribute_promp
     
     labels_list, pim_logits_list, pim_probs_list = [], [], []
     task_model_logits_list, task_model_probs_list = [], []
+    pim_attribute_logits_list = []
 
     for i, (images_batch, labels, images_clip_batch) in enumerate(pbar):
         
@@ -433,6 +270,8 @@ def evaluate_pim(data_loader, class_attributes_embeddings, class_attribute_promp
             num_attributes = len(class_prompts)
             pim_similarities_dict[i] = pim_similarities[:, start:start+num_attributes]
             start += num_attributes
+        
+        pim_attribute_logits_list.append(pim_similarities_dict)
         
         # Compute the pim logits using the multiheaded attention
         pim_logits = aggregator(pim_similarities_dict)
@@ -463,11 +302,48 @@ def evaluate_pim(data_loader, class_attributes_embeddings, class_attribute_promp
     task_model_probs_list = torch.cat(task_model_probs_list, dim=0)
     
 
-    print(labels_list.shape, pim_logits_list.shape, pim_probs_list.shape, task_model_logits_list.shape, task_model_probs_list.shape)
     pim_acc = compute_accuracy(pim_probs_list, labels_list)
     task_model_acc = compute_accuracy(task_model_probs_list, labels_list)
     print(f'PIM Accuracy on {args.dataset_name} = {pim_acc} and Task Model Accuracy = {task_model_acc}')
-    return pim_acc, task_model_acc, labels_list, pim_logits_list, pim_probs_list, task_model_logits_list, task_model_probs_list
+    return pim_acc, task_model_acc, labels_list, pim_logits_list, pim_probs_list, task_model_logits_list, task_model_probs_list, pim_attribute_logits_list
+
+def load_data(args, train_transform, test_transform, clip_transform):
+
+    # This will be in train domain
+    train_dataset, val_dataset, test_dataset, failure_dataset, class_names = get_dataset(args.dataset_name, train_transform, test_transform, 
+                                                            data_dir=args.data_dir, clip_transform=clip_transform, 
+                                                            img_size=args.img_size, domain_name=args.domain_name, 
+                                                            return_failure_set=True)
+ 
+    if args.dataset_name in ['cifar100']:
+        # Merge falure dataset with train dataset
+        train_dataset = ConcatDataset([train_dataset, val_dataset])
+
+    print(f"Using {args.dataset_name} dataset")
+
+    train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True, num_workers=8, pin_memory=True)
+    val_loader = torch.utils.data.DataLoader(val_dataset, batch_size=args.batch_size, shuffle=False, num_workers=8, pin_memory=True)
+    
+    test_loader = torch.utils.data.DataLoader(test_dataset, batch_size=args.batch_size, shuffle=False, num_workers=8, pin_memory=True)
+    if args.eval_dataset == 'cifar100c':
+        transform_test = transforms.Compose([transforms.ToTensor(),transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010))])
+        testset = CIFAR100C(corruption=args.cifar100c_corruption, transform=transform_test,clip_transform=clip_transform, level=args.severity)
+        test_loader = torch.utils.data.DataLoader(testset, batch_size=args.batch_size, shuffle=False, num_workers=8, pin_memory=True)
+    elif args.eval_dataset == 'pacs':
+        _, val_dataset, _, failure_dataset, class_names = get_dataset(args.dataset_name, train_transform, test_transform, 
+                                                            data_dir=args.data_dir, clip_transform=clip_transform, 
+                                                            img_size=args.img_size, domain_name='sketch', 
+                                                            return_failure_set=True,use_real=False)
+        #concat val and failure
+        val_dataset = ConcatDataset([val_dataset, failure_dataset])
+        val_loader = torch.utils.data.DataLoader(val_dataset, batch_size=args.batch_size, shuffle=False, num_workers=8, pin_memory=True)
+        test_loader = torch.utils.data.DataLoader(test_dataset, batch_size=args.batch_size, shuffle=False, num_workers=8, pin_memory=True)
+
+    print(f"Number of validation examples: {len(val_loader.dataset)}")
+    print(f"Number of test examples: {len(test_loader.dataset)}")
+
+    return train_loader, val_loader, test_loader, class_names
+
 
 def main(args):
 
@@ -492,40 +368,7 @@ def main(args):
     
     ########################### Load the dataset ############################
     
-    # This will be in train domain
-    train_dataset, val_dataset, test_dataset, failure_dataset, class_names = get_dataset(args.dataset_name, train_transform, test_transform, 
-                                                            data_dir=args.data_dir, clip_transform=clip_transform, 
-                                                            img_size=args.img_size, domain_name=args.domain_name, 
-                                                            return_failure_set=True)
- 
-    if args.dataset_name in ['cifar100']:
-        # Merge falure dataset with train dataset
-        train_dataset = ConcatDataset([train_dataset, val_dataset])
-
-    print(f"Using {args.dataset_name} dataset")
-
-    train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True, num_workers=8, pin_memory=True)
-    val_loader = torch.utils.data.DataLoader(val_dataset, batch_size=args.batch_size, shuffle=False, num_workers=8, pin_memory=True)
-    
-    if args.eval_dataset == 'cifar100':     
-        test_loader = torch.utils.data.DataLoader(test_dataset, batch_size=args.batch_size, shuffle=False, num_workers=8, pin_memory=True)
-    elif args.eval_dataset == 'cifar100c':
-        transform_test = transforms.Compose([transforms.ToTensor(),transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010))])
-        testset = CIFAR100C(corruption=args.cifar100c_corruption, transform=transform_test,clip_transform=clip_transform, level=args.severity)
-        test_loader = torch.utils.data.DataLoader(testset, batch_size=args.batch_size, shuffle=False, num_workers=8, pin_memory=True)
-    elif args.eval_dataset == 'pacs':
-        _, val_dataset, _, failure_dataset, class_names = get_dataset(args.dataset_name, train_transform, test_transform, 
-                                                            data_dir=args.data_dir, clip_transform=clip_transform, 
-                                                            img_size=args.img_size, domain_name='sketch', 
-                                                            return_failure_set=True,use_real=False)
-        #concat val and failure
-        val_dataset = ConcatDataset([val_dataset, failure_dataset])
-        val_loader = torch.utils.data.DataLoader(val_dataset, batch_size=args.batch_size, shuffle=False, num_workers=8, pin_memory=True)
-        test_loader = torch.utils.data.DataLoader(test_dataset, batch_size=args.batch_size, shuffle=False, num_workers=8, pin_memory=True)
-
-    print(f"Number of validation examples: {len(val_loader.dataset)}")
-    print(f"Number of test examples: {len(test_loader.dataset)}")
-
+    train_loader, val_loader, test_loader, class_names = load_data(args, train_transform, test_transform, clip_transform)
     
     if args.method == 'baseline':
         classifier.to(device)
@@ -614,29 +457,25 @@ def main(args):
     
     elif args.method == 'pim':
         class_attributes_embeddings_prompts = torch.load(args.attributes_embeddings_path)
-        class_attribute_prompts = class_attributes_embeddings_prompts["class_attribute_prompts"]
+        # Get the class attribute prompts and their embeddings
+        class_attribute_prompts = class_attributes_embeddings_prompts["class_attribute_prompts"] # List of list of prompts
         class_attributes_embeddings = class_attributes_embeddings_prompts["class_attributes_embeddings"]
 
         assert len(class_attribute_prompts) == args.num_classes, "Number of classes does not match the number of class attributes"
 
         num_attributes_per_cls = [len(attributes) for attributes in class_attribute_prompts]
-
+        # Extract the attribute names from the prompts
         attribute_names_per_class = {}
-        # Make the attribute names from the prompts
         for i in range(len(class_attribute_prompts)):
             attribute_names_per_class[class_names[i]] = [prompt.replace(f"This is a photo of {class_names[i]} with ", "") for prompt in class_attribute_prompts[i]]
         
-        print(attribute_names_per_class)
-        assert False
         
         if args.attribute_aggregation == "mha":
             aggregator = MultiHeadedAttentionSimilarity(args.num_classes, num_attributes_per_cls=num_attributes_per_cls, num_heads=1, out_dim=1)
         elif args.attribute_aggregation == "mean":
             aggregator = MeanAggregator(num_classes=args.num_classes, num_attributes_per_cls=num_attributes_per_cls)
-
         elif args.attribute_aggregation == "max":
             aggregator = MaxAggregator(num_classes=args.num_classes, num_attributes_per_cls=num_attributes_per_cls)
-
         else:
             raise Exception("Invalid attribute aggregation method")
 
@@ -668,7 +507,7 @@ def main(args):
         outs = evaluate_pim(val_loader, class_attributes_embeddings, class_attribute_prompts,
                             clip_model, classifier, pim_model, aggregator)
         
-        val_pim_acc, val_task_model_acc, val_labels_list, val_pim_logits_list, val_pim_probs_list, val_task_logits_list, val_task_probs_list = outs
+        val_pim_acc, val_task_model_acc, val_labels_list, val_pim_logits_list, val_pim_probs_list, val_task_logits_list, val_task_probs_list,_ = outs
         val_scores = get_score(args.score, val_task_logits_list, val_pim_logits_list)
 
         threshold = calc_gen_threshold(val_scores, val_task_logits_list, val_labels_list, name='pim')
@@ -680,23 +519,9 @@ def main(args):
         outs = evaluate_pim(test_loader, class_attributes_embeddings, class_attribute_prompts,
                             clip_model, classifier, pim_model, aggregator)
         
-        test_pim_acc, test_task_model_acc, test_labels_list, test_pim_logits_list, test_pim_probs_list, test_task_logits_list, test_task_probs_list = outs
+        test_pim_acc, test_task_model_acc, test_labels_list, test_pim_logits_list, test_pim_probs_list, test_task_logits_list, test_task_probs_list, test_pim_attribute_logit_dict = outs
         test_scores = get_score(args.score, test_task_logits_list, test_pim_logits_list)
         estimated_test_acc, test_estimated_success_failure_idx = calc_accuracy_from_scores(test_scores, threshold)
-
-
-        if plot_explanations:
-            # Class names  as key and list of attribute names as value
-            attribute_names_per_class = {class_names[i]: class_attribute_prompts[i] for i in range(len(class_names))}
-            num_attributes_per_cls = [len(attributes) for attributes in class_attribute_prompts]
-            # Create an instance of the PIM_Explanations class
-            pim_explanations = PIM_Explanations(attribute_names_per_class, num_attributes_per_class, aggregation_fn=aggregator)
-
-            # Get the explanations
-            pim_explanations.get_explanations(failed_images, task_model_logits, pim_logits_dict, 
-                                            true_classes, choice='logit_flip', save_path='explanations.png')
-
-
 
         print(f'Score = {args.score}')
         print(f'True Validation Accuracy = {val_task_model_acc}, Estimated Validation Accuracy = {estimated_val_acc}, True Test Accuracy = {test_task_model_acc}, Estimated Test Accuracy = {estimated_test_acc}')
@@ -877,6 +702,43 @@ Example usage:
 
 python failure_detection_eval.py \
 --data_dir './data' \
+--dataset_name cifar100 \
+--num_classes 100 \
+--batch_size 512 \
+--img_size 32 \
+--seed 42 \
+--task_layer_name model.layer1 \
+--cutmix_alpha 1.0 \
+--warmup_epochs 10 \
+--attributes_path clip-dissect/cifar100_core_concepts.json \
+--attributes_embeddings_path data/cifar100/cifar100_attributes_CLIP_ViT-B_32_text_embeddings.pth \
+--classifier_name resnet18 \
+--classifier_checkpoint_path logs/cifar100/resnet18/classifier/checkpoint_99.pth \
+--use_imagenet_pretrained \
+--attribute_aggregation max \
+--clip_model_name ViT-B/32 \
+--prompt_path data/cifar100/cifar100_CLIP_ViT-B_32_text_embeddings.pth \
+--num_epochs 200 \
+--optimizer adamw \
+--learning_rate 1e-3 \
+--aggregator_learning_rate 1e-3 \
+--scheduler MultiStepLR \
+--val_freq 1 \
+--save_dir ./logs \
+--prefix '' \
+--vlm_dim 512 \
+--num_gpus 1 \
+--num_nodes 1 \
+--augmix_prob 0.2 \
+--cutmix_prob 0.2 \
+--resume_checkpoint_path logs/cifar100/resnet18/mapper/_agg_max_bs_512_lr_0.001_augmix_prob_0.2_cutmix_prob_0.2_scheduler_warmup_epoch_10_layer_model.layer1/pim_weights_best.pth \
+--method pim \
+--score cross_entropy \
+# --eval_dataset cifar100c \
+# --filename cifar100c.log
+
+python failure_detection_eval.py \
+--data_dir './data' \
 --dataset_name Waterbirds \
 --num_classes 2 \
 --batch_size 512 \
@@ -885,7 +747,6 @@ python failure_detection_eval.py \
 --task_layer_name model.layer1 \
 --cutmix_alpha 1.0 \
 --warmup_epochs 0 \
---discrepancy_weight 1.0 \
 --attributes_path clip-dissect/Waterbirds_core_concepts.json \
 --attributes_embeddings_path data/Waterbirds/Waterbirds_attributes_CLIP_ViT-B_32_text_embeddings.pth \
 --classifier_name resnet18 \
@@ -907,7 +768,7 @@ python failure_detection_eval.py \
 --num_nodes 1 \
 --augmix_prob 0.2 \
 --cutmix_prob 0.2 \
---resume_checkpoint_path logs/Waterbirds/resnet18/mapper/_agg_mean_bs_512_lr_0.001_augmix_prob_0.2_cutmix_prob_0.2_scheduler_warmup_epoch_0_layer_model.layer2/pim_weights_final.pth \
+--resume_checkpoint_path logs/Waterbirds/resnet18/mapper/_agg_mean_bs_512_lr_0.001_augmix_prob_0.2_cutmix_prob_0.2_scheduler_warmup_epoch_0_layer_model.layer1/pim_weights_final.pth \
 --method pim \
 --score cross_entropy \
 # --eval_dataset cifar100c \
