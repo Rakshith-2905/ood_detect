@@ -51,13 +51,16 @@ def get_attributes(class_name, previous_attributes, PROMPT):
 
 def main():
     
-    data_name = 'pacs_core'
+    data_name = 'imagenet_core'
     # Read the prompt template from file json
     with open('prompt_templates.json', 'r') as f:
         prompt_template = json.load(f)[data_name]
 
-    # Load cifar-100 classes
-    with open('pacs_labels.json', 'r') as f:
+    # # Load cifar-100 classes
+    # with open('pacs_labels.json', 'r') as f:
+    #     classes = json.load(f)
+
+    with open('imagenet_labels.json', 'r') as f:
         classes = json.load(f)
     # print(classes)
     # # Load the classes from the text file

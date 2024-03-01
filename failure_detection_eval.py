@@ -498,8 +498,6 @@ def main(args):
                                                             img_size=args.img_size, domain_name=args.domain_name, 
                                                             return_failure_set=True)
  
-    
-
     if args.dataset_name in ['cifar100']:
         # Merge falure dataset with train dataset
         train_dataset = ConcatDataset([train_dataset, val_dataset])
@@ -613,6 +611,7 @@ def main(args):
         with open(results_file, 'a') as f:
             json.dump(results, f)
             f.write('\n')
+    
     elif args.method == 'pim':
         class_attributes_embeddings_prompts = torch.load(args.attributes_embeddings_path)
         class_attribute_prompts = class_attributes_embeddings_prompts["class_attribute_prompts"]
@@ -621,7 +620,14 @@ def main(args):
         assert len(class_attribute_prompts) == args.num_classes, "Number of classes does not match the number of class attributes"
 
         num_attributes_per_cls = [len(attributes) for attributes in class_attribute_prompts]
+
+        attribute_names_per_class = {}
+        # Make the attribute names from the prompts
+        for i in range(len(class_attribute_prompts)):
+            attribute_names_per_class[class_names[i]] = [prompt.replace(f"This is a photo of {class_names[i]} with ", "") for prompt in class_attribute_prompts[i]]
         
+        print(attribute_names_per_class)
+        assert False
         
         if args.attribute_aggregation == "mha":
             aggregator = MultiHeadedAttentionSimilarity(args.num_classes, num_attributes_per_cls=num_attributes_per_cls, num_heads=1, out_dim=1)
@@ -677,6 +683,20 @@ def main(args):
         test_pim_acc, test_task_model_acc, test_labels_list, test_pim_logits_list, test_pim_probs_list, test_task_logits_list, test_task_probs_list = outs
         test_scores = get_score(args.score, test_task_logits_list, test_pim_logits_list)
         estimated_test_acc, test_estimated_success_failure_idx = calc_accuracy_from_scores(test_scores, threshold)
+
+
+        if plot_explanations:
+            # Class names  as key and list of attribute names as value
+            attribute_names_per_class = {class_names[i]: class_attribute_prompts[i] for i in range(len(class_names))}
+            num_attributes_per_cls = [len(attributes) for attributes in class_attribute_prompts]
+            # Create an instance of the PIM_Explanations class
+            pim_explanations = PIM_Explanations(attribute_names_per_class, num_attributes_per_class, aggregation_fn=aggregator)
+
+            # Get the explanations
+            pim_explanations.get_explanations(failed_images, task_model_logits, pim_logits_dict, 
+                                            true_classes, choice='logit_flip', save_path='explanations.png')
+
+
 
         print(f'Score = {args.score}')
         print(f'True Validation Accuracy = {val_task_model_acc}, Estimated Validation Accuracy = {estimated_val_acc}, True Test Accuracy = {test_task_model_acc}, Estimated Test Accuracy = {estimated_test_acc}')
@@ -862,7 +882,7 @@ python failure_detection_eval.py \
 --batch_size 512 \
 --img_size 32 \
 --seed 42 \
---task_layer_name model.layer2 \
+--task_layer_name model.layer1 \
 --cutmix_alpha 1.0 \
 --warmup_epochs 0 \
 --discrepancy_weight 1.0 \
