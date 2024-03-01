@@ -553,9 +553,9 @@ python train_mapping_network.py \
 --batch_size 512 \
 --img_size 224 \
 --seed 42 \
---task_layer_name model.layer4 \
+--task_layer_name model.layer1 \
 --cutmix_alpha 1.0 \
---warmup_epochs 10 \
+--warmup_epochs 0 \
 --task_failure_discrepancy_weight 1.0 \
 --task_success_discrepancy_weight 1.0 \
 --attributes_path clip-dissect/Waterbirds_core_concepts.json \
@@ -563,7 +563,7 @@ python train_mapping_network.py \
 --classifier_name resnet18 \
 --classifier_checkpoint_path logs/Waterbirds/resnet18/classifier/checkpoint_99.pth \
 --use_imagenet_pretrained \
---attribute_aggregation mean \
+--attribute_aggregation max \
 --clip_model_name ViT-B/32 \
 --prompt_path data/Waterbirds/Waterbirds_CLIP_ViT-B_32_text_embeddings.pth \
 --num_epochs 200 \
@@ -590,7 +590,7 @@ python train_mapping_network.py \
 --batch_size 512 \
 --img_size 32 \
 --seed 42 \
---task_layer_name model.layer2 \
+--task_layer_name model.layer1 \
 --cutmix_alpha 1.0 \
 --warmup_epochs 10 \
 --task_failure_discrepancy_weight 1.0 \
