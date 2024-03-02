@@ -266,13 +266,15 @@ def main(args):
     ########################### Create the model ############################
     clip_model, clip_transform = clip.load(args.clip_model_name, device=args.device)
     clip_model.eval()    
+    print (f"args.classifier_name: {args.classifier_name}")
 
     classifier, train_transform, test_transform = build_classifier(args.classifier_name, num_classes=args.num_classes, 
                                                                     pretrained=args.use_imagenet_pretrained, 
                                                                     checkpoint_path=args.classifier_checkpoint_path)
     mapping_name = args.classifier_name
-    if args.dataset =="imagenet":
+    if args.dataset_name =="imagenet":
         mapping_name= f"{mapping_name}_v2"
+    print(f"mapping_name: {mapping_name}")
     mapper,_, _ = build_classifier(mapping_name, num_classes=args.num_classes, pretrained=True, checkpoint_path=None)
     
     cutmix = CutMix(args.cutmix_alpha, args.num_classes)
@@ -429,7 +431,7 @@ def main(args):
         
         if epoch % args.val_freq == 0:
             val_performance_dict = validate( 
-                test_loader, class_attributes_embeddings, class_attribute_prompts, 
+                val_loader, class_attributes_embeddings, class_attribute_prompts, 
                                              clip_model, classifier, pim_model, aggregator, optimizer, epoch)
 
         if scheduler is not None:
@@ -458,7 +460,8 @@ def main(args):
         if epoch % 5 == 0:
             state.update(epoch=epoch)
             fabric.save(os.path.join(args.save_dir, f"pim_weights_{epoch+1}.pth"), state)
-
+    
+    state.update(epoch=epoch)
     fabric.save(os.path.join(args.save_dir, "pim_weights_final.pth"), state)
     fabric.print(f"Finished training for {args.num_epochs} epochs")
 
@@ -561,7 +564,7 @@ if __name__ == "__main__":
 Example usage:
 
 python train_mapping_network.py \
---data_dir './data' \
+--data_dir '/p/lustre3/thopalli/subpopdata' \
 --dataset_name Waterbirds \
 --num_classes 2 \
 --batch_size 512 \
@@ -570,14 +573,14 @@ python train_mapping_network.py \
 --task_layer_name model.layer1 \
 --cutmix_alpha 1.0 \
 --warmup_epochs 0 \
---task_failure_discrepancy_weight 1.0 \
---task_success_discrepancy_weight 1.0 \
+--task_failure_discrepancy_weight 2.0 \
+--task_success_discrepancy_weight 1.5 \
 --attributes_path clip-dissect/Waterbirds_core_concepts.json \
 --attributes_embeddings_path data/Waterbirds/Waterbirds_attributes_CLIP_ViT-B_32_text_embeddings.pth \
 --classifier_name resnet18 \
 --classifier_checkpoint_path logs/Waterbirds/resnet18/classifier/checkpoint_99.pth \
 --use_imagenet_pretrained \
---attribute_aggregation max \
+--attribute_aggregation mean \
 --clip_model_name ViT-B/32 \
 --prompt_path data/Waterbirds/Waterbirds_CLIP_ViT-B_32_text_embeddings.pth \
 --num_epochs 200 \
@@ -589,7 +592,7 @@ python train_mapping_network.py \
 --save_dir ./logs \
 --prefix '' \
 --vlm_dim 512 \
---num_gpus 1 \
+--num_gpus 2 \
 --num_nodes 1 \
 --augmix_prob 0.2 \
 --cutmix_prob 0.2 
@@ -752,8 +755,6 @@ python train_mapping_network.py \
 --cutmix_prob 0.2 
 
 
-<<<<<<< HEAD
-=======
 '''
 
 
@@ -834,6 +835,5 @@ python train_mapping_network.py \
 --augmix_prob 0.2 \
 --cutmix_prob 0.2 
 
->>>>>>> 1c65f8d4b53cffe1644018ca4dca0af5126ca76d
 
 '''

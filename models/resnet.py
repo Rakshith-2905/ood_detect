@@ -168,7 +168,7 @@ class CustomResNet(nn.Module):
             'resnet50': resnet50,
             'resnet101': resnet101,
             'resnet152': resnet152,
-            'resnet50_v2':resnet50
+            'resnet50_v2':resnet50,
         }
 
         self.train_transform = transforms.Compose([
@@ -197,7 +197,7 @@ class CustomResNet(nn.Module):
             self.model = resnets[model_name](pretrained=use_pretrained)
         else:
             if 'resnet50' in model_name:
-                from torchvision.models import resnet50, ResNet50_Weights
+                from torchvision.models import ResNet50_Weights
                 self.model = resnets[model_name](weights=ResNet50_Weights.IMAGENET1K_V2)
             else:
                 raise NotImplementedError(f"{model_name} is not supported")
