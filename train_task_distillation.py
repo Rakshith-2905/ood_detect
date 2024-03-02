@@ -766,7 +766,7 @@ def build_classifier(classifier_name, num_classes, pretrained=False, checkpoint_
         classifier = CustomClassifier(classifier_name, use_pretrained=pretrained)
     elif classifier_name in ['resnet50_adv_l2_0.1']:
         classifier = CustomFeatureModel(classifier_name, use_pretrained=pretrained)
-    elif classifier_name in ['resnet18', 'resnet50']:
+    elif classifier_name in ['resnet18', 'resnet50','resnet50_v2']:
         classifier = CustomResNet(classifier_name, num_classes=num_classes, use_pretrained=pretrained)
     elif classifier_name == 'SimpleCNN':
         classifier = SimpleCNN(num_classes=num_classes)

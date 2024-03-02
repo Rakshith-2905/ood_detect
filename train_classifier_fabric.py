@@ -1,8 +1,17 @@
+try:
+    del os.environ['OMP_PLACES']
+    del os.environ['OMP_PROC_BIND']
+except:
+    pass
+import sys
 import torch
 import torch.nn as nn
 import torch.optim as optim
 import torchvision.transforms as transforms
 from torchvision.models import resnet18, resnet34, resnet50, resnet101, resnet152
+import lightning as L
+from lightning.fabric import Fabric, seed_everything
+from lightning.fabric.loggers import TensorBoardLogger, CSVLogger
 
 import numpy as np
 import argparse
@@ -20,6 +29,21 @@ from data_utils.pacs_dataset import get_pacs_dataloader
 
 from train_task_distillation import get_dataset, build_classifier
 from data_utils import subpop_bench
+def get_save_dir(args):
+    if args.dataset_name in ['domainnet', 'pacs']:
+        save_dir = f"logs_fabric/{args.dataset_name}-{args.domain}/{args.classifier_model}/classifier"
+    elif args.dataset_name in subpop_bench.DATASETS:   
+        save_dir = f"logs/{args.dataset_name}/failure_estimation/{args.domain}/{args.classifier_model}/classifier"
+    else:
+        save_dir = f"logs/{args.dataset_name}/{args.classifier_model}/classifier"
+    if not os.path.exists(save_dir):
+        os.makedirs(save_dir, exist_ok=True)
+    os.makedirs(os.path.join(save_dir, 'lightning_logs'), exist_ok=True)
+    return save_dir
+
+
+
+
 
 def plot_images(loader, title, n_rows=2, n_cols=5, mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]):
     """
@@ -68,12 +92,13 @@ def train_one_epoch(train_loader, model, criterion, optimizer, device, epoch):
         else:
             inputs, labels = data[0], data[1]
 
-        inputs, labels = inputs.to(device), labels.to(device)
+        inputs = fabric.to_device(inputs)
+        labels = fabric.to_device(labels)
         
         optimizer.zero_grad()
         outputs = model(inputs)
         loss = criterion(outputs, labels)
-        loss.backward()
+        fabric.backward(loss)
         optimizer.step()
 
         batch_loss = loss.item() * inputs.size(0)
@@ -87,6 +112,7 @@ def train_one_epoch(train_loader, model, criterion, optimizer, device, epoch):
 
     return total_loss/total_samples, total_correct/total_samples
 
+@torch.no_grad()
 def validate(val_loader, model, criterion, device, epoch):
     model.eval()
     total_loss, total_correct, total_samples = 0, 0, len(val_loader.dataset)
@@ -100,7 +126,7 @@ def validate(val_loader, model, criterion, device, epoch):
             else:
                 inputs, labels = data[0], data[1]
 
-            inputs, labels = inputs.to(device), labels.to(device)
+            inputs, labels = fabric.to_device(inputs), fabric.to_device(labels)
             outputs = model(inputs)
             loss = criterion(outputs, labels)
 
@@ -145,14 +171,14 @@ def get_dataloaders(dataset_name, domain_name=None,
             domain_idx = None
         loaders, class_names = subpop_bench.get_dataloader(dataset_name, data_dir, hparams, 
                                                            train_attr='yes', sample_by_attributes=domain_idx)
-    # elif dataset_name == 'CelebA':
-    #     class_attr = 'Young' # attribute for binary classification
-    #     imbalance_attr = ['Male']
-    #     imbalance_percent = {1: [20], 0:[80]} # 1 = Young, 0 = Not Young; 20% of the Young data will be Male
-    #     ignore_attrs = []  # Example: ignore samples that are 'Bald' or 'Wearing_Earrings'
+    elif dataset_name == 'CelebA':
+        class_attr = 'Young' # attribute for binary classification
+        imbalance_attr = ['Male']
+        imbalance_percent = {1: [20], 0:[80]} # 1 = Young, 0 = Not Young; 20% of the Young data will be Male
+        ignore_attrs = []  # Example: ignore samples that are 'Bald' or 'Wearing_Earrings'
 
-    #     loaders, class_names = get_celebA_dataloader(batch_size, class_attr, imbalance_attr, imbalance_percent, 
-    #                                                  ignore_attrs, img_size=image_size, mask=False, mask_region=None)
+        loaders, class_names = get_celebA_dataloader(batch_size, class_attr, imbalance_attr, imbalance_percent, 
+                                                     ignore_attrs, img_size=image_size, mask=False, mask_region=None)
     elif dataset_name == 'cifar10-limited':
         loaders, class_names = get_CIFAR10_dataloader(batch_size=batch_size, data_dir=data_dir, 
                                                       subsample_trainset=True)
@@ -207,17 +233,18 @@ def main(args):
     print(f"Number of classes: {len(class_names)}")
 
 
+    train_loader, val_loader, test_loader = fabric.setup_dataloaders(train_loader, val_loader, test_loader)
     model, _, _ = build_classifier(args.classifier_model, len(class_names), pretrained=args.use_pretrained)
-    model.to(device)
+    fabric.to_device(model)
 
     print(f"Classifier model: {args.classifier_model}")
     print(f"Using pretrained weights: {args.use_pretrained}")
 
     print(model)
-    # Dataparallel for multi-GPU training
-    if torch.cuda.device_count() > 1:
-        print(f"Using {torch.cuda.device_count()} GPUs")
-        model = nn.DataParallel(model)    
+    # # Dataparallel for multi-GPU training
+    # if torch.cuda.device_count() > 1:
+    #     print(f"Using {torch.cuda.device_count()} GPUs")
+    #     model = nn.DataParallel(model)    
     
     # Loss function and optimizer
     criterion = nn.CrossEntropyLoss()
@@ -235,17 +262,23 @@ def main(args):
         scheduler = None
     
     # Make directory for saving results
-    if args.dataset_name in ['domainnet', 'pacs']:
-        args.save_dir = f"logs/{args.dataset_name}-{args.domain}/{args.classifier_model}/classifier"
-    elif args.dataset_name in subpop_bench.DATASETS:   
-        args.save_dir = f"logs/{args.dataset_name}/failure_estimation/{args.domain}/{args.classifier_model}/classifier"
-    else:
-        args.save_dir = f"logs/{args.dataset_name}/{args.classifier_model}/classifier"
-    if not os.path.exists(args.save_dir):
-        os.makedirs(args.save_dir, exist_ok=True)
+ 
+    
+    start_epoch = 0
 
-    plot_images(train_loader, title="Training Image")
-    plot_images(val_loader, title="Validation Image")
+    # plot_images(train_loader, title="Training Image")
+    # plot_images(val_loader, title="Validation Image")
+    state = {"classifier":model,
+                "optimizer":optimizer,
+                "scheduler":scheduler,
+                "criterion":criterion,
+                "epoch":start_epoch,
+                "best_val_accuracy":0.0,
+                "train_losses":[],
+                "train_accuracies":[],
+                "val_losses":[],
+                "val_accuracies":[]
+           }
 
     # Save arguments if not resuming
     if not args.resume:
@@ -261,24 +294,26 @@ def main(args):
 
     else:
         # Load checkpoint
-        checkpoint = torch.load(args.checkpoint_path)
-        # Load model state
-        model.load_state_dict(checkpoint['model_state_dict'])
-        # Load epoch
-        start_epoch = checkpoint['epoch'] + 1
-        best_val_accuracy = checkpoint['best_val_accuracy']
-        # Load optimizer state
-        optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
-        scheduler.load_state_dict(checkpoint['scheduler_state_dict'])
+        state = fabric.load(args.checkpoint_path)
+        start_epoch = state["epoch"]
+        model = state["classifier"]
+        optimizer = state["optimizer"]
+        scheduler = state["scheduler"]
+
+        best_val_accuracy = state['best_val_accuracy']
+
         # Load training and validation metrics
-        train_losses = checkpoint['train_losses']
-        train_accuracies = checkpoint['train_accuracies']
-        val_losses = checkpoint['val_losses']
-        val_accuracies = checkpoint['val_accuracies']
+        train_losses = state['train_losses']
+        train_accuracies = state['train_accuracies']
+        val_losses = state['val_losses']
+        val_accuracies = state['val_accuracies']
 
         print(f"Resuming training from epoch {start_epoch}")
+    if start_epoch >= args.num_epochs:
+        fabric.print(f"Already finished training for {args.num_epochs} epochs. Exiting...")
+        return
+    best_val_loss = float("inf")
 
-    
     for epoch in range(start_epoch, args.num_epochs):
         train_loss, train_acc = train_one_epoch(train_loader, model, criterion, optimizer, device, epoch)
         val_loss, val_acc = validate(test_loader, model, criterion, device, epoch)
@@ -292,58 +327,45 @@ def main(args):
         val_accuracies.append(val_acc)
         
         print(f"Epoch {epoch+1}, Train Loss: {train_loss:.4f}, Train Accuracy: {train_acc:.4f}, Val Loss: {val_loss:.4f}, Val Accuracy: {val_acc:.4f}")
-
+        train_loss_dict = {"Train Loss": train_loss, "Train Accuracy": train_acc}
+        val_loss_dict = {"Val Loss": val_loss, "Val Accuracy": val_acc}
+        losses_dict = {**train_loss_dict,**val_loss_dict}
+        fabric.log_dict(losses_dict,step=epoch)
         # Update and save training plots
-        plt.figure(figsize=(12, 5))
-        plt.subplot(1, 2, 1)
-        plt.plot(train_losses, '-o', label='Training')
-        plt.plot(val_losses, '-o', label='Validation')
-        plt.title('Loss')
-        plt.legend()
-        plt.subplot(1, 2, 2)
-        plt.plot(train_accuracies, '-o', label='Training')
-        plt.plot(val_accuracies, '-o', label='Validation')
-        plt.title('Accuracy')
-        plt.legend()
-        plt.savefig(os.path.join(args.save_dir, 'training_validation_plots.png'))
-        plt.close()
+        # plt.figure(figsize=(12, 5))
+        # plt.subplot(1, 2, 1)
+        # plt.plot(train_losses, '-o', label='Training')
+        # plt.plot(val_losses, '-o', label='Validation')
+        # plt.title('Loss')
+        # plt.legend()
+        # plt.subplot(1, 2, 2)
+        # plt.plot(train_accuracies, '-o', label='Training')
+        # plt.plot(val_accuracies, '-o', label='Validation')
+        # plt.title('Accuracy')
+        # plt.legend()
+        # plt.savefig(os.path.join(args.save_dir, 'training_validation_plots.png'))
+        # plt.close()
 
         # if data parallel, save the model without the module
-        if torch.cuda.device_count() > 1:
-            model_state_dict = model.module.state_dict()
-        else:
-            model_state_dict = model.state_dict()
+        # if torch.cuda.device_count() > 1:
+        #     model_state_dict = model.module.state_dict()
+        # else:
+        #     model_state_dict = model.state_dict()
 
         # Save best model based on validation accuracy
+
         if val_acc > best_val_accuracy:
             best_val_accuracy = val_acc
+            state.update(epoch=epoch)
+            fabric.save(os.path.join(args.save_dir, f"best_checkpoint.pth"), state)
                 
-            torch.save({
-                'epoch': epoch,
-                'model_state_dict': model_state_dict,
-                'best_val_accuracy': best_val_accuracy,
-                'optimizer_state_dict': optimizer.state_dict(),
-                'scheduler_state_dict': scheduler.state_dict(),
-            }, os.path.join(args.save_dir, f"best_checkpoint.pth"))
-
+            
         if epoch % 10 == 0:
+            state.update(epoch=epoch)
+            fabric.save(os.path.join(args.save_dir, f"checkpoint_{epoch+1}.pth"), state)
 
-            torch.save({
-                'epoch': epoch,
-                'model_state_dict': model_state_dict,
-                'best_val_accuracy': best_val_accuracy,
-                'optimizer_state_dict': optimizer.state_dict(),
-                'scheduler_state_dict': scheduler.state_dict(),
-                'train_losses': train_losses,
-                'train_accuracies': train_accuracies,
-                'val_losses': val_losses,
-                'val_accuracies': val_accuracies,
-            }, os.path.join(args.save_dir, f"checkpoint_{epoch}.pth"))
-
-    torch.save({
-            'epoch': epoch,
-            'model_state_dict': model_state_dict,
-        }, os.path.join(args.save_dir, f"checkpoint_{epoch}.pth"))
+    fabric.save(os.path.join(args.save_dir,f"checkpoint_{epoch+1}.pth"), state)
+    fabric.print(f"Finished training for {args.num_epochs} epochs") 
 
 
 if __name__ == "__main__":
@@ -362,28 +384,52 @@ if __name__ == "__main__":
     parser.add_argument('--use_pretrained', action='store_true', help='Use pretrained weights for ResNet')
     parser.add_argument('--resume', action='store_true', help='Resume training from checkpoint')
     parser.add_argument('--checkpoint_path', type=str, help='Path to checkpoint to resume training from')
+    parser.add_argument('--num_gpus', type=int, default=2, help='Number of gpus for DDP per node')
+    parser.add_argument('--num_nodes', type=int, default=1, help='Number of nodes for DDP')
 
     args = parser.parse_args()
 
-    # Set seed
-    torch.manual_seed(args.seed)
+
+    device='cuda' if torch.cuda.is_available() else 'cpu'
+    args.device = device
+    print(args)
+    sys.stdout.flush()
     
+    
+    save_dir = get_save_dir(args)
+    args.save_dir = save_dir
+    tb_logger = TensorBoardLogger(args.save_dir)
+    csv_logger = CSVLogger(args.save_dir, flush_logs_every_n_steps=1)
+
+    fabric = L.Fabric(accelerator=args.device,num_nodes=args.num_nodes, devices=args.num_gpus, strategy="auto", loggers=[tb_logger, csv_logger])
+   
+    fabric.launch()
+
+    print = fabric.print
+        # The total number of processes running across all devices and nodes
+    fabric.print(f"World size: {fabric.world_size}")  # 2 * 3 = 6
+    
+    seed_everything(args.seed)
+
+
     main(args)
 
 
 """
 Sample command to run:
-python train_classifier.py \
-        --dataset_name CelebA \
-        --domain photo \
-        --data_path ./data \
+python train_classifier_fabric.py \
+        --dataset_name domainnet \
+        --domain real \
+        --data_path /p/lustre1/thopalli/DomainBed/DATA/domain_net \
         --image_size 224 \
-        --batch_size 128 \
+        --batch_size 512 \
         --seed 42 \
         --num_epochs 200 \
         --optimizer sgd \
         --scheduler MultiStepLR \
         --learning_rate 0.1 \
-        --classifier_model resnet50
+        --classifier_model resnet18 \
+        --use_pretrained 
 
 """
+
