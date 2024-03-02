@@ -51,7 +51,7 @@ def get_attributes(class_name, previous_attributes, PROMPT):
 
 def main():
     
-    data_name = 'imagenet_core'
+    data_name = 'CelebA_core'
     # Read the prompt template from file json
     with open('prompt_templates.json', 'r') as f:
         prompt_template = json.load(f)[data_name]
@@ -60,7 +60,7 @@ def main():
     # with open('pacs_labels.json', 'r') as f:
     #     classes = json.load(f)
 
-    with open('imagenet_labels.json', 'r') as f:
+    with open('CelebA_labels.json', 'r') as f:
         classes = json.load(f)
     # print(classes)
     # # Load the classes from the text file
