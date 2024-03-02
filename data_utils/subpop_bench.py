@@ -268,7 +268,7 @@ class CelebA(SubpopDataset):
         ])
         self.data_type = "images"
 
-        self.class_names = ['blond_hair', 'brown_hair']
+        self.class_names = ['not blond', 'blond']
         super().__init__(root, split, metadata, transform, transform1, train_attr, subsample_type, duplicates)
 
     def transform(self, x):
