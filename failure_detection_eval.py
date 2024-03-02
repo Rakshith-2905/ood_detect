@@ -75,6 +75,9 @@ def clip_attribute_classifier(data_loader, class_attributes_embeddings, class_at
     
     # Set the model to eval mode
     clip_model.eval()
+    classifier.eval()
+    pim_model.eval()
+    aggregator.eval()
 
     total_loss = 0
     total_task_model_acc = 0
