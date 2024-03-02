@@ -857,4 +857,44 @@ python failure_detection_eval.py \
 --domain_name sketch \
 # --eval_dataset cifar100c \
 # --filename cifar100c.log
+
+
+python failure_detection_eval.py \
+--data_dir './data' \
+--dataset_name CelebA \
+--eval_dataset CelebA \
+--num_classes 2 \
+--batch_size 128 \
+--img_size 224 \
+--seed 42 \
+--task_layer_name model.layer1 \
+--cutmix_alpha 1.0 \
+--warmup_epochs 10 \
+--task_failure_discrepancy_weight 2.0 \
+--task_success_discrepancy_weight 1.5 \
+--attributes_path clip-dissect/CelebA_core_concepts.json \
+--attributes_embeddings_path data/CelebA/CelebA_attributes_CLIP_ViT-B_32_text_embeddings.pth \
+--classifier_name resnet50 \
+--classifier_checkpoint_path logs/CelebA/failure_estimation/photo/resnet50/classifier/checkpoint_19.pth \
+--use_imagenet_pretrained \
+--attribute_aggregation mean \
+--clip_model_name ViT-B/32 \
+--prompt_path data/CelebA/CelebA_CLIP_ViT-B_32_text_embeddings.pth \
+--num_epochs 200 \
+--optimizer adamw \
+--learning_rate 1e-3 \
+--aggregator_learning_rate 1e-3 \
+--scheduler MultiStepLR \
+--val_freq 1 \
+--save_dir ./logs \
+--prefix '' \
+--vlm_dim 512 \
+--num_gpus 2 \
+--num_nodes 1 \
+--augmix_prob 0.2 \
+--cutmix_prob 0.2 \
+--resume_checkpoint_path logs/CelebA/resnet50/mapper/_agg_mean_bs_128_lr_0.001_augmix_prob_0.2_cutmix_prob_0.2_scheduler_warmup_epoch_10_layer_model.layer1/pim_weights_best.pth \
+--method baseline \
+--score energy
+
 '''
