@@ -527,12 +527,7 @@ if __name__ == "__main__":
    
     # from lightning.fabric.strategies import DDPStrategy
     # strategy = DDPStrategy(timeout=datetime.timedelta(seconds=3600))
-    #accelarator = args.device
-    fabric = L.Fabric(accelerator="gpu",num_nodes=args.num_nodes, devices=args.num_gpus, strategy="auto")#, loggers=[tb_logger, csv_logger])
-    
-    fabric.launch()
-    print = fabric.print
-    
+
     # Print the arguments
     print(args)
     sys.stdout.flush()
@@ -549,10 +544,13 @@ if __name__ == "__main__":
 
     tb_logger = TensorBoardLogger(args.save_dir)
     csv_logger = CSVLogger(args.save_dir, flush_logs_every_n_steps=1)
-    # use strategy as DDPS and increase timedelta
-    
-    
 
+    #accelarator = args.device
+    fabric = L.Fabric(accelerator="gpu",num_nodes=args.num_nodes, devices=args.num_gpus, strategy="auto", loggers=[tb_logger, csv_logger])
+    
+    fabric.launch()
+    print = fabric.print
+    
     # The total number of processes running across all devices and nodes
     fabric.print(f"World size: {fabric.world_size}")  # 2 * 3 = 6
     
@@ -564,7 +562,7 @@ if __name__ == "__main__":
 Example usage:
 
 python train_mapping_network.py \
---data_dir '/p/lustre3/thopalli/subpopdata' \
+--data_dir './data' \
 --dataset_name Waterbirds \
 --num_classes 2 \
 --batch_size 512 \
@@ -572,7 +570,7 @@ python train_mapping_network.py \
 --seed 42 \
 --task_layer_name model.layer1 \
 --cutmix_alpha 1.0 \
---warmup_epochs 0 \
+--warmup_epochs 10 \
 --task_failure_discrepancy_weight 2.0 \
 --task_success_discrepancy_weight 1.5 \
 --attributes_path clip-dissect/Waterbirds_core_concepts.json \
@@ -610,8 +608,8 @@ python train_mapping_network.py \
 --task_layer_name model.layer1 \
 --cutmix_alpha 1.0 \
 --warmup_epochs 10 \
---task_failure_discrepancy_weight 1.0 \
---task_success_discrepancy_weight 1.0 \
+--task_failure_discrepancy_weight 2.0 \
+--task_success_discrepancy_weight 1.5 \
 --attributes_path clip-dissect/cifar100_core_concepts.json \
 --attributes_embeddings_path data/cifar100/cifar100_attributes_CLIP_ViT-B_32_text_embeddings.pth \
 --classifier_name resnet18 \
