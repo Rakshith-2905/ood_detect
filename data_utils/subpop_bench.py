@@ -20,7 +20,7 @@ DATASETS = [
     "CMNIST",
     # Current subpop datasets
     "Waterbirds",
-    # "CelebA",
+    "CelebA",
     "CivilCommentsFine",  # "CivilComments"
     "MultiNLI",
     "MetaShift",
@@ -257,7 +257,7 @@ class CelebA(SubpopDataset):
     CHECKPOINT_FREQ = 1000
     INPUT_SHAPE = (3, 224, 224,)
 
-    def __init__(self, data_path, split, hparams, train_attr='yes', subsample_type=None, duplicates=None):
+    def __init__(self, data_path, split, hparams, transform1, train_attr='yes', subsample_type=None, duplicates=None, sample_by_attributes=None):
         root = os.path.join(data_path, "celeba", "img_align_celeba")
         metadata = os.path.join(data_path, "celeba", "metadata_celeba.csv")
         transform = transforms.Compose([
@@ -267,7 +267,9 @@ class CelebA(SubpopDataset):
             transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225]),
         ])
         self.data_type = "images"
-        super().__init__(root, split, metadata, transform, train_attr, subsample_type, duplicates)
+
+        self.class_names = ['blond_hair', 'brown_hair']
+        super().__init__(root, split, metadata, transform, transform1, train_attr, subsample_type, duplicates)
 
     def transform(self, x):
         return self.transform_(Image.open(x).convert("RGB"))

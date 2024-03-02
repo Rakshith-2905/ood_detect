@@ -145,14 +145,14 @@ def get_dataloaders(dataset_name, domain_name=None,
             domain_idx = None
         loaders, class_names = subpop_bench.get_dataloader(dataset_name, data_dir, hparams, 
                                                            train_attr='yes', sample_by_attributes=domain_idx)
-    elif dataset_name == 'CelebA':
-        class_attr = 'Young' # attribute for binary classification
-        imbalance_attr = ['Male']
-        imbalance_percent = {1: [20], 0:[80]} # 1 = Young, 0 = Not Young; 20% of the Young data will be Male
-        ignore_attrs = []  # Example: ignore samples that are 'Bald' or 'Wearing_Earrings'
+    # elif dataset_name == 'CelebA':
+    #     class_attr = 'Young' # attribute for binary classification
+    #     imbalance_attr = ['Male']
+    #     imbalance_percent = {1: [20], 0:[80]} # 1 = Young, 0 = Not Young; 20% of the Young data will be Male
+    #     ignore_attrs = []  # Example: ignore samples that are 'Bald' or 'Wearing_Earrings'
 
-        loaders, class_names = get_celebA_dataloader(batch_size, class_attr, imbalance_attr, imbalance_percent, 
-                                                     ignore_attrs, img_size=image_size, mask=False, mask_region=None)
+    #     loaders, class_names = get_celebA_dataloader(batch_size, class_attr, imbalance_attr, imbalance_percent, 
+    #                                                  ignore_attrs, img_size=image_size, mask=False, mask_region=None)
     elif dataset_name == 'cifar10-limited':
         loaders, class_names = get_CIFAR10_dataloader(batch_size=batch_size, data_dir=data_dir, 
                                                       subsample_trainset=True)
@@ -374,7 +374,7 @@ if __name__ == "__main__":
 """
 Sample command to run:
 python train_classifier.py \
-        --dataset_name pacs \
+        --dataset_name CelebA \
         --domain photo \
         --data_path ./data \
         --image_size 224 \
@@ -384,6 +384,6 @@ python train_classifier.py \
         --optimizer sgd \
         --scheduler MultiStepLR \
         --learning_rate 0.1 \
-        --classifier_model resnet18
+        --classifier_model resnet50
 
 """
