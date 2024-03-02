@@ -71,7 +71,7 @@ class CIFAR100C(torch.utils.data.Dataset):
 
 @torch.no_grad()
 def clip_attribute_classifier(data_loader, class_attributes_embeddings, class_attribute_prompt_list,
-                                clip_model, classifier, pim_model, aggregator): 
+                                clip_model, classifier, pim_model, aggregator, class_names): 
     
     # Set the model to eval mode
     clip_model.eval()
@@ -82,8 +82,6 @@ def clip_attribute_classifier(data_loader, class_attributes_embeddings, class_at
     pbar = progbar_wrapper(
         data_loader, total=len(data_loader), desc=f"Eval"
     )
-
-    class_names = data_loader.dataset.class_names
 
     # Construct CLIP text embeddings
     class_level_prompts = ["This is a photo of a " + class_name for class_name in class_names]
@@ -464,10 +462,10 @@ def main(args):
         assert len(class_attribute_prompts) == args.num_classes, "Number of classes does not match the number of class attributes"
 
         num_attributes_per_cls = [len(attributes) for attributes in class_attribute_prompts]
-        # Extract the attribute names from the prompts
-        attribute_names_per_class = {}
-        for i in range(len(class_attribute_prompts)):
-            attribute_names_per_class[class_names[i]] = [prompt.replace(f"This is a photo of {class_names[i]} with ", "") for prompt in class_attribute_prompts[i]]
+        # # Extract the attribute names from the prompts
+        # attribute_names_per_class = {}
+        # for i in range(len(class_attribute_prompts)):
+        #     attribute_names_per_class[class_names[i]] = [prompt.replace(f"This is a photo of {class_names[i]} with ", "") for prompt in class_attribute_prompts[i]]
         
         
         if args.attribute_aggregation == "mha":
@@ -482,7 +480,7 @@ def main(args):
         if args.resume_checkpoint_path:
             state = torch.load(args.resume_checkpoint_path)
             epoch = state["epoch"]
-            classifier.load_state_dict(state["classifier"])
+            # classifier.load_state_dict(state["classifier"])
             pim_model.load_state_dict(state["pim_model"])
             aggregator.load_state_dict(state[f"aggregator"])
 
@@ -499,7 +497,7 @@ def main(args):
         aggregator.to(device)
 
         # # This evaluates CLIP attribute classifier, NOTE: use only with mean and max aggregators
-        clip_class_level_acc, clip_attribute_level_acc = clip_attribute_classifier(test_loader, class_attributes_embeddings, class_attribute_prompts, clip_model, classifier, pim_model, aggregator)
+        clip_class_level_acc, clip_attribute_level_acc = clip_attribute_classifier(test_loader, class_attributes_embeddings, class_attribute_prompts, clip_model, classifier, pim_model, aggregator, class_names)
 
         # Evaluating task model
         print('Evaluating on Validation Data')
@@ -559,8 +557,8 @@ def main(args):
         cm_test_list = cm_test.tolist()
         # Convert the results to a dictionary
         results = {
-            "domain_name": args.domain_name,
-            "aggregator": args.attribute_aggregation,
+            # "domain_name": args.domain_name,
+            # "aggregator": args.attribute_aggregation,
             "true_val_acc": val_task_model_acc,
             "estimated_val_acc": estimated_val_acc.item(),
             "true_test_acc": test_task_model_acc,
@@ -713,9 +711,9 @@ python failure_detection_eval.py \
 --attributes_path clip-dissect/cifar100_core_concepts.json \
 --attributes_embeddings_path data/cifar100/cifar100_attributes_CLIP_ViT-B_32_text_embeddings.pth \
 --classifier_name resnet18 \
---classifier_checkpoint_path logs/cifar100/resnet18/classifier/checkpoint_99.pth \
+--classifier_checkpoint_path logs/cifar100/resnet18/classifier/checkpoint_199.pth \
 --use_imagenet_pretrained \
---attribute_aggregation max \
+--attribute_aggregation mean \
 --clip_model_name ViT-B/32 \
 --prompt_path data/cifar100/cifar100_CLIP_ViT-B_32_text_embeddings.pth \
 --num_epochs 200 \
@@ -731,11 +729,11 @@ python failure_detection_eval.py \
 --num_nodes 1 \
 --augmix_prob 0.2 \
 --cutmix_prob 0.2 \
---resume_checkpoint_path logs/cifar100/resnet18/mapper/_agg_max_bs_512_lr_0.001_augmix_prob_0.2_cutmix_prob_0.2_scheduler_warmup_epoch_10_layer_model.layer1/pim_weights_best.pth \
+--resume_checkpoint_path logs/cifar100/resnet18/mapper/_agg_mean_bs_512_lr_0.001_augmix_prob_0.2_cutmix_prob_0.2_scheduler_warmup_epoch_10_layer_model.layer1/pim_weights_best.pth \
 --method pim \
 --score cross_entropy \
-# --eval_dataset cifar100c \
-# --filename cifar100c.log
+--eval_dataset cifar100c \
+--filename cifar100c.log
 
 python failure_detection_eval.py \
 --data_dir './data' \
@@ -752,7 +750,7 @@ python failure_detection_eval.py \
 --classifier_name resnet18 \
 --classifier_checkpoint_path logs/Waterbirds/resnet18/classifier/checkpoint_99.pth \
 --use_imagenet_pretrained \
---attribute_aggregation mean \
+--attribute_aggregation max \
 --clip_model_name ViT-B/32 \
 --prompt_path data/Waterbirds/Waterbirds_CLIP_ViT-B_32_text_embeddings.pth \
 --num_epochs 200 \
@@ -768,7 +766,7 @@ python failure_detection_eval.py \
 --num_nodes 1 \
 --augmix_prob 0.2 \
 --cutmix_prob 0.2 \
---resume_checkpoint_path logs/Waterbirds/resnet18/mapper/_agg_mean_bs_512_lr_0.001_augmix_prob_0.2_cutmix_prob_0.2_scheduler_warmup_epoch_0_layer_model.layer1/pim_weights_final.pth \
+--resume_checkpoint_path logs/Waterbirds/resnet18/mapper/_agg_max_bs_512_lr_0.001_augmix_prob_0.2_cutmix_prob_0.2_scheduler_warmup_epoch_0_layer_model.layer1/pim_weights_best.pth \
 --method pim \
 --score cross_entropy \
 # --eval_dataset cifar100c \
