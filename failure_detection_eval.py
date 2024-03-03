@@ -75,6 +75,9 @@ def clip_attribute_classifier(data_loader, class_attributes_embeddings, class_at
     
     # Set the model to eval mode
     clip_model.eval()
+    classifier.eval()
+    pim_model.eval()
+    aggregator.eval()
 
     total_loss = 0
     total_task_model_acc = 0
@@ -238,6 +241,7 @@ def evaluate_pim(data_loader, class_attributes_embeddings, class_attribute_promp
     pim_model.eval()
     aggregator.eval()
     classifier.eval()
+    clip_model.eval()
     total_loss = 0
     total_task_model_acc = 0
     total_pim_acc = 0
@@ -850,7 +854,7 @@ python failure_detection_eval.py \
 --num_nodes 1 \
 --augmix_prob 0.2 \
 --cutmix_prob 0.2 \
---resume_checkpoint_path /usr/workspace/KDML/2024/failure_detect/logs/pacs/resnet18/mapper/_agg_max_bs_512_lr_0.001_augmix_prob_0.2_cutmix_prob_0.2_scheduler_warmup_epoch_0_layer_model.layer1/pim_weights_best.pth \
+--resume_checkpoint_path /usr/workspace/KDML/2024/failure_detect/logs/pacs/resnet18/mapper/_agg_max_bs_512_lr_0.001_augmix_prob_0.2_cutmix_prob_0.2_scheduler_warmup_epoch_0_layer_model.layer1/pim_weights_final.pth \
 --method pim \
 --score cross_entropy \
 --domain_name sketch \
