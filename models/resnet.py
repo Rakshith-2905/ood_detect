@@ -167,7 +167,8 @@ class CustomResNet(nn.Module):
             'resnet34': resnet34,
             'resnet50': resnet50,
             'resnet101': resnet101,
-            'resnet152': resnet152
+            'resnet152': resnet152,
+            'resnet50_v2':resnet50,
         }
 
         self.train_transform = transforms.Compose([
@@ -192,7 +193,15 @@ class CustomResNet(nn.Module):
             raise ValueError(f"Invalid model_name. Expected one of {list(resnets.keys())}, but got {model_name}")
 
         # Load the desired ResNet architecture
-        self.model = resnets[model_name](pretrained=use_pretrained)
+        if 'v2' not in model_name:
+            self.model = resnets[model_name](pretrained=use_pretrained)
+        else:
+            if 'resnet50' in model_name:
+                from torchvision.models import ResNet50_Weights
+                self.model = resnets[model_name](weights=ResNet50_Weights.IMAGENET1K_V2)
+            else:
+                raise NotImplementedError(f"{model_name} is not supported")
+
 
         # Save the features before the FC layer
         self.features = nn.Sequential(*list(self.model.children())[:-1])
@@ -243,7 +252,7 @@ class CustomClassifier(nn.Module):
             self.feature_dim=512
         elif model_name == "resnet50-imagenet":
             from torchvision.models import resnet50, ResNet50_Weights
-            network = resnet50(weights=ResNet50_Weights.IMAGENET1K_V1)
+            network = resnet50(weights=ResNet50_Weights.IMAGENET1K_V2)
 
             self.network_feat_extractor = create_feature_extractor(network,return_nodes=['flatten','fc'])
             self.feature_dim=2048
