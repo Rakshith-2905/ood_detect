@@ -17,9 +17,16 @@ from data_utils.cifar100_data import CIFAR100TwoTransforms, CIFAR100C, get_CIFAR
 from data_utils.cifar10_data import get_CIFAR10_dataloader
 from data_utils.celebA_dataset import get_celebA_dataloader
 from data_utils.pacs_dataset import get_pacs_dataloader
+from data_utils.office_home_dataset import OfficeHomeDataset, get_office_home_dataloader
 
 from train_task_distillation import get_dataset, build_classifier
 from data_utils import subpop_bench
+
+def seed_everything(seed):
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
 
 def plot_images(loader, title, n_rows=2, n_cols=5, mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]):
     """
@@ -126,7 +133,11 @@ def get_dataloaders(dataset_name, domain_name=None,
     elif dataset_name == "pacs":
         loaders, class_names = get_pacs_dataloader(domain_name, batch_size=batch_size, data_dir=data_dir, 
                                                 train_transform=None, test_transform=None, clip_transform=None, 
-                                                return_dataset=False, use_real=True)
+                                                return_dataset=False, use_real=False)
+    elif dataset_name == "office_home":
+        loaders, class_names = get_office_home_dataloader(domain_name, batch_size=batch_size, data_dir=data_dir, 
+                                                          train_transform=None, test_transform=None, clip_transform=None, 
+                                                          return_dataset=False, use_real=False)
 
     elif dataset_name in subpop_bench.DATASETS:
         hparams = {
@@ -145,14 +156,14 @@ def get_dataloaders(dataset_name, domain_name=None,
             domain_idx = None
         loaders, class_names = subpop_bench.get_dataloader(dataset_name, data_dir, hparams, 
                                                            train_attr='yes', sample_by_attributes=domain_idx)
-    elif dataset_name == 'CelebA':
-        class_attr = 'Young' # attribute for binary classification
-        imbalance_attr = ['Male']
-        imbalance_percent = {1: [20], 0:[80]} # 1 = Young, 0 = Not Young; 20% of the Young data will be Male
-        ignore_attrs = []  # Example: ignore samples that are 'Bald' or 'Wearing_Earrings'
+    # elif dataset_name == 'CelebA':
+    #     class_attr = 'Young' # attribute for binary classification
+    #     imbalance_attr = ['Male']
+    #     imbalance_percent = {1: [20], 0:[80]} # 1 = Young, 0 = Not Young; 20% of the Young data will be Male
+    #     ignore_attrs = []  # Example: ignore samples that are 'Bald' or 'Wearing_Earrings'
 
-        loaders, class_names = get_celebA_dataloader(batch_size, class_attr, imbalance_attr, imbalance_percent, 
-                                                     ignore_attrs, img_size=image_size, mask=False, mask_region=None)
+    #     loaders, class_names = get_celebA_dataloader(batch_size, class_attr, imbalance_attr, imbalance_percent, 
+    #                                                  ignore_attrs, img_size=image_size, mask=False, mask_region=None)
     elif dataset_name == 'cifar10-limited':
         loaders, class_names = get_CIFAR10_dataloader(batch_size=batch_size, data_dir=data_dir, 
                                                       subsample_trainset=True)
@@ -235,12 +246,16 @@ def main(args):
         scheduler = None
     
     # Make directory for saving results
-    if args.dataset_name in ['domainnet', 'pacs']:
+    if args.dataset_name in ['domainnet', 'pacs', 'office_home']:
         args.save_dir = f"logs/{args.dataset_name}-{args.domain}/{args.classifier_model}/classifier"
     elif args.dataset_name in subpop_bench.DATASETS:   
         args.save_dir = f"logs/{args.dataset_name}/failure_estimation/{args.domain}/{args.classifier_model}/classifier"
     else:
         args.save_dir = f"logs/{args.dataset_name}/{args.classifier_model}/classifier"
+    
+    # Add seed to save_dir
+    args.save_dir += f"_seed{args.seed}"
+
     if not os.path.exists(args.save_dir):
         os.makedirs(args.save_dir, exist_ok=True)
 
@@ -366,7 +381,7 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     # Set seed
-    torch.manual_seed(args.seed)
+    seed_everything(args.seed)
     
     main(args)
 
@@ -374,16 +389,16 @@ if __name__ == "__main__":
 """
 Sample command to run:
 python train_classifier.py \
-        --dataset_name pacs \
-        --domain photo \
+        --dataset_name Waterbirds \
+        --domain sketch \
         --data_path ./data \
         --image_size 224 \
-        --batch_size 128 \
-        --seed 42 \
+        --batch_size 512 \
+        --seed 21 \
         --num_epochs 200 \
         --optimizer sgd \
         --scheduler MultiStepLR \
-        --learning_rate 0.1 \
+        --learning_rate 0.01 \
         --classifier_model resnet18
 
 """

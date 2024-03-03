@@ -739,7 +739,7 @@ if __name__ == "__main__":
 
     args.datasets = ['waterbirds', 'civilcomments', 'multinli', 'imagenetbg', 'metashift', 'nico++',
                     'mimic_cxr', 'chexpert', 'mimic_notes', 'cxr_multisite']
-    # args.datasets = ['breeds', 'cmnist']
+    args.datasets = ['celeba']
     if args.download:
         download_datasets(args.data_path, args.datasets)
     generate_metadata(args.data_path, args.datasets)

@@ -35,15 +35,29 @@ import random
 import pickle
 import json
 import logging
+import matplotlib.pyplot as plt
 
 from train_task_distillation import get_dataset, get_CLIP_text_encodings, build_classifier
 
 from models.mapping import TaskMapping, MultiHeadedAttentionSimilarity, MultiHeadedAttention, print_layers, MeanAggregator, MaxAggregator
 from utils_proj import SimpleDINOLoss, compute_accuracy, compute_similarities, CutMix, MyAugMix, find_normalization_parameters, get_score, calc_gen_threshold, calc_accuracy_from_scores
 from models.cluster import ClusterCreater
-from sklearn.metrics import confusion_matrix, matthews_corrcoef
-
+from sklearn.metrics import confusion_matrix, matthews_corrcoef, roc_auc_score, roc_curve
 CLIP_LOGIT_SCALE = 100
+
+
+def compute_auroc_fpr(true_labels, scores):
+    #FPR@TPR95
+    TPR_LEVEL=0.95
+    fpr, tpr, thresholds = roc_curve(true_labels, scores, pos_label=1)
+    t = thresholds[tpr>=TPR_LEVEL][0]
+    t_idx = np.where(thresholds==t)[0]
+    fpr_at_tpr = fpr[t_idx]
+
+    #AUROC score
+    auroc = roc_auc_score(true_labels, scores)
+    return fpr_at_tpr[0], auroc
+
 
 
 class CIFAR100C(torch.utils.data.Dataset):
@@ -71,7 +85,7 @@ class CIFAR100C(torch.utils.data.Dataset):
 
 @torch.no_grad()
 def clip_attribute_classifier(data_loader, class_attributes_embeddings, class_attribute_prompt_list,
-                                clip_model, classifier, pim_model, aggregator): 
+                                clip_model, classifier, pim_model, aggregator, class_names): 
     
     # Set the model to eval mode
     clip_model.eval()
@@ -85,8 +99,6 @@ def clip_attribute_classifier(data_loader, class_attributes_embeddings, class_at
     pbar = progbar_wrapper(
         data_loader, total=len(data_loader), desc=f"Eval"
     )
-
-    class_names = data_loader.dataset.class_names
 
     # Construct CLIP text embeddings
     class_level_prompts = ["This is a photo of a " + class_name for class_name in class_names]
@@ -129,6 +141,7 @@ def clip_attribute_classifier(data_loader, class_attributes_embeddings, class_at
             clip_similarities_dict[i] = clip_similarities[:, start:start+num_attributes]
             start += num_attributes
         
+    
         # Compute the pim logits using the multiheaded attention
         clip_logits = aggregator(clip_similarities_dict)
 
@@ -279,7 +292,7 @@ def evaluate_pim(data_loader, class_attributes_embeddings, class_attribute_promp
         
         # Compute the pim logits using the multiheaded attention
         pim_logits = aggregator(pim_similarities_dict)
-
+    
         loss = F.cross_entropy(pim_logits, labels)
 
         task_model_probs = F.softmax(task_model_logits, dim=-1)
@@ -342,6 +355,18 @@ def load_data(args, train_transform, test_transform, clip_transform):
         val_dataset = ConcatDataset([val_dataset, failure_dataset])
         val_loader = torch.utils.data.DataLoader(val_dataset, batch_size=args.batch_size, shuffle=False, num_workers=8, pin_memory=True)
         test_loader = torch.utils.data.DataLoader(test_dataset, batch_size=args.batch_size, shuffle=False, num_workers=8, pin_memory=True)
+    
+    elif args.eval_dataset == 'NICOpp':
+        d = args.classifier_checkpoint_path.split('/')[3]
+        print(f'Classifier trained on {d}')
+        _, val_dataset, _, failure_dataset, class_names = get_dataset(args.dataset_name, train_transform, test_transform, 
+                                                            data_dir=args.data_dir, clip_transform=clip_transform, 
+                                                            img_size=args.img_size, domain_name=d, 
+                                                            return_failure_set=True,use_real=False)
+        #concat val and failure
+        val_dataset = ConcatDataset([val_dataset, failure_dataset])
+        val_loader = torch.utils.data.DataLoader(val_dataset, batch_size=args.batch_size, shuffle=False, num_workers=8, pin_memory=True)
+        test_loader = torch.utils.data.DataLoader(test_dataset, batch_size=args.batch_size, shuffle=False, num_workers=8, pin_memory=True)  # This is from the "evaluation" domain
 
     print(f"Number of validation examples: {len(val_loader.dataset)}")
     print(f"Number of test examples: {len(test_loader.dataset)}")
@@ -398,6 +423,12 @@ def main(args):
         val_true_success_failure_idx = torch.argmax(val_probs_list, 1) == val_labels_list
         test_true_success_failure_idx = torch.argmax(test_probs_list, 1) == test_labels_list
 
+        val_fpr_at_tpr, val_auroc = compute_auroc_fpr(val_true_success_failure_idx.cpu().numpy(), val_scores.cpu().numpy())
+        print(f'Validation FPR@TPR95 = {val_fpr_at_tpr}, Validation AUROC = {val_auroc}')
+
+        test_fpr_at_tpr, test_auroc = compute_auroc_fpr(test_true_success_failure_idx.cpu().numpy(), test_scores.cpu().numpy())
+        print(f'Test FPR@TPR95 = {test_fpr_at_tpr}, Test AUROC = {test_auroc}')
+
         print('Confusion Matrices')
         cm_val = confusion_matrix(val_true_success_failure_idx.cpu().numpy(), val_estimated_success_failure_idx.cpu().numpy())
         cm_test = confusion_matrix(test_true_success_failure_idx.cpu().numpy(), test_estimated_success_failure_idx.cpu().numpy())
@@ -442,8 +473,14 @@ def main(args):
             "test_failure_recall": failure_recall_test,
             "test_success_recall": success_recall_test,
             "val_mathews_corr": mathews_corr_val,
-            "test_mathews_corr": mathews_corr_test
+            "test_mathews_corr": mathews_corr_test,
+            "val_fpr_at_tpr":val_fpr_at_tpr,
+            "val_auroc":val_auroc,
+            "test_fpr_at_tpr":test_fpr_at_tpr,
+            "test_auroc":test_auroc
         }
+        if args.eval_dataset == 'NICOpp':
+            results['train_domain_name'] = d
 
         # Save it as a CSV file
         results_file = f'{args.save_dir}/{args.score}_results.json'
@@ -468,10 +505,10 @@ def main(args):
         assert len(class_attribute_prompts) == args.num_classes, "Number of classes does not match the number of class attributes"
 
         num_attributes_per_cls = [len(attributes) for attributes in class_attribute_prompts]
-        # Extract the attribute names from the prompts
-        attribute_names_per_class = {}
-        for i in range(len(class_attribute_prompts)):
-            attribute_names_per_class[class_names[i]] = [prompt.replace(f"This is a photo of {class_names[i]} with ", "") for prompt in class_attribute_prompts[i]]
+        # # Extract the attribute names from the prompts
+        # attribute_names_per_class = {}
+        # for i in range(len(class_attribute_prompts)):
+        #     attribute_names_per_class[class_names[i]] = [prompt.replace(f"This is a photo of {class_names[i]} with ", "") for prompt in class_attribute_prompts[i]]
         
         
         if args.attribute_aggregation == "mha":
@@ -486,7 +523,7 @@ def main(args):
         if args.resume_checkpoint_path:
             state = torch.load(args.resume_checkpoint_path)
             epoch = state["epoch"]
-            classifier.load_state_dict(state["classifier"])
+            # classifier.load_state_dict(state["classifier"])
             pim_model.load_state_dict(state["pim_model"])
             aggregator.load_state_dict(state[f"aggregator"])
 
@@ -503,7 +540,7 @@ def main(args):
         aggregator.to(device)
 
         # # This evaluates CLIP attribute classifier, NOTE: use only with mean and max aggregators
-        clip_class_level_acc, clip_attribute_level_acc = clip_attribute_classifier(test_loader, class_attributes_embeddings, class_attribute_prompts, clip_model, classifier, pim_model, aggregator)
+        clip_class_level_acc, clip_attribute_level_acc = clip_attribute_classifier(test_loader, class_attributes_embeddings, class_attribute_prompts, clip_model, classifier, pim_model, aggregator, class_names)
 
         # Evaluating task model
         print('Evaluating on Validation Data')
@@ -531,6 +568,12 @@ def main(args):
         print(f'True Validation Accuracy = {val_task_model_acc}, Estimated Validation Accuracy = {estimated_val_acc}, True Test Accuracy = {test_task_model_acc}, Estimated Test Accuracy = {estimated_test_acc}')
         val_true_success_failure_idx = torch.argmax(val_task_logits_list, 1) == val_labels_list
         test_true_success_failure_idx = torch.argmax(test_task_logits_list, 1) == test_labels_list
+
+        val_fpr_at_tpr, val_auroc = compute_auroc_fpr(val_true_success_failure_idx.cpu().numpy(), val_scores.cpu().numpy())
+        print(f'Validation FPR@TPR95 = {val_fpr_at_tpr}, Validation AUROC = {val_auroc}')
+
+        test_fpr_at_tpr, test_auroc = compute_auroc_fpr(test_true_success_failure_idx.cpu().numpy(), test_scores.cpu().numpy())
+        print(f'Test FPR@TPR95 = {test_fpr_at_tpr}, Test AUROC = {test_auroc}')
 
         cm_val = confusion_matrix(val_true_success_failure_idx.cpu().numpy(), val_estimated_success_failure_idx.cpu().numpy())
         cm_test = confusion_matrix(test_true_success_failure_idx.cpu().numpy(), test_estimated_success_failure_idx.cpu().numpy())
@@ -563,8 +606,8 @@ def main(args):
         cm_test_list = cm_test.tolist()
         # Convert the results to a dictionary
         results = {
-            "domain_name": args.domain_name,
-            "aggregator": args.attribute_aggregation,
+            # "domain_name": args.domain_name,
+            # "aggregator": args.attribute_aggregation,
             "true_val_acc": val_task_model_acc,
             "estimated_val_acc": estimated_val_acc.item(),
             "true_test_acc": test_task_model_acc,
@@ -579,8 +622,14 @@ def main(args):
             "test_mathews_corr": mathews_corr_test,
             "pim_model_test_acc": test_pim_acc,
             "clip_class_level_acc": clip_class_level_acc,
-            "clip_attribute_level_acc": clip_attribute_level_acc
+            "clip_attribute_level_acc": clip_attribute_level_acc,
+            "val_fpr_at_tpr":val_fpr_at_tpr,
+            "val_auroc":val_auroc,
+            "test_fpr_at_tpr":test_fpr_at_tpr,
+            "test_auroc":test_auroc
         }
+        if args.eval_dataset == 'NICOpp':
+            results['train_domain_name'] = d
 
         # Save it as a CSV file
         results_file = f'{args.save_dir}/{args.score}_results.json'
@@ -595,6 +644,27 @@ def main(args):
         with open(results_file, 'a') as f:
             json.dump(results, f)
             f.write('\n')
+
+        plot = False
+        if plot:
+            fig, ax = plt.subplots(1,2, figsize=(8,5))
+            plt.subplot(121)
+            plt.hist(val_scores.cpu().numpy()[val_true_success_failure_idx.cpu().numpy()], label='True Success', alpha=0.2)
+            plt.hist(val_scores.cpu().numpy()[~val_true_success_failure_idx.cpu().numpy()], label='True Failure')
+            plt.vlines(threshold, plt.gca().get_ylim()[0], plt.gca().get_ylim()[1], linestyles ="dotted", colors ="k")
+            plt.legend()
+            plt.xlabel('Negative Cross Entropy')
+            plt.title('Val Data')
+
+            plt.subplot(122)
+            plt.hist(test_scores.cpu().numpy()[test_true_success_failure_idx.cpu().numpy()], label='True Success', alpha=0.2)
+            plt.hist(test_scores.cpu().numpy()[~test_true_success_failure_idx.cpu().numpy()], label='True Failure')
+            plt.vlines(threshold, plt.gca().get_ylim()[0], plt.gca().get_ylim()[1], linestyles ="dotted", colors ="k")
+            plt.legend()
+            plt.xlabel('Negative Cross Entropy')
+            plt.title('Test Data')
+
+            plt.savefig(f'{args.save_dir}/{args.score}_ce_comparison_true_classes.png', bbox_inches='tight')
     else:
         raise NotImplementedError
 
@@ -697,6 +767,21 @@ if __name__ == "__main__":
                     seed_everything(args.seed)
                     main(args)
 
+    elif args.eval_dataset =='NICOpp':
+        if args.method=='baseline':
+            scores_all = ['msp', 'energy', 'pe']
+            for score in scores_all:
+                args.score = score
+                for dn in ['autumn', 'dim', 'grass', 'outdoor', 'rock', 'water']:
+                    args.domain_name = dn
+                    seed_everything(args.seed)
+                    main(args)
+        else:
+            for dn in ['autumn', 'dim', 'grass', 'outdoor', 'rock', 'water']:
+                args.domain_name = dn
+                seed_everything(args.seed)
+                main(args)
+
     else:
         seed_everything(args.seed)
         main(args)
@@ -717,9 +802,9 @@ python failure_detection_eval.py \
 --attributes_path clip-dissect/cifar100_core_concepts.json \
 --attributes_embeddings_path data/cifar100/cifar100_attributes_CLIP_ViT-B_32_text_embeddings.pth \
 --classifier_name resnet18 \
---classifier_checkpoint_path logs/cifar100/resnet18/classifier/checkpoint_99.pth \
+--classifier_checkpoint_path logs/cifar100/resnet18/classifier/checkpoint_199.pth \
 --use_imagenet_pretrained \
---attribute_aggregation max \
+--attribute_aggregation mean \
 --clip_model_name ViT-B/32 \
 --prompt_path data/cifar100/cifar100_CLIP_ViT-B_32_text_embeddings.pth \
 --num_epochs 200 \
@@ -735,11 +820,11 @@ python failure_detection_eval.py \
 --num_nodes 1 \
 --augmix_prob 0.2 \
 --cutmix_prob 0.2 \
---resume_checkpoint_path logs/cifar100/resnet18/mapper/_agg_max_bs_512_lr_0.001_augmix_prob_0.2_cutmix_prob_0.2_scheduler_warmup_epoch_10_layer_model.layer1/pim_weights_best.pth \
+--resume_checkpoint_path logs/cifar100/resnet18/mapper/_agg_mean_bs_512_lr_0.001_augmix_prob_0.2_cutmix_prob_0.2_scheduler_warmup_epoch_10_layer_model.layer1/pim_weights_best.pth \
 --method pim \
 --score cross_entropy \
-# --eval_dataset cifar100c \
-# --filename cifar100c.log
+--eval_dataset cifar100c \
+--filename cifar100c.log
 
 python failure_detection_eval.py \
 --data_dir './data' \
@@ -756,7 +841,7 @@ python failure_detection_eval.py \
 --classifier_name resnet18 \
 --classifier_checkpoint_path logs/Waterbirds/resnet18/classifier/checkpoint_99.pth \
 --use_imagenet_pretrained \
---attribute_aggregation mean \
+--attribute_aggregation max \
 --clip_model_name ViT-B/32 \
 --prompt_path data/Waterbirds/Waterbirds_CLIP_ViT-B_32_text_embeddings.pth \
 --num_epochs 200 \
@@ -772,7 +857,7 @@ python failure_detection_eval.py \
 --num_nodes 1 \
 --augmix_prob 0.2 \
 --cutmix_prob 0.2 \
---resume_checkpoint_path logs/Waterbirds/resnet18/mapper/_agg_mean_bs_512_lr_0.001_augmix_prob_0.2_cutmix_prob_0.2_scheduler_warmup_epoch_0_layer_model.layer1/pim_weights_final.pth \
+--resume_checkpoint_path logs/Waterbirds/resnet18/mapper/_agg_max_bs_512_lr_0.001_augmix_prob_0.2_cutmix_prob_0.2_scheduler_warmup_epoch_0_layer_model.layer1/pim_weights_best.pth \
 --method pim \
 --score cross_entropy \
 # --eval_dataset cifar100c \
@@ -784,7 +869,7 @@ python failure_detection_eval.py \
 --dataset_name MetaShift \
 --num_classes 2 \
 --batch_size 512 \
---img_size 225 \
+--img_size 224 \
 --seed 42 \
 --task_layer_name model.layer1 \
 --cutmix_alpha 1.0 \
@@ -794,7 +879,7 @@ python failure_detection_eval.py \
 --classifier_name resnet18 \
 --classifier_checkpoint_path logs/MetaShift/resnet18/classifier/best_checkpoint.pth \
 --use_imagenet_pretrained \
---attribute_aggregation mean \
+--attribute_aggregation max \
 --clip_model_name ViT-B/32 \
 --prompt_path data/metashift/metashift_core_attributes_CLIP_ViT-B_32_text_embeddings.pth \
 --num_epochs 200 \
@@ -810,7 +895,7 @@ python failure_detection_eval.py \
 --num_nodes 1 \
 --augmix_prob 0.2 \
 --cutmix_prob 0.2 \
---resume_checkpoint_path logs/MetaShift/resnet18/mapper/_agg_mean_bs_512_lr_0.001_augmix_prob_0.2_cutmix_prob_0.2_scheduler_warmup_epoch_0_layer_model.layer1/pim_weights_best.pth \
+--resume_checkpoint_path logs/MetaShift/resnet18/mapper/_agg_mean_bs_512_lr_0.0001_augmix_prob_0.2_cutmix_prob_0.2_scheduler_warmup_epoch_0_layer_model.layer1/pim_weights_best.pth \
 --method pim \
 --score cross_entropy
 # --eval_dataset cifar100c \
@@ -858,6 +943,48 @@ python failure_detection_eval.py \
 --method pim \
 --score cross_entropy \
 --domain_name sketch \
+# --eval_dataset cifar100c \
+# --filename cifar100c.log
+'''
+
+
+'''
+python failure_detection_eval.py \
+--data_dir './data' \
+--domain_name autumn \
+--dataset_name NICOpp \
+--eval_dataset NICOpp \
+--num_classes 60 \
+--batch_size 512 \
+--img_size 224 \
+--seed 42 \
+--task_layer_name model.layer1 \
+--cutmix_alpha 1.0 \
+--warmup_epochs 10 \
+--attributes_path clip-dissect/NICOpp_core_concepts.json \
+--attributes_embeddings_path data/nicopp/nicopp_core_attributes_CLIP_ViT-B_32_text_embeddings.pth \
+--classifier_name resnet18 \
+--classifier_checkpoint_path logs/NICOpp/failure_estimation/autumn/resnet18/classifier/best_checkpoint.pth \
+--use_imagenet_pretrained \
+--attribute_aggregation mean \
+--clip_model_name ViT-B/32 \
+--prompt_path data/nicopp/nicopp_core_attributes_CLIP_ViT-B_32_text_embeddings.pth \
+--num_epochs 200 \
+--optimizer adamw \
+--learning_rate 1e-3 \
+--aggregator_learning_rate 1e-3 \
+--scheduler MultiStepLR \
+--val_freq 1 \
+--save_dir ./logs \
+--prefix '' \
+--vlm_dim 512 \
+--num_gpus 1 \
+--num_nodes 1 \
+--augmix_prob 0.2 \
+--cutmix_prob 0.2 \
+--resume_checkpoint_path logs/NICOpp/resnet18/autumn/mapper/_agg_mean_bs_512_lr_0.0001_augmix_prob_0.2_cutmix_prob_0.2_scheduler_warmup_epoch_0_layer_model.layer1/pim_weights_best.pth \
+--method pim \
+--score cross_entropy
 # --eval_dataset cifar100c \
 # --filename cifar100c.log
 '''

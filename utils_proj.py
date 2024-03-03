@@ -43,7 +43,6 @@ def get_score(score, logits, ref_logits=None):
         # ref_logits is the logits of the PIM model
         ref_probs = F.softmax(ref_logits, dim=1)
         scores = -F.cross_entropy(logits, ref_probs, reduction='none')
-        scores = -F.cross_entropy(logits, ref_probs, reduction='none')
     return scores
 
 def calc_gen_threshold(scores, logits, labels, name='classifier'):
