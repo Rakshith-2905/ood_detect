@@ -14,8 +14,75 @@ from torchvision.transforms import v2
 from torchvision.transforms import AugMix
 from torchvision.transforms import Normalize, Resize
 import random
+import tqdm
 
 from data_utils.cifar10_data import get_CIFAR10_dataloader
+from scipy.optimize import minimize 
+from sklearn.metrics import log_loss
+
+
+class TemperatureScaling():
+    
+    def __init__(self, temp = 1, maxiter = 50, solver = "BFGS"):
+        """
+        Initialize class
+        
+        Params:
+            temp (float): starting temperature, default 1
+            maxiter (int): maximum iterations done by optimizer, however 8 iterations have been maximum.
+        """
+        self.temp = temp
+        self.maxiter = maxiter
+        self.solver = solver
+    
+    def _loss_fun(self, x, probs, true):
+        # Calculates the loss using log-loss (cross-entropy loss)
+        scaled_probs = self.predict(probs, x)
+        loss = log_loss(y_true=true, y_pred=scaled_probs)
+        if np.isnan(loss).sum() > 0:
+            print('np.isnan(loss).sum()', np.isnan(loss).sum())
+        return loss
+    
+    # Find the temperature
+    def fit(self, logits, true):
+        """
+        Trains the model and finds optimal temperature
+        
+        Params:
+            logits: the output from neural network for each class (shape [samples, classes])
+            true: one-hot-encoding of true labels.
+            
+        Returns:
+            the results of optimizer after minimizing is finished.
+        """
+        
+        true = true.flatten() # Flatten y_val
+        opt = minimize(self._loss_fun, x0 = 1, args=(logits, true), options={'maxiter':self.maxiter, 'disp':True}, method = self.solver)
+        self.temp = opt.x[0]
+        print('finished temp', self.temp)
+        
+        return opt
+        
+    def predict(self, logits, temp = None, return_logit=False):
+        """
+        Scales logits based on the temperature and returns calibrated probabilities
+        
+        Params:
+            logits: logits values of data (output from neural network) for each class (shape [samples, classes])
+            temp: if not set use temperatures find by model or previously set.
+            
+        Returns:
+            calibrated probabilities (nd.array with shape [samples, classes])
+        """
+        logits = torch.tensor(logits).float()
+        if not temp:
+            if return_logit:
+                return logits/self.temp
+            return F.softmax(logits/self.temp, dim=1)
+        else:
+            if return_logit:
+                return logits/temp
+            return F.softmax(logits/temp, dim=1)
 
 def entropy(prob):
     """
@@ -31,6 +98,62 @@ def compute_msp(p):
 def compute_energy(logits, T=1.0):
     return -T*torch.logsumexp(logits/T, dim=1)
 
+
+def compute_gde_scores(models, loader, device='cuda', mode='val'):
+    # Assuming models are passed in eval mode
+    with torch.no_grad():
+        prob_list = [[] for  _ in len(models)]
+        pbar = tqdm(loader, total=len(loader), desc=f"GDE")
+        for i, (x, y, _) in enumerate(pbar):
+            x = x.to(device)
+            y = y.to(device)
+            for enum, m in enumerate(models):
+                probs = F.softmax(m(x), dim=1)
+                prob_list[enum].append(probs)
+        print('Obtained the softmax scores for every model')
+
+        for i, p in enumerate(prob_list):
+            prob_list[i] = torch.cat(p, dim=0)   
+        
+        agreement = []
+        for i, m in enumerate(prob_list):
+            remaining_probs = torch.zeros_like(prob_list[0])
+            base_predictions = torch.argmax(prob_list[i], dim=1)
+            for j, m in enumerate(prob_list):
+                if i==j:
+                    pass
+                else:
+                    remaining_probs += prob_list[j]
+            
+            remaining_probs = remaining_probs/(len(prob_list)-1)
+            remaining_predictions = torch.argmax(remaining_probs, dim=1)
+            agreement.append(base_predictions.eq(remaining_predictions))
+        
+        agreement = torch.stack(agreement).float().cpu()  # (num models) x n {0,1} binary array of GDE predictions
+        print(f'Computed agreeement between {len(models)} models, Shape = {agreement.shape}')
+        scores = torch.mean(agreement, dim=0)  #Size n
+        print(f'Final agreement scores shape = {scores.shape}')
+        return scores
+
+def compute_ts(val_logits, val_gtlabels, test_logits):
+    val_logits = val_logits.cpu().data.numpy()
+    val_gtlabels = val_gtlabels.cpu().data.numpy()
+    test_logits = test_logits.cpu().data.numpy()
+
+    tscaler = TemperatureScaling(maxiter=300, solver='SLSQP')
+    fit_res = tscaler.fit(np.array(val_logits), np.array(val_gtlabels))
+    
+    val_scores = tscaler.predict(np.array(val_logits))
+    test_scores = tscaler.predict(np.array(test_logits))
+    
+    val_msp = val_scores.max(1)
+    test_msp = test_scores.max(1)
+
+    return val_msp, test_msp
+
+
+
+
 def get_score(score, logits, ref_logits=None):
     #NOTE: Scores have their sign appropraitely modified to reflect the fact that ID data always has higher scores than OOD data
     if score == 'msp':
@@ -43,7 +166,9 @@ def get_score(score, logits, ref_logits=None):
         # ref_logits is the logits of the PIM model
         ref_probs = F.softmax(ref_logits, dim=1)
         scores = -F.cross_entropy(logits, ref_probs, reduction='none')
-        scores = -F.cross_entropy(logits, ref_probs, reduction='none')
+    elif score == 'max_logit':
+        scores = torch.max(logits, dim=1)[0]   #Returns a tuple (scores, indices)
+    
     return scores
 
 def calc_gen_threshold(scores, logits, labels, name='classifier'):
