@@ -40,7 +40,7 @@ import matplotlib.pyplot as plt
 from train_task_distillation import get_dataset, get_CLIP_text_encodings, build_classifier
 
 from models.mapping import TaskMapping, MultiHeadedAttentionSimilarity, MultiHeadedAttention, print_layers, MeanAggregator, MaxAggregator
-from utils_proj import SimpleDINOLoss, compute_accuracy, compute_similarities, CutMix, MyAugMix, find_normalization_parameters, get_score, calc_gen_threshold, calc_accuracy_from_scores
+from utils_proj import SimpleDINOLoss, compute_accuracy, compute_similarities, CutMix, MyAugMix, find_normalization_parameters, get_score, calc_gen_threshold, calc_accuracy_from_scores, compute_gde_scores, compute_ts
 from models.cluster import ClusterCreater
 from sklearn.metrics import confusion_matrix, matthews_corrcoef, roc_auc_score, roc_curve
 CLIP_LOGIT_SCALE = 100
@@ -254,6 +254,7 @@ def evaluate_pim(data_loader, class_attributes_embeddings, class_attribute_promp
     pim_model.eval()
     aggregator.eval()
     classifier.eval()
+    clip_model.eval()
     total_loss = 0
     total_task_model_acc = 0
     total_pim_acc = 0
@@ -405,7 +406,18 @@ def main(args):
         # Evaluating task model
         print('Evaluating on Validation Data')
         val_task_model_acc, val_labels_list, val_logits_list, val_probs_list = evaluate_classifier(val_loader, classifier, device=device)
-        val_scores = get_score(args.score, val_logits_list)
+        if args.score in ['msp', 'pe', 'energy', 'max_logit']:
+            val_scores = get_score(args.score, val_logits_list)
+        elif args.score == 'gde':
+            seed_list = [11,21,31,52]
+            models = []
+            for s in seed_list:
+                models.append(copy.deepcopy(classifier))
+                models[-1].load_state_dict(torch.load(f'logs/Waterbirds/failure_estimation/sketch/resnet18/classifier_seed{s}/best_checkpoint.pth',map_location=device)['model_state_dict'])
+                models[-1].eval()
+            val_scores = compute_gde_scores(models, val_loader, device)
+        elif args.score == 'ts':
+            val_scores, tscaler = compute_ts(val_logits_list, val_labels_list, val_logits_list, tscaler=None, mode='val')
         threshold = calc_gen_threshold(val_scores, val_logits_list, val_labels_list, name='classifier')
 
         # Just for verification
@@ -414,7 +426,12 @@ def main(args):
         # Repeating this for test data
         print('Evaluating on Test Data')
         test_task_model_acc, test_labels_list, test_logits_list, test_probs_list = evaluate_classifier(test_loader, classifier, device=device)
-        test_scores = get_score(args.score, test_logits_list)
+        if args.score in ['msp', 'pe', 'energy', 'max_logit']:
+            test_scores = get_score(args.score, test_logits_list)
+        elif args.score == 'gde':
+            test_scores = compute_gde_scores(models, test_loader, device)
+        elif args.score == 'ts':
+            test_scores = compute_ts(test_logits_list, test_labels_list, test_logits_list, tscaler, mode='test')
         estimated_test_acc, test_estimated_success_failure_idx = calc_accuracy_from_scores(test_scores, threshold)
 
         print(f'Score = {args.score}')
@@ -479,6 +496,7 @@ def main(args):
             "test_auroc":test_auroc
         }
         if args.eval_dataset == 'NICOpp':
+            d = args.classifier_checkpoint_path.split('/')[3]
             results['train_domain_name'] = d
 
         # Save it as a CSV file
@@ -838,7 +856,7 @@ python failure_detection_eval.py \
 --attributes_path clip-dissect/Waterbirds_core_concepts.json \
 --attributes_embeddings_path data/Waterbirds/Waterbirds_attributes_CLIP_ViT-B_32_text_embeddings.pth \
 --classifier_name resnet18 \
---classifier_checkpoint_path logs/Waterbirds/resnet18/classifier/checkpoint_99.pth \
+--classifier_checkpoint_path logs/Waterbirds/failure_estimation/sketch/resnet18/classifier_seed11/checkpoint_99.pth \
 --use_imagenet_pretrained \
 --attribute_aggregation max \
 --clip_model_name ViT-B/32 \
@@ -857,8 +875,8 @@ python failure_detection_eval.py \
 --augmix_prob 0.2 \
 --cutmix_prob 0.2 \
 --resume_checkpoint_path logs/Waterbirds/resnet18/mapper/_agg_max_bs_512_lr_0.001_augmix_prob_0.2_cutmix_prob_0.2_scheduler_warmup_epoch_0_layer_model.layer1/pim_weights_best.pth \
---method pim \
---score cross_entropy \
+--method baseline \
+--score gde \
 # --eval_dataset cifar100c \
 # --filename cifar100c.log
 
@@ -938,7 +956,7 @@ python failure_detection_eval.py \
 --num_nodes 1 \
 --augmix_prob 0.2 \
 --cutmix_prob 0.2 \
---resume_checkpoint_path /usr/workspace/KDML/2024/failure_detect/logs/pacs/resnet18/mapper/_agg_max_bs_512_lr_0.001_augmix_prob_0.2_cutmix_prob_0.2_scheduler_warmup_epoch_0_layer_model.layer1/pim_weights_best.pth \
+--resume_checkpoint_path /usr/workspace/KDML/2024/failure_detect/logs/pacs/resnet18/mapper/_agg_max_bs_512_lr_0.001_augmix_prob_0.2_cutmix_prob_0.2_scheduler_warmup_epoch_0_layer_model.layer1/pim_weights_final.pth \
 --method pim \
 --score cross_entropy \
 --domain_name sketch \
