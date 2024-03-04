@@ -14,11 +14,21 @@ from torchvision.transforms import v2
 from torchvision.transforms import AugMix
 from torchvision.transforms import Normalize, Resize
 import random
-import tqdm
+from tqdm import tqdm
 
 from data_utils.cifar10_data import get_CIFAR10_dataloader
 from scipy.optimize import minimize 
 from sklearn.metrics import log_loss
+
+def progbar_wrapper(iterable, total, **kwargs):
+    """Wraps the iterable with tqdm for global rank zero.
+
+    Args:
+        iterable: the iterable to wrap with tqdm
+        total: the total length of the iterable, necessary in case the number of batches was limited.
+
+    """
+    return tqdm(iterable, total=total, **kwargs)
 
 
 class TemperatureScaling():
@@ -99,11 +109,11 @@ def compute_energy(logits, T=1.0):
     return -T*torch.logsumexp(logits/T, dim=1)
 
 
-def compute_gde_scores(models, loader, device='cuda', mode='val'):
+def compute_gde_scores(models, loader, device='cuda'):
     # Assuming models are passed in eval mode
     with torch.no_grad():
-        prob_list = [[] for  _ in len(models)]
-        pbar = tqdm(loader, total=len(loader), desc=f"GDE")
+        prob_list = [[] for  _ in range(len(models))]
+        pbar = progbar_wrapper(loader, len(loader), desc='GDE')
         for i, (x, y, _) in enumerate(pbar):
             x = x.to(device)
             y = y.to(device)
@@ -135,21 +145,21 @@ def compute_gde_scores(models, loader, device='cuda', mode='val'):
         print(f'Final agreement scores shape = {scores.shape}')
         return scores
 
-def compute_ts(val_logits, val_gtlabels, test_logits):
-    val_logits = val_logits.cpu().data.numpy()
-    val_gtlabels = val_gtlabels.cpu().data.numpy()
-    test_logits = test_logits.cpu().data.numpy()
-
-    tscaler = TemperatureScaling(maxiter=300, solver='SLSQP')
-    fit_res = tscaler.fit(np.array(val_logits), np.array(val_gtlabels))
-    
-    val_scores = tscaler.predict(np.array(val_logits))
-    test_scores = tscaler.predict(np.array(test_logits))
-    
-    val_msp = val_scores.max(1)
-    test_msp = test_scores.max(1)
-
-    return val_msp, test_msp
+def compute_ts(val_logits, val_gtlabels, test_logits, tscaler=None, mode='val'):
+    if mode == 'val':
+        val_logits = val_logits.cpu().data.numpy()
+        val_gtlabels = val_gtlabels.cpu().data.numpy()
+        tscaler = TemperatureScaling(maxiter=300, solver='SLSQP')
+        fit_res = tscaler.fit(np.array(val_logits), np.array(val_gtlabels))
+        val_scores = tscaler.predict(np.array(val_logits))
+        val_msp = val_scores.max(1)[0]
+        print(f'Val Scores shape = {val_msp.shape}')
+        return val_msp, tscaler
+    else:
+        test_logits = test_logits.cpu().data.numpy()
+        test_scores = tscaler.predict(np.array(test_logits))
+        test_msp = test_scores.max(1)[0]
+        return test_msp
 
 
 
