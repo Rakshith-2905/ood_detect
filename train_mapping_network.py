@@ -62,8 +62,9 @@ def get_save_dir(args):
 
     if args.classifier_checkpoint_path:
         save_dir = os.path.dirname(os.path.dirname(args.classifier_checkpoint_path))
-        save_dir = os.path.join(save_dir, "pim", att_name, projector_name)
-    save_dir = os.path.join(args.save_dir, args.dataset_name, args.classifier_name, att_name, projector_name)
+        save_dir = os.path.join(save_dir, att_name, projector_name)
+    else:
+        save_dir = os.path.join(args.save_dir, args.dataset_name, args.classifier_name, att_name, projector_name)
     
     save_dir_details = f"{args.prefix}_agg_{args.attribute_aggregation}_bs_{args.batch_size}_lr_{args.learning_rate}_augmix_prob_{args.augmix_prob}_cutmix_prob_{args.cutmix_prob}_scheduler_warmup_epoch_{args.warmup_epochs}_layer_{args.task_layer_name}"
 
@@ -87,6 +88,8 @@ def train_one_epoch(data_loader, class_attributes_embeddings, class_attribute_pr
     # Set the models to train mode
     pim_model.train()
     aggregator.train()
+    clip_model.eval()
+    classifier.eval()
 
     total_loss = 0
     total_task_model_acc = 0
@@ -599,6 +602,42 @@ python train_mapping_network.py \
 
 python train_mapping_network.py \
 --data_dir './data' \
+--dataset_name Waterbirds \
+--num_classes 2 \
+--batch_size 128 \
+--img_size 224 \
+--seed 42 \
+--task_layer_name model.layer1 \
+--cutmix_alpha 1.0 \
+--warmup_epochs 0 \
+--task_failure_discrepancy_weight 2.0 \
+--task_success_discrepancy_weight 1.5 \
+--clip_KL_weight 0.5 \
+--attributes_path clip-dissect/Waterbirds_core_concepts.json \
+--attributes_embeddings_path data/Waterbirds/Waterbirds_attributes_CLIP_ViT-B_32_text_embeddings.pth \
+--classifier_name resnet18 \
+--classifier_checkpoint_path logs/Waterbirds/resnet18/classifier/checkpoint_99.pth \
+--use_imagenet_pretrained \
+--attribute_aggregation mean \
+--clip_model_name ViT-B/32 \
+--prompt_path data/Waterbirds/Waterbirds_CLIP_ViT-B_32_text_embeddings.pth \
+--num_epochs 200 \
+--optimizer adamw \
+--learning_rate 1e-3 \
+--aggregator_learning_rate 1e-3 \
+--scheduler MultiStepLR \
+--val_freq 1 \
+--save_dir ./logs \
+--prefix 'clip_KL_loss' \
+--vlm_dim 512 \
+--num_gpus 2 \
+--num_nodes 1 \
+--augmix_prob 0.2 \
+--cutmix_prob 0.2 
+
+
+python train_mapping_network.py \
+--data_dir './data' \
 --dataset_name CelebA \
 --num_classes 2 \
 --batch_size 128 \
@@ -614,7 +653,7 @@ python train_mapping_network.py \
 --classifier_name resnet50 \
 --classifier_checkpoint_path logs/CelebA/failure_estimation/photo/resnet50/classifier/checkpoint_19.pth \
 --use_imagenet_pretrained \
---attribute_aggregation mean \
+--attribute_aggregation max \
 --clip_model_name ViT-B/32 \
 --prompt_path data/CelebA/CelebA_CLIP_ViT-B_32_text_embeddings.pth \
 --num_epochs 200 \
@@ -671,12 +710,13 @@ python train_mapping_network.py \
 '''
 
 '''
+
 python train_mapping_network.py \
 --data_dir './data' \
---dataset_name pacs \
---domain_name photo \
+--dataset_name pacs_shifted \
+--domain_name sketch \
 --num_classes 7 \
---batch_size 512 \
+--batch_size 256 \
 --img_size 224 \
 --seed 42 \
 --task_layer_name model.layer1 \
@@ -687,9 +727,9 @@ python train_mapping_network.py \
 --attributes_path clip-dissect/pacs_core_concepts.json \
 --attributes_embeddings_path data/pacs/pacs_core_attributes_CLIP_ViT-B_32_text_embeddings.pth \
 --classifier_name resnet18 \
---classifier_checkpoint_path logs/pacs-photo/resnet18/classifier/checkpoint_199.pth \
+--classifier_checkpoint_path logs/pacs-sketch/resnet18/classifier/checkpoint_199.pth \
 --use_imagenet_pretrained \
---attribute_aggregation mean \
+--attribute_aggregation max \
 --clip_model_name ViT-B/32 \
 --prompt_path data/pacs/pacs_CLIP_ViT-B_32_text_embeddings.pth \
 --num_epochs 100 \
