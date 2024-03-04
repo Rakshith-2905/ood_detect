@@ -213,7 +213,7 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     # Set seed
-    torch.manual_seed(args.seed)
+    # torch.manual_seed(args.seed)
     
     main(args)
 
@@ -228,6 +228,6 @@ python test_classifier.py \
         --batch_size 512 \
         --seed 42 \
         --classifier_model resnet18 \
-        --checkpoint_path logs/Waterbirds/failure_estimation/None/resnet18/classifier/checkpoint_30.pth
+        --checkpoint_path logs/Waterbirds/resnet18/classifier_seed31/checkpoint_99.pth
 
 """

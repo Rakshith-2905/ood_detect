@@ -235,11 +235,11 @@ def main(args):
     if args.optimizer == 'adam':
         optimizer = optim.Adam(model.parameters(), lr=args.learning_rate)
     elif args.optimizer == 'sgd':
-        optimizer = optim.SGD(model.parameters(), lr=args.learning_rate, momentum=0.9, weight_decay=5e-4)
+        optimizer = optim.SGD(model.parameters(), lr=args.learning_rate, momentum=0.9)
     
     # Learning rate scheduler
     if args.scheduler == 'MultiStepLR':
-        scheduler = optim.lr_scheduler.MultiStepLR(optimizer, milestones=[60, 120, 160], gamma=0.2)
+        scheduler = optim.lr_scheduler.MultiStepLR(optimizer, milestones=[30, 60, 90], gamma=0.1)
     elif args.scheduler == 'cosine':
         scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=100)
     else:
@@ -382,6 +382,7 @@ if __name__ == "__main__":
 
     # Set seed
     seed_everything(args.seed)
+    # torch.manual_seed(42)
     
     main(args)
 
@@ -390,15 +391,14 @@ if __name__ == "__main__":
 Sample command to run:
 python train_classifier.py \
         --dataset_name Waterbirds \
-        --domain sketch \
         --data_path ./data \
         --image_size 224 \
-        --batch_size 512 \
-        --seed 21 \
-        --num_epochs 200 \
+        --batch_size 32 \
+        --seed 41 \
+        --num_epochs 100 \
         --optimizer sgd \
         --scheduler MultiStepLR \
-        --learning_rate 0.01 \
+        --learning_rate 0.001 \
         --classifier_model resnet18
 
 """
