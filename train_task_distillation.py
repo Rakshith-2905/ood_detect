@@ -71,6 +71,10 @@ def get_dataset(data_name, train_transforms, test_transforms, clip_transform, da
         train_dataset,val_dataset, test_dataset, failure_dataset, class_names =  get_pacs_dataloader(domain_name, batch_size=512, data_dir=data_dir, 
                                                                                 train_transform=None, test_transform=None, clip_transform=clip_transform, 
                                                                                 return_dataset=True, use_real=True)
+    elif data_name == 'pacs_shifted':
+        train_dataset,val_dataset, test_dataset, failure_dataset, class_names =  get_pacs_dataloader(domain_name, batch_size=512, data_dir=data_dir, 
+                                                                                train_transform=None, test_transform=None, clip_transform=clip_transform, 
+                                                                                return_dataset=True, use_real=False)
 
     elif data_name == 'cifar10':
         train_dataset, val_dataset, test_dataset, failure_dataset, class_names = get_CIFAR10_dataloader(data_dir='./data',    
