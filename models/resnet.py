@@ -3,7 +3,7 @@ ssl._create_default_https_context = ssl._create_unverified_context
 import torch
 import torch.nn as nn
 import torchvision
-from torchvision.models import resnet18, resnet34, resnet50, resnet101, resnet152, swin_b, vit_b_16
+from torchvision.models import resnet18, resnet34, resnet50, resnet101, resnet152, swin_b, vit_b_16, resnext50_32x4d, resnext101_32x8d
 from torchvision.models.segmentation import deeplabv3_resnet50, deeplabv3_resnet101, DeepLabV3_ResNet50_Weights, DeepLabV3_ResNet101_Weights
 from torchvision.models.segmentation import fcn_resnet50, fcn_resnet101, FCN_ResNet50_Weights, FCN_ResNet101_Weights
 import clip
@@ -169,6 +169,8 @@ class CustomResNet(nn.Module):
             'resnet101': resnet101,
             'resnet152': resnet152,
             'resnet50_v2':resnet50,
+            'resnext50_32x4d':resnext50_32x4d,
+            
         }
 
         self.train_transform = transforms.Compose([
