@@ -51,7 +51,7 @@ def get_attributes(class_name, previous_attributes, PROMPT):
 
 def main():
     
-    data_name = 'CelebA_core'
+    data_name = 'cats_dogs_core'
     # Read the prompt template from file json
     with open('prompt_templates.json', 'r') as f:
         prompt_template = json.load(f)[data_name]
@@ -60,9 +60,11 @@ def main():
     # with open('pacs_labels.json', 'r') as f:
     #     classes = json.load(f)
 
-    with open('CelebA_labels.json', 'r') as f:
-        classes = json.load(f)
-    # print(classes)
+    # with open('CelebA_labels.json', 'r') as f:
+    #     classes = json.load(f)
+
+    classes = ['cat', 'dog']
+    print(classes)
     # # Load the classes from the text file
     # with open('data/domainnet_v1.0/class_names.txt', 'r') as f:
     #     classes = f.read().splitlines()  
