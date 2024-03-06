@@ -18,7 +18,7 @@ from data_utils.cifar10_data import get_CIFAR10_dataloader
 from data_utils.celebA_dataset import get_celebA_dataloader
 from data_utils.pacs_dataset import get_pacs_dataloader
 from data_utils.office_home_dataset import OfficeHomeDataset, get_office_home_dataloader
-from data_utils.cats_dogs_dataset import CatsDogsTwoTransforms, get_cat_dog_loaders
+from data_utils.cats_dogs_dataset import CatsDogsTwoTransforms, get_cats_dogs_loaders
 
 from train_task_distillation import get_dataset, build_classifier
 from data_utils import subpop_bench
@@ -137,7 +137,7 @@ def get_dataloaders(dataset_name, domain_name=None,
                                                 return_dataset=False, use_real=False)
         
     elif dataset_name == "cats_dogs":
-        loaders, class_names = get_cat_dog_loaders(batch_size=batch_size, data_dir=data_dir, 
+        loaders, class_names = get_cats_dogs_loaders(batch_size=batch_size, data_dir=data_dir, 
                                                    train_transform=None, test_transform=None, clip_transform=None, 
                                                    return_dataset=False)
     elif dataset_name == "office_home":

@@ -44,6 +44,7 @@ from data_utils.celebA_dataset import FilteredCelebADataset, get_celebA_datatran
 from data_utils.pacs_dataset import PACSDataset, get_pacs_dataloader
 from data_utils import subpop_bench
 from data_utils.imagenet_dataset import ImageNetTwoTransforms, get_imagenet_loaders
+from data_utils.cats_dogs_dataset import CatsDogsTwoTransforms, get_cats_dogs_loaders
 
 from models.resnet import CustomClassifier, CustomResNet, CustomFeatureModel
 from models.projector import ProjectionHead
@@ -61,6 +62,10 @@ def get_dataset(data_name, train_transforms, test_transforms, clip_transform, da
         train_dataset, val_dataset, test_dataset, failure_dataset, class_names = get_imagenet_loaders(batch_size=512, data_dir=data_dir,
                                                                     train_transform=train_transforms, test_transform=test_transforms, clip_transform=clip_transform,
                                                                     subsample_trainset=False, return_dataset=True, data_type=data_name)
+    elif data_name == 'cats_dogs':
+        train_dataset, val_dataset, test_dataset, failure_dataset, class_names = get_cats_dogs_loaders(data_dir='./data',    
+                                                                    train_transform=None, test_transform=None, clip_transform=clip_transform,
+                                                                    return_dataset=True)
     
     elif data_name == 'domainnet':
         train_dataset, val_dataset, test_dataset, failure_dataset, class_names = get_domainnet_loaders(domain_name=domain_name, data_dir=data_dir, 

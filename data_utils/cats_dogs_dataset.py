@@ -53,7 +53,7 @@ class CatsDogsTwoTransforms(ImageFolder):
             return primary_image, target
         return primary_image, target, secondary_image
     
-def get_cat_dog_loaders(batch_size=512, data_dir='./data',    
+def get_cats_dogs_loaders(batch_size=512, data_dir='./data',    
                         train_transform=None, test_transform=None, clip_transform=None, 
                         return_dataset=False):
     

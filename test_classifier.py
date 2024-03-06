@@ -221,13 +221,13 @@ if __name__ == "__main__":
 """
 Sample command to run:
 python test_classifier.py \
-        --dataset_name Waterbirds \
+        --dataset_name cats_dogs \
         --domain ''\
         --data_path ./data \
         --image_size 224 \
         --batch_size 512 \
         --seed 42 \
         --classifier_model resnet18 \
-        --checkpoint_path logs/Waterbirds/resnet18/classifier_seed31/checkpoint_99.pth
+        --checkpoint_path logs/cats_dogs/resnet18/classifier_seed42/checkpoint_99.pth
 
 """
