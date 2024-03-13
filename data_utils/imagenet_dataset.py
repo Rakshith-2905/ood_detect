@@ -41,7 +41,7 @@ class ImageNetTwoTransforms(ImageFolder):
 
     def __getitem__(self, index):
         image, label = super(ImageNetTwoTransforms, self).__getitem__(index)
-        print(label)
+
         primary_image = self.transform1(image) if self.transform1 else image
         secondary_image = self.transform2(image) if self.transform2 else image
         if self.transform2 is None:
@@ -52,6 +52,23 @@ def get_imagenet_loaders(batch_size=512, data_dir='./data',
                         train_transform=None, test_transform=None, clip_transform=None, 
                         data_type='imagenet', subsample_trainset=True, return_dataset=False):
     
+    if train_transform is None:
+        train_transform = transforms.Compose([
+            transforms.Resize(256),
+            transforms.RandomCrop(224),
+            transforms.RandomHorizontalFlip(),
+            transforms.ToTensor(),
+            transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
+        ])
+    if test_transform is None:
+        test_transform = transforms.Compose([
+            transforms.Resize(256),
+            transforms.CenterCrop(224),
+            transforms.ToTensor(),
+            transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
+        ])
+
+
     if data_type == 'imagenet':
         if os.path.exists(os.path.join(data_dir, 'imagenet', 'train')):
 
@@ -109,7 +126,7 @@ def get_imagenet_loaders(batch_size=512, data_dir='./data',
 
 if __name__ == "__main__":
 
-    loaders, class_names = get_imagenet_loaders(batch_size=512, data_dir='./data',
+    loaders, class_names = get_imagenet_loaders(batch_size=512, data_dir='/usr/workspace/thopalli/full_imagenet',
                                                 train_transform=None, test_transform=None, clip_transform=None,
                                                 data_type='imagenet', subsample_trainset=False, return_dataset=False)
     print(len(loaders['train'].dataset))

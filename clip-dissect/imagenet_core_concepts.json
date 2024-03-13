@@ -267,17 +267,17 @@
         "slate-colored",
         "dark plumage"
     ],
-    "kite": [
-        "high-flying antics",
-        "colorful design",
-        "aerodynamic shape",
-        "windy dance",
-        "dynamic movement",
-        "flying high",
-        "swirling patterns",
-        "colorful patterns",
-        "flying tether",
-        "fluttering tails"
+    "kite (bird of prey)": [
+        "Sharp beak",
+        "Long wings",
+        "Forked tail",
+        "Mottled plumage",
+        "Hooked talons",
+        "Rounded head",
+        "Distinctive markings",
+        "Broad wingspan",
+        "Elegant flight",
+        "Keen eyesight"
     ],
     "bald eagle": [
         "powerful flyer",
@@ -1741,19 +1741,18 @@
         "camouflaged bird",
         "dagger bill"
     ],
-    "crane": [
+    "crane bird": [
         "towering grace",
         "striking plumage",
         "graceful wings",
         "long legs",
-        "towering stature",
         "tall stature",
         "graceful movements",
         "long neck",
         "tall elegance",
         "graceful neck",
         "elegant mover",
-        "towering height"
+        "white body"
     ],
     "limpkin": [
         "mottled plumage",
@@ -3505,14 +3504,24 @@
         "arctic guardian",
         "majestic snow"
     ],
-    "red wolf": [
+    "red wolf or maned wolf": [
         "yellow eyes",
         "black-tipped ears",
         "pointed ears",
         "slightly slanted eyes",
         "white underbelly",
         "mottled coat",
-        "rusty fur"
+        "rusty fur",
+        "Long legs",
+        "Reddish fur",
+        "Black mane",
+        "Slender body",
+        "Large ears",
+        "Bushy tail",
+        "White markings",
+        "Black-tipped tail",
+        "Distinctive facial markings",
+        "Golden eyes"
     ],
     "coyote": [
         "bushy tail",
@@ -6695,6 +6704,18 @@
         "soft cushioning",
         "suspended hammock"
     ],
+    "construction crane":["heavy-duty frame",
+    "towering structure",
+    "hydraulic arm",
+    "steel boom",
+    "rotating cab",
+    "extendable jib",
+    "lifting arm",
+    "counterweight system",
+    "swiveling base",
+    "telescopic boom"
+    ],
+
     "crash helmet": [
         "impact-resistant shell",
         "streamlined design",
@@ -8275,20 +8296,31 @@
         "red flag",
         "metal box"
     ],
-    "maillot": [
-        "form-fitting design",
-        "sleeveless",
-        "sleek silhouette",
-        "high-cut",
-        "figure-hugging",
-        "skin-tight",
-        "form-fitting silhouette",
-        "sleek design",
-        "form-fitting",
-        "one-piece",
-        "bold colors",
-        "bold graphic print",
-        "high-cut neckline"
+    "tights": [
+        "Stretchy fabric",
+        "Opaque finish",
+        "Ribbed texture",
+        "High-rise waist",
+        "Patterned design",
+        "Seamless construction",
+        "Compression fit",
+        "Elastic waistband",
+        "Mesh paneling",
+        "Bold colors"
+    ],
+    "maillot_tanksuit": [
+        
+        "Deep neckline",
+        "High-cut leg",
+        "Low-back design",
+        "Mesh detailing",
+        "Color-blocked pattern",
+        "Strapless silhouette",
+        "Ribbed texture",
+        "Sleek profile",
+        "Contrast stitching",
+        "Adjustable straps"
+        
     ],
     "manhole cover": [
         "heavy-duty material",
@@ -8780,19 +8812,17 @@
         "protective barrier",
         "tapered end"
     ],
-    "nail": [
-        "painted tips",
-        "polished tips",
-        "natural shape",
-        "bright color",
-        "cuticle line",
-        "shiny surface",
-        "oval shape",
-        "shiny finish",
-        "bold colors",
-        "intricate designs",
-        "shiny lacquer",
-        "glossy finish"
+    "metal nail": [
+        "Pointed tip",
+        "Smooth surface",
+        "Shiny finish",
+        "Ribbed shaft",
+        "Silver color",
+        "Flat head",
+        "Sharp point",
+        "Sturdy construction",
+        "Rust-resistant coating",
+        "Spiral grooves"
     ],
     "neck brace": [
         "supportive band",
