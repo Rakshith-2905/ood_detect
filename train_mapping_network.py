@@ -564,6 +564,41 @@ if __name__ == "__main__":
 '''
 Example usage:
 
+
+python train_mapping_network.py \
+--data_dir './data' \
+--dataset_name cats_dogs \
+--num_classes 2 \
+--batch_size 512 \
+--img_size 224 \
+--seed 42 \
+--task_layer_name model.layer1 \
+--cutmix_alpha 1.0 \
+--warmup_epochs 10 \
+--task_failure_discrepancy_weight 2.0 \
+--task_success_discrepancy_weight 1.5 \
+--attributes_path clip-dissect/cats_dogs_core_concepts.json \
+--attributes_embeddings_path data/cats_dogs/cats_dogs_attributes_CLIP_ViT-B_32_text_embeddings.pth \
+--classifier_name resnet18 \
+--classifier_checkpoint_path logs/cats_dogs/resnet18/classifier/checkpoint_99.pth \
+--use_imagenet_pretrained \
+--attribute_aggregation max \
+--clip_model_name ViT-B/32 \
+--prompt_path data/cats_dogs/cats_dogs_CLIP_ViT-B_32_text_embeddings.pth \
+--num_epochs 200 \
+--optimizer adamw \
+--learning_rate 1e-3 \
+--aggregator_learning_rate 1e-3 \
+--scheduler MultiStepLR \
+--val_freq 1 \
+--save_dir ./logs \
+--prefix '' \
+--vlm_dim 512 \
+--num_gpus 2 \
+--num_nodes 1 \
+--augmix_prob 0.2 \
+--cutmix_prob 0.2 
+
 python train_mapping_network.py \
 --data_dir './data' \
 --dataset_name Waterbirds \

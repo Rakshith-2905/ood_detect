@@ -53,7 +53,7 @@ class CatsDogsTwoTransforms(ImageFolder):
             return primary_image, target
         return primary_image, target, secondary_image
     
-def get_cat_dog_loaders(batch_size=512, data_dir='./data',    
+def get_cats_dogs_loaders(batch_size=512, data_dir='./data',    
                         train_transform=None, test_transform=None, clip_transform=None, 
                         return_dataset=False):
     
@@ -164,11 +164,20 @@ if __name__ == "__main__":
 
 
     # Split the dataset into train and test
-    split_dataset()
+    # split_dataset()
 
-    loaders, class_names = get_cat_dog_loaders(return_dataset=False)
-    print(len(loaders['train'].dataset))
-    print(len(loaders['val'].dataset))
-    print(len(loaders['failure'].dataset))
-    print(len(loaders['test'].dataset))
-    print(len(class_names))
+    # loaders, class_names = get_cat_dog_loaders(return_dataset=False)
+    # print(len(loaders['train'].dataset))
+    # print(len(loaders['val'].dataset))
+    # print(len(loaders['failure'].dataset))
+    # print(len(loaders['test'].dataset))
+    # print(len(class_names))
+
+    data_dir = os.path.join('./data', 'cats_dogs', 'PetImages')
+    temp_train_dataset = CatsDogsTwoTransforms(root=data_dir, split='train', transform1=None,
+                                        transform2=None, imbalance_ratio=0.3)
+    
+
+    data_dir = os.path.join('./data', 'cats_dogs', 'PetImages')
+    temp_train_dataset = CatsDogsTwoTransforms(root=data_dir, split='test', transform1=None,
+                                        transform2=None, imbalance_ratio=0.99)

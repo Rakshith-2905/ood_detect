@@ -3,7 +3,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from matplotlib import pyplot as plt
-from sklearn.metrics import confusion_matrix
+from sklearn.metrics import confusion_matrix, roc_auc_score, roc_curve
 import seaborn as sns
 
 import numpy as np
@@ -108,7 +108,6 @@ def compute_msp(p):
 def compute_energy(logits, T=1.0):
     return -T*torch.logsumexp(logits/T, dim=1)
 
-
 def compute_gde_scores(models, loader, device='cuda'):
     # Assuming models are passed in eval mode
     with torch.no_grad():
@@ -161,8 +160,17 @@ def compute_ts(val_logits, val_gtlabels, test_logits, tscaler=None, mode='val'):
         test_msp = test_scores.max(1)[0]
         return test_msp
 
+def compute_auroc_fpr(true_labels, scores):
+    #FPR@TPR95
+    TPR_LEVEL=0.95
+    fpr, tpr, thresholds = roc_curve(true_labels, scores, pos_label=1)
+    t = thresholds[tpr>=TPR_LEVEL][0]
+    t_idx = np.where(thresholds==t)[0]
+    fpr_at_tpr = fpr[t_idx]
 
-
+    #AUROC score
+    auroc = roc_auc_score(true_labels, scores)
+    return fpr_at_tpr[0], auroc
 
 def get_score(score, logits, ref_logits=None):
     #NOTE: Scores have their sign appropraitely modified to reflect the fact that ID data always has higher scores than OOD data

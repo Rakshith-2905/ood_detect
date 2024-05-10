@@ -52,7 +52,7 @@ def kl_divergence_pytorch(p, q):
     return (p * (p / q).log()).sum(dim=1)
 
 class PIM_Explanations(nn.Module):
-    def __init__(self, attribute_names_per_class, num_attributes_per_class, learning_rate=0.01, num_optimization_steps=1000, aggregation_fn=None):
+    def __init__(self, attribute_names_per_class, num_attributes_per_class, learning_rate=0.01, num_optimization_steps=8000, aggregation_fn=None):
         super().__init__()
 
         """
@@ -119,8 +119,6 @@ class PIM_Explanations(nn.Module):
                 reference_class = reference_classes[i]
 
             
-            import pdb; pdb.set_trace()
-            
             # Find index of the reference class
             reference_class_idx = (ranked_classes == reference_class).nonzero(as_tuple=True)[0].item()
 
@@ -131,6 +129,7 @@ class PIM_Explanations(nn.Module):
 
             # Iterate over each class that ranks higher than the true class
             for rank, top_class in enumerate(ranked_classes):
+                print(rank, reference_class_idx)
                 if rank >= reference_class_idx:  # Skip if not ranked above the true class
                     break
 
@@ -160,7 +159,7 @@ class PIM_Explanations(nn.Module):
                     # loss_weights = F.relu(weights_sig.min()) + F.relu(1 - weights_sig.max())
                     loss_weights = torch.norm(weights_sig, p=1)
 
-                    loss += 0.01 * loss_weights
+                    loss += 0.08* loss_weights
 
 
                     # Perform gradient descent
@@ -176,7 +175,6 @@ class PIM_Explanations(nn.Module):
                 # Store the optimized weights for the top class
                 optimized_attribute_weights[top_class] = weights_sig.detach()
             optimized_attribute_weights_batch.append(optimized_attribute_weights)
-
         return optimized_attribute_weights_batch
 
     def match_probabilities_to_task_model(self, pim_attribute_dict, task_model_logits, num_attributes_per_class, learning_rate=0.01, num_optimization_steps=50, aggregation_fn=None):
@@ -242,6 +240,17 @@ class PIM_Explanations(nn.Module):
                 # Calculate the KL divergence to match the task model's probabilities of this instance
                 loss = kl_divergence_pytorch(task_model_probs, adjusted_probs)
 
+                loss_weights=0
+                for weights_sig in weight_params_sig:
+                    loss_weights = torch.norm(weights_sig, p=1)
+
+                # loss_weights=0
+                # for weights_sig in weight_params_sig:
+                #     loss_weights += torch.abs(weights_sig.sum() - 1)
+                    
+
+                loss += 1 * loss_weights
+
                 # Perform gradient descent
                 loss.backward()
                 optimizer.step()
@@ -253,7 +262,8 @@ class PIM_Explanations(nn.Module):
                 optimized_attribute_weights[i] = weights.detach()
             
             optimized_attribute_weights_batch.append(optimized_attribute_weights)
-
+            print(task_model_logits, adjusted_logits)
+            print(task_model_probs, adjusted_probs)
         return optimized_attribute_weights_batch
 
     def identify_topk_candidates(self, attribute_weights, reference_classes, failed_predicted_logits, k):
@@ -283,21 +293,38 @@ class PIM_Explanations(nn.Module):
                 # If the weights are all ones, skip the class
                 if torch.all(weights == 1):
                     continue
-                
+
+
                 class_name = self.class_names[class_idx]
                 identified_attributes[class_name] = {
                     'attributes': self.attribute_names_per_class[class_name],
                     'weights': attribute_weights[i][class_idx]  
                 }
+    
+                # If the current attribute class same the sucefully predicted PIM class, we want the names of the attributes that we killed (least weights)
+                if class_idx == reference_classes[i] or args.explanation_type == 'logit_flip':
+                    w, idx = torch.topk(weights, k, largest=False, dim=0)
+                else:
+                    # Else we want the names of the attributes that was left 
+                    w, idx = torch.topk(weights, k, largest=True, dim=0)
+
+                # # Get the top-k attributes for the current class
+                # w, idx = torch.topk(attribute_weights[i][class_idx], k, largest=False, dim=0)  # w: [k], idx: [k]
+
+                idx = idx.cpu().numpy()
+                identified_attributes[class_name] = {
+                    'attributes': [self.attribute_names_per_class[class_name][i] for i in idx],  # attribute names with -top-k weights
+                    'weights': w  # top-k weights
+                }
 
             identified_attributes_per_instance.append(identified_attributes)
         
         return identified_attributes_per_instance
-
+    
     def plot_explanations(self, failed_images, identified_attributes_per_instance,
-                        true_class_names, pim_class_names, predicted_class_names, max_description_length=800, 
-                        save_path=None, choice="KLD"):
-        
+                        true_class_names, pim_class_names, predicted_class_names, 
+                        max_description_length=800, save_path=None, choice="KLD"):
+
         failed_images = self.inverse_normalization(failed_images)
         # Convert to uint8
         failed_images = (failed_images * 255.).type(torch.uint8)
@@ -333,17 +360,18 @@ class PIM_Explanations(nn.Module):
             img = images_np[i]
             ax_img.imshow(img)
             ax_img.axis('off')
-            
+
             # Set the title with class names
-            ax_img.set_title(f'True: {true_class_names[i]}, PIM: {pim_class_names[i]}\nTask Model: {predicted_class_names[i]}', fontsize=14)
-            
-            # Prepare and set the text description for attributes and weights
+            ax_img.set_title(f'Ground Truth: {true_class_names[i]}\nPIM: {pim_class_names[i]}     Task Model: {predicted_class_names[i]}', fontsize=14)
+
+            # Initialize description_text for each image
+            description_text = f'Classes Flipped: \n'  # Reset for each image
             identified_attributes = identified_attributes_per_instance[i]
-            description_text = f'{choice}: \n'
             for class_name, attributes in identified_attributes.items():
-                description_text += f'\nAttributes Weights of {class_name}:\n'
+                description_text += f'\nTop attributes used by PIM to predict {class_name}:\n'
                 for attr, weight in zip(attributes['attributes'], attributes['weights']):
-                    description_text += f"{attr}: {weight:.2f}\n"
+                    # description_text += f"{attr}: {weight:.2f}\n"
+                    description_text += f"{attr}\n"
             
             # Splitting text into chunks for each necessary column
             text_chunks = [description_text[j:j + max_description_length] for j in range(0, len(description_text), max_description_length)]
@@ -353,11 +381,11 @@ class PIM_Explanations(nn.Module):
                 ax_row[j + 1].axis('off')  # Turn off axis for the text columns
 
         plt.tight_layout(pad=3, w_pad=0.5, h_pad=0.5)
-
         plt.subplots_adjust(left=0.5, right=0.95, top=0.95, bottom=0.05, wspace=0.2, hspace=0.4)
         if save_path:
             plt.savefig(save_path, bbox_inches='tight')
         plt.close()
+
 
     def get_explanations(self, images, task_model_logits, pim_attribute_dict, pim_class_logits, true_classes, choice='kld', save_path=None):
         """
@@ -371,7 +399,6 @@ class PIM_Explanations(nn.Module):
         """
 
         # Convert pim_logits_dict to a list of dictionaries and get pim predictions
-        batch_size = true_classes.shape[0]
         num_classes = len(self.num_attributes_per_class)
 
         # pim_attribute_dict = []
@@ -382,13 +409,13 @@ class PIM_Explanations(nn.Module):
         task_model_predictions = torch.argmax(task_model_logits, dim=1)
         pim_predictions = torch.argmax(pim_class_logits, dim=1)
 
+        # print(task_model_logits, pim_class_logits, true_classes)
         if choice == 'logit_flip':
 
-            import pdb; pdb.set_trace()
-            # NOTE: We flip the top prediction of the pim model to understand what attributes are important for the top prediction
+            # NOTE: We flip the top prediction of the pim model to understand what attributes are important for the top prediction of task model
             # We use the task models predictions as reference classes
             attribute_weights = self.optimize_attribute_weights(pim_attribute_dict, task_model_predictions, 
-                                                            self.task_model_predictions, self.learning_rate, 
+                                                            self.num_attributes_per_class, self.learning_rate, 
                                                             self.num_optimization_steps, self.aggregation_fn)
         elif choice == 'kld':
             attribute_weights = self.match_probabilities_to_task_model(pim_attribute_dict, task_model_logits, 
@@ -396,13 +423,15 @@ class PIM_Explanations(nn.Module):
                                                                     self.num_optimization_steps, self.aggregation_fn)
         else:
             raise ValueError(f"Invalid choice: {choice}. Please choose 'kld' or 'logit_flip'.")
+        
+        print(attribute_weights)
         # Get True class names and failed class names
         true_class_names = [self.class_names[i] for i in true_classes]
         pim_class_names = [self.class_names[i] for i in pim_predictions]
         predicted_class_names = [self.class_names[i] for i in task_model_predictions]
 
         identified_attributes_per_instance = self.identify_topk_candidates(attribute_weights, pim_predictions, 
-                                                                           task_model_logits, k=3)
+                                                                           task_model_logits, k=5)
         
         self.plot_explanations(images, identified_attributes_per_instance, 
                                true_class_names, pim_class_names, predicted_class_names, 
@@ -419,16 +448,18 @@ def evaluate_pim(data_loader, class_attributes_embeddings, class_attribute_promp
     aggregator.eval()
     classifier.eval()
     
-    gt_labels, task_model_logit, pim_attribute_logits_list, pim_class_logits  = [], [], [], []
+    gt_labels, task_model_logit_list, pim_attribute_logits_list, pim_class_logits  = [], [], [], []
     task_model_failure_indices, pim_model_failure_indices = [], []
     
     for i, (images_batch, labels, images_clip_batch) in enumerate(data_loader):
         
         images_batch = images_batch.to(device)
-        labels = labels.to(device)
+        labels = labels
 
         pim_image_embeddings, _, _ = pim_model(images_batch, return_task_logits=True)
         task_model_logits = classifier(images_batch)
+
+        task_model_logits = task_model_logits.detach().cpu()
 
         # Cosine similarity between the pim image embeddings and the class_attributes_embeddings
         normalized_pim_image_embeddings = F.normalize(pim_image_embeddings, dim=-1)
@@ -445,34 +476,38 @@ def evaluate_pim(data_loader, class_attributes_embeddings, class_attribute_promp
             start = 0
             for j, class_prompts in enumerate(class_attribute_prompt_list):
                 num_attributes = len(class_prompts)
-                pim_similarities_dict[j] = pim_similarities[i, start:start+num_attributes]
+                pim_similarities_dict[j] = pim_similarities[i, start:start+num_attributes].detach().cpu()
                 start += num_attributes
             
             # Compute the pim logits using the multiheaded attention
             pim_logits.append(aggregator(pim_similarities_dict))
             pim_attribute_logits_list.append(pim_similarities_dict)
-        
         pim_logits = torch.stack(pim_logits, dim=0)
         # Get the indices of the failed predictions
         task_model_failed_indices = (task_model_logits.argmax(dim=-1) != labels).nonzero(as_tuple=True)[0]
         pim_model_failed_indices = (pim_logits.argmax(dim=-1) != labels).nonzero(as_tuple=True)[0]
 
-        gt_labels.append(labels)
-        task_model_logit.append(task_model_logits)
 
+        gt_labels.append(labels)
+        task_model_logit_list.append(task_model_logits)
         task_model_failure_indices.append(task_model_failed_indices)
         pim_model_failure_indices.append(pim_model_failed_indices)
         pim_class_logits.append(pim_logits)
 
+
     gt_labels = torch.cat(gt_labels, dim=0).detach().cpu()
-    task_model_logit = torch.cat(task_model_logit, dim=0).detach().cpu()
-    task_model_failure_indices = torch.cat(task_model_failure_indices, dim=0).detach().cpu()
-    pim_model_failure_indices = torch.cat(pim_model_failure_indices, dim=0).detach().cpu()
+    task_model_logit_list = torch.cat(task_model_logit_list, dim=0).detach().cpu()
     pim_class_logits = torch.cat(pim_class_logits, dim=0).detach().cpu()
 
-    return gt_labels, task_model_logits, pim_attribute_logits_list, pim_class_logits, task_model_failure_indices, pim_model_failure_indices
-        
+    # Compute the task model and pim model failure indices
+    task_model_failure_indices = (task_model_logit_list.argmax(dim=-1) != gt_labels).nonzero(as_tuple=True)[0].detach().cpu().tolist()
+    pim_model_failure_indices = (pim_class_logits.argmax(dim=-1) != gt_labels).nonzero(as_tuple=True)[0].detach().cpu().tolist()
 
+    # task_model_failure_indices = torch.cat(task_model_failure_indices, dim=0).detach().cpu().tolist()
+    # pim_model_failure_indices = torch.cat(pim_model_failure_indices, dim=0).detach().cpu().tolist()
+
+    return gt_labels, task_model_logit_list, pim_attribute_logits_list, pim_class_logits, task_model_failure_indices, pim_model_failure_indices
+        
 def main(args):
 
     ########################### Create the model ############################
@@ -508,7 +543,9 @@ def main(args):
     # Extract the attribute names from the prompts
     attribute_names_per_class = {}
     for i in range(len(class_attribute_prompts)):
-        attribute_names_per_class[class_names[i]] = [prompt.replace(f"This is a photo of {class_names[i]} with ", "") for prompt in class_attribute_prompts[i]]
+
+        class_name = class_names[i].lower()
+        attribute_names_per_class[class_names[i]] = [prompt.replace(f"This is a photo of {class_name} with ", "") for prompt in class_attribute_prompts[i]]
     
     # Create the PIM model
     if args.attribute_aggregation == "mha":
@@ -540,28 +577,47 @@ def main(args):
     aggregator.to(device)
 
     # Evaluate the PIM model
-    gt_labels, task_model_logits, pim_attribute_logits_list, pim_class_logits, task_model_failure_indices, pim_model_failure_indices = evaluate_pim(test_loader, class_attributes_embeddings, class_attribute_prompts,
+    gt_labels, task_model_logit_list, pim_attribute_logits_list, pim_class_logits, task_model_failure_indices, pim_model_failure_indices = evaluate_pim(test_loader, class_attributes_embeddings, class_attribute_prompts,
                                                                                                                             clip_model, classifier, pim_model, aggregator, device)
     
-
-    print(f"Total number of failed images: {len(task_model_failure_indices)}")
+    # Find the indices where the task model failed but the PIM model succeeded
+    pim_sucess_task_fail_indices = [i for i in task_model_failure_indices if i not in pim_model_failure_indices]
+    print(f"Total number of task model failed images: {len(task_model_failure_indices)}")
+    print(f"Total number of PIM failed images: {len(pim_model_failure_indices)}")
+    print(f"Num of task failed pim succeded images: {len(pim_sucess_task_fail_indices)}")
     # Create an instance of the PIM_Explanations class
     pim_explanations = PIM_Explanations(attribute_names_per_class, num_attributes_per_cls, aggregation_fn=aggregator)
 
-    # select two random images from the failed images
-    indices = random.sample(range(len(task_model_failure_indices)), 2)
-        
-    # Subselect the task model failed (TF) images
-    task_model_failed_images = torch.stack([test_loader.dataset[i][0] for i in indices])
-    TF_gt_labels = gt_labels[indices]
-    TF_task_model_logits = task_model_logits[indices]
-    TF_pim_attribute_logits_list = [pim_attribute_logits_list[i] for i in indices]
-    TF_pim_class_logits = pim_class_logits[indices]
 
-    import pdb; pdb.set_trace()
-    # Get the explanations
-    pim_explanations.get_explanations(task_model_failed_images, TF_task_model_logits, TF_pim_attribute_logits_list, TF_pim_class_logits,
-                                        TF_gt_labels, choice='logit_flip', save_path='explanations.png')
+    # Randomly select a few images from the pim_sucess_task_fail_indices
+    picked_indices = np.random.choice(pim_sucess_task_fail_indices, 50, replace=False)
+
+    # attribute frequencies dictionary
+    attribute_frequencies = {}
+    # Ierate over the failed images and get the explanations
+    for i in picked_indices:
+        indices = [i]
+        # Subselect the task model failed (TF) images
+        task_model_failed_images = torch.stack([test_loader.dataset[i][0] for i in indices])
+        TF_gt_labels = gt_labels[indices]
+        TF_task_model_logits = task_model_logit_list[indices]
+        TF_pim_attribute_logits_list = [pim_attribute_logits_list[i] for i in indices]
+        TF_pim_class_logits = pim_class_logits[indices]
+
+        # Get the explanations
+        img_path = os.path.join(args.save_dir, f"explanations_{i}.png")
+        print(img_path)
+        identified_attributes_per_instance = pim_explanations.get_explanations(task_model_failed_images, TF_task_model_logits, TF_pim_attribute_logits_list, TF_pim_class_logits,
+                                                TF_gt_labels, choice=args.explanation_type, save_path=img_path)
+        
+        # # Add the identified attributes to the attribute_frequencies dictionary
+        # for i, attributes in enumerate(identified_attributes_per_instance):
+        #     for class_name, attr_details in attributes.items():
+        #         for attr in attr_details['attributes']:
+        #             if attr in attribute_frequencies:
+        #                 attribute_frequencies[attr] += 1
+        #             else:
+        #                 attribute_frequencies[attr] = 1
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Train ResNet on WILDS Dataset')
@@ -622,6 +678,9 @@ if __name__ == "__main__":
     parser.add_argument('--num_gpus', type=int, default=4, help='Number of gpus for DDP per node')
     parser.add_argument('--num_nodes', type=int, default=1, help='Number of nodes for DDP')
 
+    parser.add_argument('--explanation_type', type=str, default='kld', help='Type of explanation to generate - kld or logit_flip')
+    parser.add_argument('--sparsity_weight', type=float, default=0.0, help='Weight for the sparsity loss')
+
 
     args = parser.parse_args()
     device='cuda' if torch.cuda.is_available() else 'cpu'
@@ -632,6 +691,7 @@ if __name__ == "__main__":
     
     # Make directory for saving results
     args.save_dir = get_save_dir(args)    
+    args.save_dir = os.path.join(args.save_dir, f'explanations_{args.explanation_type}')
     os.makedirs(args.save_dir, exist_ok=True)
     
     print(f"\nResults will be saved to {args.save_dir}")
@@ -707,37 +767,65 @@ if __name__ == "__main__":
 
 python explanations.py \
 --data_dir './data' \
---dataset_name Waterbirds \
+--dataset_name CelebA \
 --num_classes 2 \
---batch_size 512 \
+--batch_size 128 \
 --img_size 32 \
 --seed 42 \
 --task_layer_name model.layer1 \
---cutmix_alpha 1.0 \
---warmup_epochs 0 \
+--attributes_path clip-dissect/CelebA_core_concepts.json \
+--attributes_embeddings_path data/CelebA/CelebA_attributes_CLIP_ViT-B_32_text_embeddings.pth \
+--classifier_name resnet50 \
+--classifier_checkpoint_path logs/CelebA/failure_estimation/photo/resnet50/classifier/checkpoint_19.pth \
+--use_imagenet_pretrained \
+--attribute_aggregation mean \
+--clip_model_name ViT-B/32 \
+--save_dir ./logs \
+--prefix '' \
+--vlm_dim 512 \
+--resume_checkpoint_path logs/CelebA/resnet50/mapper/_agg_mean_bs_128_lr_0.001_augmix_prob_0.2_cutmix_prob_0.2_scheduler_warmup_epoch_10_layer_model.layer1/pim_weights_best.pth
+
+
+python explanations.py \
+--data_dir './data' \
+--dataset_name Waterbirds \
+--num_classes 2 \
+--batch_size 128 \
+--img_size 32 \
+--seed 42 \
+--task_layer_name model.layer1 \
 --attributes_path clip-dissect/Waterbirds_core_concepts.json \
 --attributes_embeddings_path data/Waterbirds/Waterbirds_attributes_CLIP_ViT-B_32_text_embeddings.pth \
 --classifier_name resnet18 \
 --classifier_checkpoint_path logs/Waterbirds/resnet18/classifier/checkpoint_99.pth \
 --use_imagenet_pretrained \
---attribute_aggregation mean \
+--attribute_aggregation max \
 --clip_model_name ViT-B/32 \
---prompt_path data/Waterbirds/Waterbirds_CLIP_ViT-B_32_text_embeddings.pth \
---num_epochs 200 \
---optimizer adamw \
---learning_rate 1e-3 \
---aggregator_learning_rate 1e-3 \
---scheduler MultiStepLR \
---val_freq 1 \
 --save_dir ./logs \
 --prefix '' \
 --vlm_dim 512 \
---num_gpus 1 \
---num_nodes 1 \
---augmix_prob 0.2 \
---cutmix_prob 0.2 \
---resume_checkpoint_path logs/Waterbirds/resnet18/mapper/_agg_mean_bs_512_lr_0.001_augmix_prob_0.2_cutmix_prob_0.2_scheduler_warmup_epoch_0_layer_model.layer1/pim_weights_final.pth \
---method pim \
---score cross_entropy
+--resume_checkpoint_path logs/Waterbirds/resnet18/mapper/_agg_max_bs_512_lr_0.001_augmix_prob_0.2_cutmix_prob_0.2_scheduler_warmup_epoch_0_layer_model.layer1/pim_weights_best.pth
+
+
+python explanations.py \
+--data_dir './data' \
+--dataset_name cats_dogs \
+--num_classes 2 \
+--batch_size 128 \
+--img_size 32 \
+--seed 42 \
+--task_layer_name model.layer1 \
+--attributes_path clip-dissect/cats_dogs_core_concepts.json \
+--attributes_embeddings_path data/cats_dogs/cats_dogs_attributes_CLIP_ViT-B_32_text_embeddings.pth \
+--classifier_name resnet18 \
+--classifier_checkpoint_path logs/cats_dogs/resnet18/classifier/checkpoint_99.pth \
+--use_imagenet_pretrained \
+--attribute_aggregation mean \
+--clip_model_name ViT-B/32 \
+--save_dir ./logs \
+--prefix '' \
+--vlm_dim 512 \
+--resume_checkpoint_path logs/cats_dogs/resnet18/mapper/_agg_mean_bs_512_lr_0.001_augmix_prob_0.2_cutmix_prob_0.2_scheduler_warmup_epoch_10_layer_model.layer1/pim_weights_best.pth
+
 
 '''
