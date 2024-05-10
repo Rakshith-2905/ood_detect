@@ -28,6 +28,7 @@ class CatsDogsTwoTransforms(ImageFolder):
         cats = [item for item in self.imgs if 'cat' in item[0].lower()]
         dogs = [item for item in self.imgs if 'dog' in item[0].lower()]
 
+        print(len(cats), len(dogs))
         # Adjust the number of cat images based on the imbalance ratio
         reduced_cats_count = int(len(dogs) * self.imbalance_ratio)
         if reduced_cats_count < len(cats):  # Only reduce if it leads to fewer cats than currently exist
@@ -164,11 +165,20 @@ if __name__ == "__main__":
 
 
     # Split the dataset into train and test
-    split_dataset()
+    # split_dataset()
 
-    loaders, class_names = get_cat_dog_loaders(return_dataset=False)
-    print(len(loaders['train'].dataset))
-    print(len(loaders['val'].dataset))
-    print(len(loaders['failure'].dataset))
-    print(len(loaders['test'].dataset))
-    print(len(class_names))
+    # loaders, class_names = get_cat_dog_loaders(return_dataset=False)
+    # print(len(loaders['train'].dataset))
+    # print(len(loaders['val'].dataset))
+    # print(len(loaders['failure'].dataset))
+    # print(len(loaders['test'].dataset))
+    # print(len(class_names))
+
+    data_dir = os.path.join('./data', 'cats_dogs', 'PetImages')
+    temp_train_dataset = CatsDogsTwoTransforms(root=data_dir, split='train', transform1=None,
+                                        transform2=None, imbalance_ratio=0.3)
+    
+
+    data_dir = os.path.join('./data', 'cats_dogs', 'PetImages')
+    temp_train_dataset = CatsDogsTwoTransforms(root=data_dir, split='test', transform1=None,
+                                        transform2=None, imbalance_ratio=0.99)

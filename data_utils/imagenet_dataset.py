@@ -24,14 +24,14 @@ class ImageNetTwoTransforms(ImageFolder):
 
         self.class_names = list(wnids_to_class_names.values())
 
-        if data_type == 'imagenet' or data_type == 'imagenet-val':
+        if data_type == 'imagenet' or data_type == 'imagenet-val' or data_type == 'imagenetv2':
             self.wnids = all_wnids
         elif data_type == 'imagenet_r':
             self.wnids = imagenet_r_wnids
             self.class_names = [wnids_to_class_names[wnid] for wnid in self.wnids]            
         elif data_type == 'imagenet_a':
             self.wnids = imagenet_a_wnids
-            self.class_names = [wnids_to_class_names[wnid] for wnid in self.wnids]
+            # self.class_names = [wnids_to_class_names[wnid] for wnid in self.wnids]
         elif data_type == 'imagenet_sketch':
             pass
         else:
@@ -41,31 +41,88 @@ class ImageNetTwoTransforms(ImageFolder):
 
     def __getitem__(self, index):
         image, label = super(ImageNetTwoTransforms, self).__getitem__(index)
-        print(label)
         primary_image = self.transform1(image) if self.transform1 else image
         secondary_image = self.transform2(image) if self.transform2 else image
         if self.transform2 is None:
             return primary_image, label
         return primary_image, label, secondary_image
     
+
+
+def plot_images(loader, title, n_rows=2, n_cols=5, mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]):
+    """
+    Extracts the first batch of images from the given data loader and plots them in a grid with their labels.
+    Adjusts the image contrast if necessary.
+    """
+    import matplotlib.pyplot as plt
+
+    # Get the first batch
+    images, labels = next(iter(loader))
+
+
+    fig, axes = plt.subplots(n_rows, n_cols, figsize=(15, 6))
+    axes = axes.flatten()
+
+    # Function to denormalize the image
+    def denormalize(image):
+        image = image.numpy().transpose(1, 2, 0)
+        image = std * image + mean
+        image = np.clip(image, 0, 1)
+        return image
+
+    for i in range(n_rows * n_cols):
+        image = denormalize(images[i])
+        label = labels[i]
+        class_name = class_names[label]
+
+
+        axes[i].imshow(image)
+        axes[i].set_title(f"Label: {class_name}", fontsize=10)
+        axes[i].axis('off')
+
+    plt.suptitle(title)
+    plt.tight_layout(rect=[0, 0.03, 1, 0.95])
+    save_path = os.path.join(f"{title}.png")
+    plt.savefig(save_path)
+    # plt.show()
+
+
 def get_imagenet_loaders(batch_size=512, data_dir='./data',    
                         train_transform=None, test_transform=None, clip_transform=None, 
                         data_type='imagenet', subsample_trainset=True, return_dataset=False):
     
+    if train_transform is None:
+        train_transform = transforms.Compose([
+            transforms.Resize(256),
+            transforms.RandomCrop(224),
+            transforms.RandomHorizontalFlip(),
+            transforms.ToTensor(),
+            transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
+        ])
+    if test_transform is None:
+        test_transform = transforms.Compose([
+            transforms.Resize(256),
+            transforms.CenterCrop(224),
+            transforms.ToTensor(),
+            transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
+        ])
+
+
     if data_type == 'imagenet':
         if os.path.exists(os.path.join(data_dir, 'imagenet', 'train')):
-
             train_data_dir = os.path.join(data_dir, 'imagenet', 'train')
             test_data_dir = os.path.join(data_dir, 'imagenet', 'val')
         else:
             train_data_dir = os.path.join(data_dir,  'train')
             test_data_dir = os.path.join(data_dir,  'val')
+
     elif data_type == 'imagenet-val':
+        # The test is initialized as the val set further down
         if os.path.exists(os.path.join(data_dir, 'imagenet', 'val')):
-  
             train_data_dir = os.path.join(data_dir, 'imagenet', 'val')
         else:
             train_data_dir = os.path.join(data_dir, 'val')
+
     else:
         train_data_dir = os.path.join(data_dir, 'imagenet', 'val')
         test_data_dir = os.path.join(data_dir, 'imagenet', data_type)
@@ -111,9 +168,13 @@ if __name__ == "__main__":
 
     loaders, class_names = get_imagenet_loaders(batch_size=512, data_dir='./data',
                                                 train_transform=None, test_transform=None, clip_transform=None,
-                                                data_type='imagenet', subsample_trainset=False, return_dataset=False)
+                                                data_type='imagenet_sketch', subsample_trainset=False, return_dataset=False)
     print(len(loaders['train'].dataset))
     print(len(loaders['val'].dataset))
     print(len(loaders['failure'].dataset))
     print(len(loaders['test'].dataset))
     print(len(class_names))
+
+    plot_images(loaders['train'], 'imagenet_a_Train Set')
+    plot_images(loaders['val'], 'imagenet_a_Val Set')
+    plot_images(loaders['test'], 'imagenet_a_Test Set')
