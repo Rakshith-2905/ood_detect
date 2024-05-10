@@ -28,7 +28,6 @@ class CatsDogsTwoTransforms(ImageFolder):
         cats = [item for item in self.imgs if 'cat' in item[0].lower()]
         dogs = [item for item in self.imgs if 'dog' in item[0].lower()]
 
-        print(len(cats), len(dogs))
         # Adjust the number of cat images based on the imbalance ratio
         reduced_cats_count = int(len(dogs) * self.imbalance_ratio)
         if reduced_cats_count < len(cats):  # Only reduce if it leads to fewer cats than currently exist
