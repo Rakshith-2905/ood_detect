@@ -8,6 +8,7 @@ ssl._create_default_https_context = ssl._create_unverified_context
 
 import nltk
 from nltk.corpus import stopwords
+import argparse
 
 # Download the list of stop words
 nltk.download('stopwords')
@@ -51,23 +52,30 @@ def get_attributes(class_name, previous_attributes, PROMPT):
 
 def main():
     
-    data_name = 'domainnet_core'
+    data_name = args.data_name
     # Read the prompt template from file json
     with open('prompt_templates.json', 'r') as f:
         prompt_template = json.load(f)[data_name]
 
+
+    # Load the imagenet classes
+    with open('imagenet_labels.json', 'r') as f:
+        classes = json.load(f)
+        # Slice the classes
+        classes = classes[args.start_idx:args.end_idx]
+
     # # Load cifar-100 classes
     # with open('pacs_labels.json', 'r') as f:
     #     classes = json.load(f)
-
+    
     # with open('CelebA_labels.json', 'r') as f:
     #     classes = json.load(f)
 
     # classes = ['cat', 'dog']
     # print(classes)
     # Load the classes from the text file
-    with open('../data/domainnet_v1.0/class_names.txt', 'r') as f:
-        classes = f.read().splitlines()  
+    # with open('../data/domainnet_v1.0/class_names.txt', 'r') as f:
+    #     classes = f.read().splitlines()  
 
     # classes = ['photo', 'sketch', 'clipart', 'painting', 'infograph', 'quickdraw' ]      
         
@@ -94,7 +102,7 @@ def main():
 
         concept_set[class_name] = list(attributes_collected)
     
-        with open(f'{data_name}_concepts.json', 'w') as f:
+        with open(f'{data_name}_{args.start_idx}_{args.end_idx}_concepts.json', 'w') as f:
             json.dump(concept_set, f, indent=4)
 
 def merge_core_noncore(class_name):
@@ -149,6 +157,16 @@ def merge_niccopp():
         f.write('\n'.join(nicoopp_concept_set))
 
 if __name__ == "__main__":
+    # Parse the arguments
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--data_name', type=str, default='imagenet_core', help='The name of the dataset')
+    parser.add_argument('--start_idx', type=int, default=0, help='The class index to start from')
+    parser.add_argument('--end_idx', type=int, default=-1, help='The class index to end at')
+    args = parser.parse_args()
+
+    ## Add parameters to the main function
+
+
     main()
     # merge_core_noncore('Waterbirds')
     # merge_niccopp()
