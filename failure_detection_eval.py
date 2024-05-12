@@ -846,7 +846,7 @@ def main(args):
             results_dict['train_domain_name'] = d
 
         # Save it as a CSV file
-        results_file = f'{args.save_dir}/{args.score}_results.json'
+        results_file = f'{args.save_dir}/{args.score}_results_{args.filename}.json'
 
         if args.eval_dataset == 'cifar100c':
             # update the results dictionary
@@ -860,6 +860,8 @@ def main(args):
         with open(results_file, 'a') as f:
             json.dump(results_dict, f)
             f.write('\n')
+
+        print('Results saved to: ', {results_file})
 
         plot = False
         if plot:
@@ -1032,7 +1034,7 @@ if __name__ == "__main__":
     parser.add_argument('--method', type=str, default='baseline', help='Baseline or PIM for failure detection')
     parser.add_argument('--score', type=str, default='msp', help='Failure detection score - msp/energy/pe')
     parser.add_argument('--eval_dataset', type=str, default='cifar100', help='Evaluation dataset')
-    parser.add_argument('--filename', type=str, default='cifar100c.log', help='Filename')
+    parser.add_argument('--filename', type=str, default='', help='Filename')
     parser.add_argument('--cifar100c_corruption', default="gaussian_blur", type=str, help='Corruption type')
     parser.add_argument('--severity', default=5, type=int, help='Severity of corruption')
     

@@ -59,7 +59,7 @@ def main():
 
 
     # Load the imagenet classes
-    with open('imagenet_labels.json', 'r') as f:
+    with open('imagenet_labels_fixed.json', 'r') as f:
         classes = json.load(f)
         # Slice the classes
         classes = classes[args.start_idx:args.end_idx]
