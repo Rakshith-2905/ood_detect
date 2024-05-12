@@ -168,6 +168,7 @@ class CustomResNet(nn.Module):
             'resnet50': resnet50,
             'resnet101': resnet101,
             'resnet152': resnet152,
+            'resnet50_v1': resnet50,
             'resnet50_v2':resnet50,
         }
 
@@ -194,7 +195,8 @@ class CustomResNet(nn.Module):
 
         # Load the desired ResNet architecture
         if 'v2' not in model_name:
-            self.model = resnets[model_name](pretrained=use_pretrained)
+            print('Using V1')
+            self.model = resnets[model_name](pretrained=use_pretrained) # V1
         else:
             if 'resnet50' in model_name:
                 from torchvision.models import ResNet50_Weights
@@ -206,9 +208,11 @@ class CustomResNet(nn.Module):
         # Save the features before the FC layer
         self.features = nn.Sequential(*list(self.model.children())[:-1])
 
-        # Update the final fully connected layer to match the number of desired classes
-        num_ftrs = self.model.fc.in_features
-        self.model.fc = nn.Linear(num_ftrs, num_classes)
+        if 'v2' not in model_name and 'v1' not in model_name:
+            print('*************** updating **********')
+            # Update the final fully connected layer to match the number of desired classes
+            num_ftrs = self.model.fc.in_features
+            self.model.fc = nn.Linear(num_ftrs, num_classes)
 
         self.feature_dim = self.features(torch.zeros(1, 3, 224, 224)).squeeze(-1).squeeze(-1).shape[-1]
 
@@ -310,15 +314,16 @@ if __name__ == "__main__":
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     # model = CustomFeatureModel(model_name='resnet50_adv_l2_0.1', use_pretrained=True)
-    model = CustomClassifier(model_name='resnet18-imagenet', use_pretrained=True)
-    logits, features = model(torch.zeros(1, 3, 224, 224), return_features=True)
-    print(logits.shape, features.shape)
-    print(model.feature_dim)
-    print(model.network_feat_extractor.layer1)
+    # model = CustomClassifier(model_name='resnet18-imagenet', use_pretrained=True)
+    # logits, features = model(torch.zeros(1, 3, 224, 224), return_features=True)
+    # print(logits.shape, features.shape)
+    # print(model.feature_dim)
+    # print(model.network_feat_extractor.layer1)
 
     model = CustomResNet(model_name='resnet50', num_classes=1000, use_pretrained=True)
-    logits, features = model(torch.zeros(1, 3, 224, 224), return_features=True)
-    print(logits.shape, features.shape)
+
+    #logits, features = model(torch.zeros(1, 3, 224, 224), return_features=True)
+    #print(logits.shape, features.shape)
     print(model.feature_dim)
     print(model)
 
