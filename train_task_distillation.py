@@ -44,6 +44,7 @@ from data_utils.celebA_dataset import FilteredCelebADataset, get_celebA_datatran
 from data_utils.pacs_dataset import PACSDataset, get_pacs_dataloader
 from data_utils import subpop_bench
 from data_utils.imagenet_dataset import ImageNetTwoTransforms, get_imagenet_loaders
+from data_utils.office_home_dataset import OfficeHomeDataset, get_office_home_dataloader
 
 from models.resnet import CustomClassifier, CustomResNet, CustomFeatureModel
 from models.projector import ProjectionHead
@@ -68,13 +69,10 @@ def get_dataset(data_name, train_transforms, test_transforms, clip_transform, da
                                                                         subsample_trainset=False, return_dataset=True, use_real=use_real)
 
     elif data_name == 'pacs':
-        train_dataset,val_dataset, test_dataset, failure_dataset, class_names =  get_pacs_dataloader(domain_name, batch_size=512, data_dir=data_dir, 
+        train_dataset,val_dataset, test_dataset, failure_dataset, class_names = get_pacs_dataloader(domain_name, batch_size=512, data_dir=data_dir, 
                                                                                 train_transform=None, test_transform=None, clip_transform=clip_transform, 
-                                                                                return_dataset=True, use_real=True)
-    elif data_name == 'pacs_shifted':
-        train_dataset,val_dataset, test_dataset, failure_dataset, class_names =  get_pacs_dataloader(domain_name, batch_size=512, data_dir=data_dir, 
-                                                                                train_transform=None, test_transform=None, clip_transform=clip_transform, 
-                                                                                return_dataset=True, use_real=False)
+                                                                                return_dataset=True, use_real=use_real)
+
 
     elif data_name == 'cifar10':
         train_dataset, val_dataset, test_dataset, failure_dataset, class_names = get_CIFAR10_dataloader(data_dir='./data',    
@@ -91,7 +89,9 @@ def get_dataset(data_name, train_transforms, test_transforms, clip_transform, da
                                                                     corruption=domain_name, severity=severity,
                                                                     train_transform=None, test_transform=None, clip_transform=clip_transform,
                                                                     return_dataset=True)
-
+    elif data_name =="office-home":
+        train_dataset, val_dataset, test_dataset,failure_dataset, class_names = get_office_home_dataloader(domain_name, batch_size=512, data_dir=data_dir)
+    
     elif data_name == 'cifar100':
         
         train_dataset, val_dataset, test_dataset, failure_dataset, class_names = get_CIFAR100_dataloader(data_dir='./data',  
@@ -108,7 +108,7 @@ def get_dataset(data_name, train_transforms, test_transforms, clip_transform, da
                                                                             selected_classes=selected_classes, retain_orig_ids=True , 
                                                                             train_transform=None, test_transform=None, clip_transform=clip_transform,
                                                                             subsample_trainset=False, return_dataset=True)
-
+    
     elif data_name in subpop_bench.DATASETS:
         dataset_class = subpop_bench.get_dataset_class(data_name)
         hparams = {} # TODO: Add hparams need it for CMNIST
