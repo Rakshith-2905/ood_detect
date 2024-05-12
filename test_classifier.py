@@ -215,7 +215,7 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     # Set seed
-    torch.manual_seed(args.seed)
+    # torch.manual_seed(args.seed)
     
     main(args)
 

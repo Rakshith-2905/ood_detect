@@ -45,8 +45,9 @@ from data_utils.pacs_dataset import PACSDataset, get_pacs_dataloader
 from data_utils import subpop_bench
 from data_utils.imagenet_dataset import ImageNetTwoTransforms, get_imagenet_loaders
 from data_utils.office_home_dataset import OfficeHomeDataset, get_office_home_dataloader
+from data_utils.cats_dogs_dataset import CatsDogsTwoTransforms, get_cats_dogs_loaders
 
-from models.resnet import CustomClassifier, CustomResNet, CustomFeatureModel
+from models.resnet import CustomClassifier, CustomResNet, CustomFeatureModel, CustomVit
 from models.projector import ProjectionHead
 from simple_classifier import SimpleCNN, CIFAR10TwoTransforms
 from utils_proj import SimpleDINOLoss, compute_accuracy, compute_similarities, plot_grad_flow
@@ -60,8 +61,12 @@ def get_dataset(data_name, train_transforms, test_transforms, clip_transform, da
 
     if 'imagenet' in data_name.lower():
         train_dataset, val_dataset, test_dataset, failure_dataset, class_names = get_imagenet_loaders(batch_size=512, data_dir=data_dir,
-                                                                    train_transform=train_transforms, test_transform=test_transforms, clip_transform=clip_transform,
+                                                                    train_transform=None, test_transform=None, clip_transform=clip_transform,
                                                                     subsample_trainset=False, return_dataset=True, data_type=data_name)
+    elif data_name == 'cats_dogs':
+        train_dataset, val_dataset, test_dataset, failure_dataset, class_names = get_cats_dogs_loaders(data_dir='./data',    
+                                                                    train_transform=None, test_transform=None, clip_transform=clip_transform,
+                                                                    return_dataset=True)
     
     elif data_name == 'domainnet':
         train_dataset, val_dataset, test_dataset, failure_dataset, class_names = get_domainnet_loaders(domain_name=domain_name, data_dir=data_dir, 
@@ -766,11 +771,13 @@ def validate_feat(data_loader, clip_model, classifier,
     
 def build_classifier(classifier_name, num_classes, pretrained=False, checkpoint_path=None):
     # TODO: Verify each of the models and the transforms
-    if classifier_name in ['vit_b_16', 'swin_b', 'resnet18-imagenet', 'resnet50-imagenet']:
+    if classifier_name in ['resnet18-imagenet', 'resnet50-imagenet']:
         classifier = CustomClassifier(classifier_name, use_pretrained=pretrained)
+    if classifier_name in ['vit_b_16']:
+        classifier = CustomVit(classifier_name, num_classes=num_classes, use_pretrained=pretrained)
     elif classifier_name in ['resnet50_adv_l2_0.1']:
         classifier = CustomFeatureModel(classifier_name, use_pretrained=pretrained)
-    elif classifier_name in ['resnet18', 'resnet50','resnet50_v2']:
+    elif classifier_name in ['resnet18', 'resnet50','resnet50_v2', 'resnext50_32x4d']:
         classifier = CustomResNet(classifier_name, num_classes=num_classes, use_pretrained=pretrained)
     elif classifier_name == 'SimpleCNN':
         classifier = SimpleCNN(num_classes=num_classes)

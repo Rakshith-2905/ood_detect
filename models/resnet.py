@@ -169,6 +169,7 @@ class CustomResNet(nn.Module):
             'resnet101': resnet101,
             'resnet152': resnet152,
             'resnet50_v1': resnet50,
+            'resnet50_v1': resnet50,
             'resnet50_v2':resnet50,
         }
 
@@ -195,6 +196,8 @@ class CustomResNet(nn.Module):
 
         # Load the desired ResNet architecture
         if 'v2' not in model_name:
+            print('Using V1')
+            self.model = resnets[model_name](pretrained=use_pretrained) # V1
             print('Using V1')
             self.model = resnets[model_name](pretrained=use_pretrained) # V1
         else:
@@ -228,6 +231,63 @@ class CustomResNet(nn.Module):
             return logits, flat_features
         else:
             return self.model(x)
+
+class CustomVit(nn.Module):
+    def __init__(self, model_name, num_classes, use_pretrained=False):
+        super(CustomVit, self).__init__()
+
+        # Define available ViT architectures
+        vits = {
+            'vit_b_16': vit_b_16,
+        }
+
+        # Initialize the ViT model
+        if model_name in vits:
+            self.model = vits[model_name](pretrained=use_pretrained)
+
+            # Replace the classifier head with a new one for the desired number of classes
+            self.feature_dim = self.model.heads.head.in_features  # Assuming 'heads' is the classification head module
+            self.model.heads = nn.Linear(self.feature_dim, num_classes)
+            
+            # Register the hook to save the task features
+            feature_layer = dict(self.model.named_modules())['encoder.ln']
+            feature_layer.register_forward_hook(self.save_task_features_hook())
+
+        else:
+            raise ValueError(f"Unsupported model type: {model_name}. Supported types are: {list(vits.keys())}")
+    
+        self.train_transform = transforms.Compose([
+                        transforms.RandomResizedCrop(224),
+                        transforms.RandomHorizontalFlip(),
+                        transforms.ToTensor(),
+                        transforms.Normalize(mean=[0.485, 0.456, 0.406],
+                                            std=[0.229, 0.224, 0.225])                
+                    ])
+        
+        self.test_transform = transforms.Compose([
+                        transforms.Resize(256),
+                        transforms.CenterCrop(224),
+                        transforms.ToTensor(),
+                        transforms.Normalize(mean=[0.485, 0.456, 0.406],
+                                            std=[0.229, 0.224, 0.225])                
+                    ])
+
+
+    def save_task_features_hook(self):
+        def hook(module, input, output):
+            self.task_features = output.detach()  # Ensure detached for inference
+        return hook
+
+    def forward(self, x, return_features=False):
+        
+        # Apply the classifier head to the features
+        logits = self.model(x)
+        
+        if return_features:
+            features = self.task_features[:, 0, :]  # Extract the CLS token features           
+            return logits, features
+        
+        return logits
 
 class CustomClassifier(nn.Module):
     def __init__(self, model_name, use_pretrained=False):
@@ -319,13 +379,18 @@ if __name__ == "__main__":
     # print(logits.shape, features.shape)
     # print(model.feature_dim)
     # print(model.network_feat_extractor.layer1)
+    # model = CustomClassifier(model_name='resnet18-imagenet', use_pretrained=True)
+    # logits, features = model(torch.zeros(1, 3, 224, 224), return_features=True)
+    # print(logits.shape, features.shape)
+    # print(model.feature_dim)
+    # print(model.network_feat_extractor.layer1)
 
     model = CustomResNet(model_name='resnet50', num_classes=1000, use_pretrained=True)
 
     #logits, features = model(torch.zeros(1, 3, 224, 224), return_features=True)
     #print(logits.shape, features.shape)
     print(model.feature_dim)
-    print(model)
+    # print(model)
 
     #model = CustomSegmentationModel(model_name='deeplabv3_resnet101', use_pretrained=True)
     #pil_image = Image.open("./data/domainnet_v1.0/real/toothpaste/real_318_000284.jpg")

@@ -1,10 +1,10 @@
 import torch
 import torch.nn as nn
+import torchvision
 
 import torch.nn.functional as F
 from collections import OrderedDict
 import math
-
 
 # Function to print the names of the layers in a model
 def print_layers(model):
@@ -29,13 +29,24 @@ class TaskMapping(nn.Module):
             task_layer = dict(self.task_model.named_modules())[task_layer_name]
             task_layer.register_forward_hook(self.save_task_features_hook())
 
-            # Update the base model if 'model.' is in the layer name
-            if mapping_layer_name.startswith('model.'):
-                if hasattr(mapping_model, 'model'):
-                    mapping_model = getattr(mapping_model, 'model')
-                    mapping_layer_name = mapping_layer_name.replace('model.', '', 1)  # Remove 'model.' prefix from layer name
-                else:
-                    raise ValueError("The mapping model does not have a 'model' submodule.")
+            print(f"Hooks registered to layer: {task_layer_name}")
+            
+            # if mapping_layer_name.startswith('model.'):
+            #     if hasattr(mapping_model, 'model'):
+            #         mapping_model = getattr(mapping_model, 'model')
+            #         mapping_layer_name = mapping_layer_name.replace('model.', '', 1)  # Remove 'model.' prefix from layer name
+            #     else:
+            #         raise ValueError("The mapping model does not have a 'model' submodule.")
+
+            # If mapping name has nested layers, extract the last layer
+            if '.' in mapping_layer_name:
+                
+                temp_model = mapping_model
+                nested_layers = mapping_layer_name.split('.')
+                for layer in nested_layers[:-1]:
+                    temp_model = getattr(temp_model, layer)
+                mapping_model = temp_model
+                mapping_layer_name = nested_layers[-1]
 
             all_layers = OrderedDict(mapping_model.named_children())
 
@@ -95,7 +106,11 @@ class TaskMapping(nn.Module):
                 self.task_features = x
             
             output = self.mapping_model(self.task_features)  # Pass task features through the entire mapping model
-            output = output.view(output.size(0), -1)  # Flatten the output
+            
+            if len(output.shape) != 4:
+                output = output[:, 0, :]
+            else:
+                output = output.view(output.size(0), -1)  # Flatten the output
             output = self.projection_head(output)
 
         if return_task_logits:
@@ -273,24 +288,31 @@ class MultiHeadedAttention(nn.Module):
 
 if __name__ == "__main__":
     
-    # Example usage
-    task_model = torch.hub.load('pytorch/vision:v0.9.0', 'resnet50', pretrained=True)
-    mapping_model = torch.hub.load('pytorch/vision:v0.9.0', 'resnet50', pretrained=True)
+    # # Example usage
+    # task_model = torch.hub.load('pytorch/vision:v0.9.0', 'resnet50', pretrained=True)
+    # mapping_model = torch.hub.load('pytorch/vision:v0.9.0', 'resnet50', pretrained=True)
 
-    task_layer_name = 'layer1'
+    # task_layer_name = 'layer1'
 
-    vlm_dim = 512
-    mapping_output_size = 2048
+    # vlm_dim = 512
+    # mapping_output_size = 2048
 
-    task_mapping = TaskMapping(task_model, mapping_model, task_layer_name, vlm_dim, mapping_output_size)
-   # print(task_mapping)
+    # task_mapping = TaskMapping(task_model, mapping_model, task_layer_name, vlm_dim, mapping_output_size)
 
-#     # Example forward pass
-#     x = torch.randn(1, 3, 224, 224)
-#     output, _ = task_mapping(x)
+    from resnet import CustomClassifier, CustomVit
+    
+    task_model = CustomVit("vit_b_16", num_classes=100, use_pretrained=True)
+    mapping_model = CustomVit("vit_b_16", num_classes=100, use_pretrained=True)
+    
+    task_mapping = TaskMapping(task_model, mapping_model, "model.encoder.layers.encoder_layer_1", 512, 768)
 
-#     print(output.shape)
+    # Example forward pass
+    x = torch.randn(1, 3, 224, 224)
+    output, _ = task_mapping(x)
 
+    print(output.shape)
+
+    assert False
     # num_attributes_per_cls = [10, 20]
     # num_classes = 2
     # mha = MultiHeadedAttentionSimilarity(num_classes, num_attributes_per_cls, num_heads=1, out_dim=1)

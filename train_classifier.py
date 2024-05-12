@@ -19,6 +19,7 @@ from data_utils.celebA_dataset import get_celebA_dataloader
 from data_utils.pacs_dataset import get_pacs_dataloader
 from data_utils.office_home_dataset import OfficeHomeDataset, get_office_home_dataloader
 from data_utils.imagenet_dataset import ImageNetTwoTransforms, get_imagenet_loaders
+from data_utils.cats_dogs_dataset import CatsDogsTwoTransforms, get_cats_dogs_loaders
 
 from train_task_distillation import get_dataset, build_classifier
 from data_utils import subpop_bench
@@ -135,6 +136,11 @@ def get_dataloaders(dataset_name, domain_name=None,
         loaders, class_names = get_pacs_dataloader(domain_name, batch_size=batch_size, data_dir=data_dir, 
                                                 train_transform=None, test_transform=None, clip_transform=None, 
                                                 return_dataset=False, use_real=False)
+        
+    elif dataset_name == "cats_dogs":
+        loaders, class_names = get_cats_dogs_loaders(batch_size=batch_size, data_dir=data_dir, 
+                                                   train_transform=None, test_transform=None, clip_transform=None, 
+                                                   return_dataset=False)
     elif dataset_name == "office_home":
         loaders, class_names = get_office_home_dataloader(domain_name, batch_size=batch_size, data_dir=data_dir, 
                                                           train_transform=None, test_transform=None, clip_transform=None, 
@@ -240,11 +246,11 @@ def main(args):
     if args.optimizer == 'adam':
         optimizer = optim.Adam(model.parameters(), lr=args.learning_rate)
     elif args.optimizer == 'sgd':
-        optimizer = optim.SGD(model.parameters(), lr=args.learning_rate, momentum=0.9, weight_decay=5e-4)
+        optimizer = optim.SGD(model.parameters(), lr=args.learning_rate, momentum=0.9)
     
     # Learning rate scheduler
     if args.scheduler == 'MultiStepLR':
-        scheduler = optim.lr_scheduler.MultiStepLR(optimizer, milestones=[60, 120, 160], gamma=0.2)
+        scheduler = optim.lr_scheduler.MultiStepLR(optimizer, milestones=[60, 120, 180], gamma=0.1)
     elif args.scheduler == 'cosine':
         scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=100)
     else:
@@ -378,7 +384,7 @@ if __name__ == "__main__":
     parser.add_argument('--optimizer', type=str, choices=['adam', 'sgd'], default='adam', help='Optimizer to use')
     parser.add_argument('--scheduler', type=str, choices=['MultiStepLR', 'cosine', 'No'], default='MultiStepLR', help='Scheduler to use')
     parser.add_argument('--learning_rate', type=float, default=0.001, help='Learning rate for the optimizer')
-    parser.add_argument('--classifier_model', type=str, choices=['resnet18', 'resnet50', 'vit_b_16', 'swin_b', 'SimpleCNN'], default='resnet18', help='Type of classifier model to use')
+    parser.add_argument('--classifier_model', type=str, choices=['resnet18', 'resnet50', 'vit_b_16', 'swin_b', 'SimpleCNN', 'resnext50_32x4d'], default='resnet18', help='Type of classifier model to use')
     parser.add_argument('--use_pretrained', action='store_true', help='Use pretrained weights for ResNet')
     parser.add_argument('--resume', action='store_true', help='Resume training from checkpoint')
     parser.add_argument('--checkpoint_path', type=str, help='Path to checkpoint to resume training from')
@@ -387,6 +393,7 @@ if __name__ == "__main__":
 
     # Set seed
     seed_everything(args.seed)
+    # torch.manual_seed(42)
     
     main(args)
 
@@ -394,13 +401,12 @@ if __name__ == "__main__":
 """
 Sample command to run:
 python train_classifier.py \
-        --dataset_name Waterbirds \
-        --domain sketch \
+        --dataset_name cats_dogs \
         --data_path ./data \
         --image_size 224 \
         --batch_size 512 \
-        --seed 21 \
-        --num_epochs 200 \
+        --seed 42 \
+        --num_epochs 100 \
         --optimizer sgd \
         --scheduler MultiStepLR \
         --learning_rate 0.01 \
