@@ -11,7 +11,7 @@ class DomainNetDataset(Dataset):
         self.root_dir = root_dir
         self.domain = domain # domain name
         self.split = split   # 'train' or 'test'
-        self.transform = transform
+        self.transform1 = transform
         self.transform2 = transform2
         
         # Load file list
@@ -36,8 +36,8 @@ class DomainNetDataset(Dataset):
         # File contains image path and label
         label = int(label) 
 
-        if self.transform:
-            image = self.transform(image)
+        if self.transform1:
+            image = self.transform1(image)
         if self.transform2:
             image2 = self.transform2(image2)
             return image, label, image2
