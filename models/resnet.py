@@ -169,6 +169,7 @@ class CustomResNet(nn.Module):
             'resnet101': resnet101,
             'resnet152': resnet152,
             'resnet50_v1': resnet50,
+            'resnet50_v1': resnet50,
             'resnet50_v2':resnet50,
         }
 
@@ -195,6 +196,8 @@ class CustomResNet(nn.Module):
 
         # Load the desired ResNet architecture
         if 'v2' not in model_name:
+            print('Using V1')
+            self.model = resnets[model_name](pretrained=use_pretrained) # V1
             print('Using V1')
             self.model = resnets[model_name](pretrained=use_pretrained) # V1
         else:
@@ -376,11 +379,16 @@ if __name__ == "__main__":
     # print(logits.shape, features.shape)
     # print(model.feature_dim)
     # print(model.network_feat_extractor.layer1)
+    # model = CustomClassifier(model_name='resnet18-imagenet', use_pretrained=True)
+    # logits, features = model(torch.zeros(1, 3, 224, 224), return_features=True)
+    # print(logits.shape, features.shape)
+    # print(model.feature_dim)
+    # print(model.network_feat_extractor.layer1)
 
-    model = CustomVit(model_name='vit_b_16', num_classes=100, use_pretrained=True)
+    model = CustomResNet(model_name='resnet50', num_classes=1000, use_pretrained=True)
 
-    logits, features = model(torch.zeros(1, 3, 224, 224), return_features=True)
-    print(logits.shape, features.shape)
+    #logits, features = model(torch.zeros(1, 3, 224, 224), return_features=True)
+    #print(logits.shape, features.shape)
     print(model.feature_dim)
     # print(model)
 

@@ -147,11 +147,11 @@ def train_one_epoch(data_loader, class_attributes_embeddings, class_attribute_pr
             pim_prediction = torch.argmax(pim_logits, dim=-1)
             correct_task_pim_incorrect_idx= torch.where((task_prediction == labels) & (pim_prediction != labels))[0]
             loss[correct_task_pim_incorrect_idx]= loss[correct_task_pim_incorrect_idx]*args.task_success_discrepancy_weight # Weight the loss by the number of such samples
-            print(f"Correct task, incorrect pim: {len(correct_task_pim_incorrect_idx)}")
+            #print(f"Correct task, incorrect pim: {len(correct_task_pim_incorrect_idx)}")
 
             incorrect_task_pim_incorrect_idx= torch.where((task_prediction != labels) & (pim_prediction != labels))[0]
             loss[incorrect_task_pim_incorrect_idx]= loss[incorrect_task_pim_incorrect_idx]*args.task_failure_discrepancy_weight # Weight the loss by the number of such samples
-            print(f"incorrect task, incorrect pim: {len(incorrect_task_pim_incorrect_idx)}")
+            #print(f"incorrect task, incorrect pim: {len(incorrect_task_pim_incorrect_idx)}")
         
         
         
@@ -349,7 +349,7 @@ def main(args):
     train_dataset, val_dataset, test_dataset, failure_dataset, class_names = get_dataset(args.dataset_name, train_transform, test_transform, 
                                                             data_dir=args.data_dir, clip_transform=clip_transform, 
                                                             img_size=args.img_size, domain_name=args.domain_name, 
-                                                            return_failure_set=True)#FIXME: for PACS, clip_transform=clip_transform give this error AttributeError: 'Tensor' object has no attribute 'convert' return image.convert("RGB")
+                                                            return_failure_set=True)
 
     try:
         transform_pipeline =train_dataset.dataset.transform1 
@@ -416,7 +416,7 @@ def main(args):
         clip_model = state["clip_model"]
         classifier = state["classifier"]
         pim_model = state["pim_model"]
-        aggregator = state[f"{args.aggregator}"]
+        aggregator = state["aggregator"]
         optimizer = state["optimizer"]
         scheduler = state["scheduler"]
 

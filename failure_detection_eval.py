@@ -259,7 +259,7 @@ def get_save_dir(args):
         if args.resume_checkpoint_path is not None and os.path.exists(args.resume_checkpoint_path):
             save_dir = os.path.dirname(args.resume_checkpoint_path)
         else:
-            raise Exception("Checkpoint path not found")
+            raise Exception(f"Checkpoint path {args.resume_checkpoint_path} not found")
     else:
         # use classifer checkpoint path
         if args.classifier_checkpoint_path is not None and os.path.exists(args.classifier_checkpoint_path):
@@ -560,7 +560,7 @@ def evaluate_pim(data_loader, class_attributes_embeddings, class_attribute_promp
     task_model_logits_list = torch.cat(task_model_logits_list, dim=0)
     task_model_probs_list = torch.cat(task_model_probs_list, dim=0)
     
-
+    
     pim_acc = compute_accuracy(pim_probs_list, labels_list)
     task_model_acc = compute_accuracy(task_model_probs_list, labels_list)
     print(f'PIM Accuracy on {args.dataset_name} = {pim_acc} and Task Model Accuracy = {task_model_acc}')
@@ -589,9 +589,15 @@ def load_data(args, train_transform, test_transform, clip_transform):
         testset = CIFAR100C(corruption=args.cifar100c_corruption, transform=transform_test,clip_transform=clip_transform, level=args.severity)
         test_loader = torch.utils.data.DataLoader(testset, batch_size=args.batch_size, shuffle=False, num_workers=8, pin_memory=True)
     elif args.eval_dataset == 'pacs':
+        
+        train_dataset, val_dataset, test_dataset, failure_dataset, class_names = get_dataset(args.dataset_name, train_transform, test_transform, 
+                                                            data_dir=args.data_dir, clip_transform=clip_transform, 
+                                                            img_size=args.img_size, domain_name=args.domain_name, 
+                                                            return_failure_set=True, use_real=False)
+ 
         _, val_dataset, _, failure_dataset, class_names = get_dataset(args.dataset_name, train_transform, test_transform, 
                                                             data_dir=args.data_dir, clip_transform=clip_transform, 
-                                                            img_size=args.img_size, domain_name='sketch', 
+                                                            img_size=args.img_size, domain_name=args.calib_domain, 
                                                             return_failure_set=True,use_real=False)
         #concat val and failure
         val_dataset = ConcatDataset([val_dataset, failure_dataset])
@@ -725,8 +731,9 @@ def main(args):
         cm_val_list = cm_val.tolist()
         cm_test_list = cm_test.tolist()
         # Convert the results to a dictionary
+        
         results = {
-            "domain_name": args.domain_name,
+            
             "true_val_acc": val_task_model_acc,
             "estimated_val_acc": estimated_val_acc.item(),
             "true_test_acc": test_task_model_acc,
@@ -743,10 +750,15 @@ def main(args):
             "val_auroc":val_auroc,
             "test_fpr_at_tpr":test_fpr_at_tpr,
             "test_auroc":test_auroc
+            # "domain_name": args.domain_name,
         }
         if args.eval_dataset == 'NICOpp':
             d = args.classifier_checkpoint_path.split('/')[3]
             results['train_domain_name'] = d
+        if args.eval_dataset == 'pacs':
+            results['calib_domain_name'] = args.calib_domain
+            results['train_domain_name'] = args.train_domain
+            results['test_domain_name'] = args.domain_name
 
         # Save it as a CSV file
         results_file = f'{args.save_dir}/{args.score}_results.json'
@@ -1127,8 +1139,9 @@ if __name__ == "__main__":
     
     parser.add_argument('--num_gpus', type=int, default=4, help='Number of gpus for DDP per node')
     parser.add_argument('--num_nodes', type=int, default=1, help='Number of nodes for DDP')
-
-
+    # add calib_domain
+    parser.add_argument('--calib_domain', type=str, default="sketch", help='Domain to use for calibration')
+    parser.add_argument('--train_domain', type=str, default="sketch", help='Domain to use for training')
     args = parser.parse_args()
     device='cuda' if torch.cuda.is_available() else 'cpu'
     args.device = device
@@ -1154,18 +1167,40 @@ if __name__ == "__main__":
                 main(args)
     elif args.eval_dataset =='pacs':
         if args.method=='baseline':
+            batch_size_dict={'art_painting': 256, 'cartoon':256, 'photo': 512, 'sketch': 256}
             scores_all = ['msp', 'energy', 'pe']
+            
             for score in scores_all:
                 args.score = score
-                for dn in ['art_painting', 'cartoon', 'photo', 'sketch']:
-                    args.domain_name = dn
-                    seed_everything(args.seed)
-                    main(args)
+                for train_domain in [ 'art_painting', 'cartoon', 'photo', 'sketch']:
+                    args.train_domain = train_domain
+                    args.classifier_checkpoint_path = f"logs/pacs-{args.train_domain}/resnet18/classifier/checkpoint_199.pth"
+
+                    for calib_domain in ['art_painting', 'cartoon', 'photo', 'sketch']:
+                        args.calib_domain   = calib_domain
+                        for test_dn in ['art_painting', 'cartoon', 'photo', 'sketch']:   
+                            args.domain_name = test_dn
+                            seed_everything(args.seed)
+                            main(args)
+                   
         else:
-            for dn in ['art_painting', 'cartoon', 'photo', 'sketch']:
-                    args.domain_name = dn
-                    seed_everything(args.seed)
-                    main(args)
+            batch_size_dict={'art_painting': 256, 'cartoon':256, 'photo': 512, 'sketch': 256}
+            for att in ['max', 'mean']:
+                for train_domain in [ 'art_painting', 'cartoon', 'photo', 'sketch']:
+                    args.train_domain = train_domain
+                    args.resume_checkpoint_path = f"/usr/workspace/KDML/2024/failure_detect/logs/pacs-{args.train_domain}/resnet18/mapper/_agg_{att}_bs_{batch_size_dict[args.train_domain]}_lr_0.001_augmix_prob_0.2_cutmix_prob_0.2_scheduler_warmup_epoch_0_layer_model.layer1/pim_weights_final.pth"
+                    args.classifier_checkpoint_path = f"logs/pacs-{args.train_domain}/resnet18/classifier/checkpoint_199.pth"
+                        
+                    for calib_domain in ['art_painting', 'cartoon', 'photo', 'sketch']:
+                        args.calib_domain = calib_domain
+                        
+                        for test_dn in ['art_painting', 'cartoon', 'photo', 'sketch']:   
+                            args.domain_name = test_dn
+                            
+                            args.attribute_aggregation = att
+                            
+                            seed_everything(args.seed)
+                            main(args)
 
     elif args.eval_dataset =='NICOpp':
         if args.method=='baseline':
@@ -1179,7 +1214,9 @@ if __name__ == "__main__":
         else:
             for dn in ['autumn', 'dim', 'grass', 'outdoor', 'rock', 'water']:
                 args.domain_name = dn
+                
                 seed_everything(args.seed)
+                
                 main(args)
 
     else:

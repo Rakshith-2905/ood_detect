@@ -162,22 +162,24 @@ def main(args):
     # Loss function and optimizer
     criterion = nn.CrossEntropyLoss()
     
-    # Make directory from the checkpoint_path for saving results
+    # # Make directory from the checkpoint_path for saving results
     args.save_dir = os.path.dirname(args.checkpoint_path)
-    assert os.path.exists(args.save_dir), f"Save directory {args.save_dir} does not exists!"
+    # assert os.path.exists(args.save_dir), f"Save directory {args.save_dir} does not exists!"
     
     if args.dataset_name in subpop_bench.DATASETS:
         args.save_dir = os.path.join(args.save_dir, args.domain)
         os.makedirs(args.save_dir, exist_ok=True)
 
-    plot_images(train_loader, title="Training Image")
-    plot_images(val_loader, title="Validation Image")
-    plot_images(test_loader, title="Test Image")
+    # plot_images(train_loader, title="Training Image")
+    # plot_images(val_loader, title="Validation Image")
+    # plot_images(test_loader, title="Test Image")
     
     # Load checkpoint
-    checkpoint = torch.load(args.checkpoint_path)
-    # Load model state
-    model.load_state_dict(checkpoint['model_state_dict'])
+    if os.path.exists(args.checkpoint_path):
+        print(f"Loading checkpoint from {args.checkpoint_path}")
+        checkpoint = torch.load(args.checkpoint_path)
+        # Load model state
+        model.load_state_dict(checkpoint['model_state_dict'])
 
     # Dataparallel for multi-GPU training
     if torch.cuda.device_count() > 1:
@@ -188,7 +190,7 @@ def main(args):
 
     val_loss, val_acc = evaluate(test_loader, model, criterion, device, 0)
     print(f"Test Loss: {val_loss:.4f}, Test Accuracy: {val_acc:.4f}")
-
+    assert False
     with open(os.path.join(args.save_dir, 'results.txt'), 'w') as f:
         if args.dataset_name == 'domainnet':
             f.write(f"Dataset {args.dataset_name} {args.domain} Test Accuracy: {val_acc:.4f}\n")
@@ -207,7 +209,7 @@ if __name__ == "__main__":
     parser.add_argument('--seed', type=int, default=42, help='Seed for reproducibility')
     parser.add_argument('--learning_rate', type=float, default=0.001, help='Learning rate for the optimizer')
     parser.add_argument('--use_pretrained', action='store_true', help='Use pretrained weights for ResNet')
-    parser.add_argument('--classifier_model', type=str, choices=['resnet18', 'resnet50', 'vit_b_16', 'swin_b', 'SimpleCNN'], default='resnet18', help='Type of classifier model to use')
+    parser.add_argument('--classifier_model', type=str, default='resnet18', help='Type of classifier model to use')
     parser.add_argument('--checkpoint_path', type=str, help='Path to checkpoint to resume training from')
 
     args = parser.parse_args()
@@ -221,13 +223,14 @@ if __name__ == "__main__":
 """
 Sample command to run:
 python test_classifier.py \
-        --dataset_name cats_dogs \
-        --domain ''\
+        --dataset_name cifar100 \
+        --domain 'photo' \
         --data_path ./data \
         --image_size 224 \
         --batch_size 512 \
         --seed 42 \
-        --classifier_model resnet18 \
-        --checkpoint_path logs/cats_dogs/resnet18/classifier_seed42/checkpoint_99.pth
-
+        --classifier_model resnet50 \
+        --checkpoint_path logs/imagenet/foo/foo.pth \
+        --use_pretrained
+#usr/workspace/thopalli/full_imagenet
 """
