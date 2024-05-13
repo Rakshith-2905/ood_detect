@@ -208,11 +208,11 @@ class CustomResNet(nn.Module):
         # Save the features before the FC layer
         self.features = nn.Sequential(*list(self.model.children())[:-1])
 
-        # if 'v2' not in model_name and 'v1' not in model_name:
-        #     print('*************** updating **********')
-        #     # Update the final fully connected layer to match the number of desired classes
-        #     num_ftrs = self.model.fc.in_features
-        #     self.model.fc = nn.Linear(num_ftrs, num_classes)
+        if 'v2' not in model_name and 'v1' not in model_name:
+            print('*************** updating **********')
+            # Update the final fully connected layer to match the number of desired classes
+            num_ftrs = self.model.fc.in_features
+            self.model.fc = nn.Linear(num_ftrs, num_classes)
 
         self.feature_dim = self.features(torch.zeros(1, 3, 224, 224)).squeeze(-1).squeeze(-1).shape[-1]
 
