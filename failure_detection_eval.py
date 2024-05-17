@@ -321,7 +321,7 @@ def evaluate_classifier(data_loader, classifier, device='cpu'):
 
 @torch.no_grad()
 def get_features_logits(data_loader, class_attributes_embeddings, class_attribute_prompt_list,
-                    clip_model, classifier, pim_model, aggregator): 
+                    clip_model, classifier, pim_model, aggregator, class_names): 
     
     # Set the model to eval mode
     pim_model.eval()
@@ -329,15 +329,25 @@ def get_features_logits(data_loader, class_attributes_embeddings, class_attribut
     classifier.eval()
     clip_model.eval()
     total_loss = 0
-    total_task_model_acc = 0
-    total_pim_acc = 0
+    total_task_model_acc, total_pim_acc = 0, 0
+    total_clip_class_acc, total_clip_att_acc = 0, 0
+
+    # Construct CLIP text embeddings
+    class_level_prompts = ["This is a photo of a " + class_name for class_name in class_names]
+    class_level_prompts = clip.tokenize(class_level_prompts).to(device)
+    class_text_embeddings = clip_model.encode_text(class_level_prompts)
+    normalized_class_embeddings = F.normalize(class_text_embeddings, dim=-1)
+
+    
     pbar = progbar_wrapper(
         data_loader, total=len(data_loader), desc=f"Feature Evaluation"
     )
     
     labels_list, pim_logits_list, pim_probs_list = [], [], []
     task_model_logits_list, task_model_probs_list = [], []
-    pim_attribute_logits_list = []
+    clip_class_logits_list, clip_class_probs_list = [], []
+    clip_att_logits_list, clip_att_probs_list = [], []
+    pim_attribute_logits_list, clip_attribute_logits_list = [], []
 
     task_model_features_all, clip_model_features_all, pim_features_all = [], [], []
     
@@ -351,11 +361,12 @@ def get_features_logits(data_loader, class_attributes_embeddings, class_attribut
         
         _, task_model_embeddings = classifier(images_batch, return_features=True)
 
-        clip_image_embeddings = clip_model.encode_image(images_clip_batch).detach().cpu()
+        clip_image_embeddings = clip_model.encode_image(images_clip_batch)
 
         task_model_features_all.append(task_model_embeddings.detach().cpu())
         clip_model_features_all.append(clip_image_embeddings.detach().cpu())
         pim_features_all.append(pim_image_embeddings.detach().cpu())
+
 
         # Cosine similarity between the pim image embeddings and the class_attributes_embeddings
         normalized_pim_image_embeddings = F.normalize(pim_image_embeddings, dim=-1)
@@ -376,17 +387,42 @@ def get_features_logits(data_loader, class_attributes_embeddings, class_attribut
         
         # Compute the pim logits using the multiheaded attention
         pim_logits = aggregator(pim_similarities_dict)
-    
+
+        normalized_clip_image_embeddings = F.normalize(clip_image_embeddings, dim=-1)
+        clip_att_similarities = CLIP_LOGIT_SCALE*(normalized_clip_image_embeddings @ normalized_class_attributes_embeddings.t()) # (batch_size, num_classes*num_attributes_perclass)
+        clip_class_similarities = CLIP_LOGIT_SCALE*(normalized_clip_image_embeddings @ normalized_class_embeddings.t()) # (batch_size, num_classes)
+        
+        # Split the similarities into class specific dictionary
+        clip_att_similarities = clip_att_similarities.to(torch.float32)
+        clip_att_similarities_dict = {}
+        start = 0
+        for i, class_prompts in enumerate(class_attribute_prompt_list):
+            num_attributes = len(class_prompts)
+            clip_att_similarities_dict[i] = clip_att_similarities[:, start:start+num_attributes]
+            start += num_attributes
+
+        clip_attribute_logits_list.append(clip_att_similarities_dict)
+
+        # Compute the pim logits using the multiheaded attention
+        clip_att_logits = aggregator(clip_att_similarities_dict)
+
         loss = F.cross_entropy(pim_logits, labels)
 
         task_model_probs = F.softmax(task_model_logits, dim=-1)
         pim_probs = F.softmax(pim_logits, dim=-1)
+        clip_att_probs = F.softmax(clip_att_logits, dim=-1)
+        clip_class_probs = F.softmax(clip_class_similarities, dim=-1)
         
         task_model_acc = compute_accuracy(task_model_probs, labels)
         pim_acc = compute_accuracy(pim_probs, labels)
+        clip_att_acc = compute_accuracy(clip_att_probs, labels)
+        clip_class_acc = compute_accuracy(clip_class_probs, labels)
 
         total_task_model_acc += task_model_acc
         total_pim_acc += pim_acc
+        total_clip_att_acc += clip_att_acc
+        total_clip_class_acc += clip_class_acc
+
 
         total_loss += loss.item()
 
@@ -395,12 +431,21 @@ def get_features_logits(data_loader, class_attributes_embeddings, class_attribut
         pim_probs_list.append(pim_probs)
         task_model_logits_list.append(task_model_logits)
         task_model_probs_list.append(task_model_probs)
+        clip_att_logits_list.append(clip_att_logits)
+        clip_att_probs_list.append(clip_att_probs)
+        clip_class_logits_list.append(clip_class_similarities)
+        clip_class_probs_list.append(clip_class_probs)
+
 
     labels_list = torch.cat(labels_list, dim=0)
     pim_logits_list = torch.cat(pim_logits_list, dim=0)
     pim_probs_list = torch.cat(pim_probs_list, dim=0)
     task_model_logits_list = torch.cat(task_model_logits_list, dim=0)
     task_model_probs_list = torch.cat(task_model_probs_list, dim=0)
+    clip_att_logits_list = torch.cat(clip_att_logits_list, dim=0)
+    clip_att_probs_list = torch.cat(clip_att_probs_list, dim=0)
+    clip_class_logits_list = torch.cat(clip_class_logits_list, dim=0)
+    clip_class_probs_list = torch.cat(clip_class_probs_list, dim=0)
 
     task_model_features_all = torch.cat(task_model_features_all, dim=0).numpy()
     clip_model_features_all = torch.cat(clip_model_features_all, dim=0).numpy()
@@ -408,7 +453,9 @@ def get_features_logits(data_loader, class_attributes_embeddings, class_attribut
     
     pim_acc = compute_accuracy(pim_probs_list, labels_list)
     task_model_acc = compute_accuracy(task_model_probs_list, labels_list)
-    print(f'PIM Accuracy on {args.dataset_name} = {pim_acc} and Task Model Accuracy = {task_model_acc}')
+    clip_att_acc = compute_accuracy(clip_att_probs_list, labels_list)
+    clip_class_acc = compute_accuracy(clip_class_probs_list, labels_list)
+    print(f'PIM Accuracy on {args.dataset_name} = {pim_acc}, Task Model Accuracy = {task_model_acc}, Clip Attribute Level Accuracy = {clip_att_acc}, Clip Class Level Accuracy = {clip_class_acc}')
     
     features_dict = {
         'task_model_features': task_model_features_all,
@@ -418,17 +465,23 @@ def get_features_logits(data_loader, class_attributes_embeddings, class_attribut
     logits_dict = {
         'gt_labels': labels_list,
         'task_model_logits': task_model_logits_list,
-        'pim_logits': pim_logits_list
+        'pim_logits': pim_logits_list,
+        'clip_att_logits': clip_att_logits_list,
+        'clip_class_logits': clip_class_logits_list
     }
 
     probs_dict = {
         'task_model_probs':task_model_probs_list,
-        'pim_probs': pim_probs_list
+        'pim_probs': pim_probs_list,
+        'clip_att_probs': clip_att_probs_list,
+        'clip_class_probs': clip_class_probs_list
     }
 
     accuracies = {
         'task_model_acc': task_model_acc,
-        'pim_acc': pim_acc
+        'pim_acc': pim_acc,
+        'clip_att_acc': clip_att_acc,
+        'clip_class_acc': clip_class_acc
     }
 
     return features_dict, logits_dict, probs_dict, accuracies
@@ -773,26 +826,31 @@ def main(args):
 
 
 
-        # # This evaluates CLIP attribute classifier, NOTE: use only with mean and max aggregators
-        clip_class_level_acc, clip_attribute_level_acc = clip_attribute_classifier(test_loader, class_attributes_embeddings, class_attribute_prompts, clip_model, classifier, pim_model, aggregator, class_names)
+        # # # This evaluates CLIP attribute classifier, NOTE: use only with mean and max aggregators
+        # clip_class_level_acc, clip_attribute_level_acc = clip_attribute_classifier(test_loader, class_attributes_embeddings, class_attribute_prompts, clip_model, classifier, pim_model, aggregator, class_names)
 
         # Evaluating task model
         print('\n\nEvaluating on Validation Data')
 
 
         val_features_dict, val_logits_dict, val_probs_dict, val_accuracies_dict =  get_features_logits(val_loader, class_attributes_embeddings, class_attribute_prompts,
-                                                                                        clip_model, classifier, pim_model, aggregator)
+                                                                                        clip_model, classifier, pim_model, aggregator, class_names)
 
 
         print('\nEvaluating on Test Data')
 
         test_features_dict, test_logits_dict, test_probs_dict, test_accuracies_dict =  get_features_logits(test_loader, class_attributes_embeddings, class_attribute_prompts,
-                                                                                            clip_model, classifier, pim_model, aggregator)
+                                                                                            clip_model, classifier, pim_model, aggregator, class_names)
 
         if args.score == 'cross_entropy':
             val_scores = get_score(args.score, val_logits_dict['task_model_logits'], val_logits_dict['pim_logits'])
             test_scores = get_score(args.score, test_logits_dict['task_model_logits'], test_logits_dict['pim_logits'])
-
+        elif args.score == 'cross_entropy_clip_cls':
+            val_scores = get_score(args.score, val_logits_dict['task_model_logits'], val_logits_dict['clip_class_logits'])
+            test_scores = get_score(args.score, test_logits_dict['task_model_logits'], test_logits_dict['clip_class_logits'])
+        elif args.score == 'cross_entropy_clip_att':
+            val_scores = get_score(args.score, val_logits_dict['task_model_logits'], val_logits_dict['clip_att_logits'])
+            test_scores = get_score(args.score, test_logits_dict['task_model_logits'], test_logits_dict['clip_att_logits'])
         elif args.score == 'lds_task':
 
             from latent_dissagrement import get_latent_disaggrement
@@ -839,7 +897,7 @@ def main(args):
         results_dict = get_failure_results(val_logits_dict['task_model_logits'], val_logits_dict['gt_labels'], val_scores, 
                                             test_logits_dict['task_model_logits'], test_logits_dict['gt_labels'], test_scores, 
                                             val_accuracies_dict['task_model_acc'], test_accuracies_dict['task_model_acc'],  
-                                            test_accuracies_dict['pim_acc'], clip_class_level_acc, clip_attribute_level_acc,
+                                            test_accuracies_dict['pim_acc'], test_accuracies_dict['clip_class_acc'], test_accuracies_dict['clip_att_acc'],
                                             threshold = None)
 
         if args.eval_dataset == 'NICOpp':

@@ -180,7 +180,7 @@ def get_score(score, logits, ref_logits=None):
         scores = -compute_energy(logits)
     elif score == 'pe':
         scores = -entropy(F.softmax(logits, dim=1))
-    elif score =='cross_entropy':
+    elif 'cross_entropy' in score:
         # ref_logits is the logits of the PIM model
         ref_probs = F.softmax(ref_logits, dim=1)
         scores = -F.cross_entropy(logits, ref_probs, reduction='none')
