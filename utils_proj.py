@@ -3,7 +3,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from matplotlib import pyplot as plt
-from sklearn.metrics import confusion_matrix, roc_auc_score, roc_curve
+from sklearn.metrics import confusion_matrix, roc_auc_score, roc_curve, matthews_corrcoef
 import seaborn as sns
 
 import numpy as np
@@ -189,6 +189,29 @@ def get_score(score, logits, ref_logits=None):
     
     return scores
 
+# def calc_gen_threshold(scores, logits, labels, name='classifier'):
+#     """
+#     Calculate the threshold for generalization error based on the scores
+#     """
+#     #NOTE: To be used only with ID data
+#     scores = scores.cpu().data.numpy()
+#     probs = F.softmax(logits, dim=1).cpu().data.numpy()
+#     labels = labels.cpu().data.numpy()
+
+#     scores = scores.reshape(-1)
+#     err = np.argmax(np.array(probs), 1) != np.array(labels)
+#     thresholds = np.linspace(-40, 40,5000)  # Possible thresholds
+#     max_loss = 10000
+#     for t in thresholds:
+#         l = np.abs(np.mean((scores<t)) - np.mean(err))  #np.abs(
+#         # print(l, t)
+#         if l < max_loss:
+#             max_loss = l
+#             threshold = t
+
+#     print('Threshold for {} = {}'.format(name, threshold))
+#     return threshold
+
 def calc_gen_threshold(scores, logits, labels, name='classifier'):
     """
     Calculate the threshold for generalization error based on the scores
@@ -196,17 +219,22 @@ def calc_gen_threshold(scores, logits, labels, name='classifier'):
     #NOTE: To be used only with ID data
     scores = scores.cpu().data.numpy()
     probs = F.softmax(logits, dim=1).cpu().data.numpy()
-    labels = labels.cpu().data.numpy()
+
+    # Compute the failure and success indices of the task model
+    task_true_success_failure_idx = torch.argmax(logits, 1) == labels
 
     scores = scores.reshape(-1)
-    err = np.argmax(np.array(probs), 1) != np.array(labels)
+    
     thresholds = np.linspace(-40, 40,5000)  # Possible thresholds
-    max_loss = 10000
+    
+    best_mcc = -1
     for t in thresholds:
-        l = np.abs(np.mean((scores<t)) - np.mean(err))  #np.abs(
-        # print(l, t)
-        if l < max_loss:
-            max_loss = l
+        # Threshold the scores with the current threshold to get the estimated success and failure indices
+        _, estimated_success_failure_idx = calc_accuracy_from_scores(scores, t)
+
+        mathews_corr = matthews_corrcoef(task_true_success_failure_idx.cpu(), estimated_success_failure_idx)
+        if mathews_corr > best_mcc:
+            best_mcc = mathews_corr
             threshold = t
 
     print('Threshold for {} = {}'.format(name, threshold))

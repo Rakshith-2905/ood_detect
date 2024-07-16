@@ -153,9 +153,6 @@ def train_one_epoch(data_loader, class_attributes_embeddings, class_attribute_pr
             loss[incorrect_task_pim_incorrect_idx]= loss[incorrect_task_pim_incorrect_idx]*args.task_failure_discrepancy_weight # Weight the loss by the number of such samples
             #print(f"incorrect task, incorrect pim: {len(incorrect_task_pim_incorrect_idx)}")
         
-        
-        
-        
         loss= loss.mean()
 
         fabric.backward(loss)
@@ -317,12 +314,29 @@ def main(args):
     else:
         class_attributes_embeddings_prompts = torch.load(args.attributes_embeddings_path)
         class_attribute_prompts = class_attributes_embeddings_prompts["class_attribute_prompts"]
-        class_attributes_embeddings = class_attributes_embeddings_prompts["class_attributes_embeddings"]
+        class_attributes_embeddings = class_attributes_embeddings_prompts["class_attributes_embeddings"]  # Shape: [num_classes*num_attributes_perclass, embedding_dim] 
 
         assert len(class_attribute_prompts) == args.num_classes, "Number of classes does not match the number of class attributes"
 
     num_attributes_per_cls = [len(attributes) for attributes in class_attribute_prompts]
-    
+
+    if args.subsample_classes:
+        classes_of_interest = [1, 2, 4, 6, 8, 9, 11, 13, 22, 23, 26, 29, 31, 39, 47, 63, 71, 76, 79, 84, 90, 94, 96, 97, 99, 100, 105, 107, 113, 122, 125, 130, 132, 144, 145, 147, 148, 150, 151, 155, 160, 161, 162, 163, 171, 172, 178, 187, 195, 199, 203, 207, 208, 219, 231, 232, 234, 235, 242, 245, 247, 250, 251, 254, 259, 260, 263, 265, 267, 269, 276, 277, 281, 288, 289, 291, 292, 293, 296, 299, 301, 308, 309, 310, 311, 314, 315, 319, 323, 327, 330, 334, 335, 337, 338, 340, 341, 344, 347, 353, 355, 361, 362, 365, 366, 367, 368, 372, 388, 390, 393, 397, 401, 407, 413, 414, 425, 428, 430, 435, 437, 441, 447, 448, 457, 462, 463, 469, 470, 471, 472, 476, 483, 487, 515, 546, 555, 558, 570, 579, 583, 587, 593, 594, 596, 609, 613, 617, 621, 629, 637, 657, 658, 701, 717, 724, 763, 768, 774, 776, 779, 780, 787, 805, 812, 815, 820, 824, 833, 847, 852, 866, 875, 883, 889, 895, 907, 928, 931, 932, 933, 934, 936, 937, 943, 945, 947, 948, 949, 951, 953, 954, 957, 963, 965, 967, 980, 981, 983, 988]
+        
+        # Subset the class attributes embeddings and the class attribute prompts to only the classes of interest
+        new_class_attributes_embeddings = []
+        new_class_attribute_prompts = []
+        start_idx = 0
+        for cls_idx in len(num_attributes_per_cls):
+            num_attributes = num_attributes_per_cls[cls_idx]
+            if cls_idx in classes_of_interest:
+                new_class_attributes_embeddings.append(class_attributes_embeddings[start_idx:start_idx+num_attributes])
+                new_class_attribute_prompts.append(class_attribute_prompts[start_idx:start_idx+num_attributes])
+            start_idx += num_attributes
+
+        class_attributes_embeddings = torch.cat(new_class_attributes_embeddings, dim=0)
+        class_attribute_prompts = new_class_attribute_prompts
+
     if args.attribute_aggregation == "mha":
         aggregator = MultiHeadedAttentionSimilarity(args.num_classes, num_attributes_per_cls=num_attributes_per_cls, num_heads=1, out_dim=1)
     elif args.attribute_aggregation == "mean":
