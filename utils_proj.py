@@ -189,30 +189,31 @@ def get_score(score, logits, ref_logits=None):
     
     return scores
 
-# def calc_gen_threshold(scores, logits, labels, name='classifier'):
-#     """
-#     Calculate the threshold for generalization error based on the scores
-#     """
-#     #NOTE: To be used only with ID data
-#     scores = scores.cpu().data.numpy()
-#     probs = F.softmax(logits, dim=1).cpu().data.numpy()
-#     labels = labels.cpu().data.numpy()
-
-#     scores = scores.reshape(-1)
-#     err = np.argmax(np.array(probs), 1) != np.array(labels)
-#     thresholds = np.linspace(-40, 40,5000)  # Possible thresholds
-#     max_loss = 10000
-#     for t in thresholds:
-#         l = np.abs(np.mean((scores<t)) - np.mean(err))  #np.abs(
-#         # print(l, t)
-#         if l < max_loss:
-#             max_loss = l
-#             threshold = t
-
-#     print('Threshold for {} = {}'.format(name, threshold))
-#     return threshold
-
 def calc_gen_threshold(scores, logits, labels, name='classifier'):
+    """
+    Calculate the threshold for generalization error based on the scores
+    """
+    #NOTE: To be used only with ID data
+    scores = scores.cpu().data.numpy()
+    probs = F.softmax(logits, dim=1).cpu().data.numpy()
+    labels = labels.cpu().data.numpy()
+
+    scores = scores.reshape(-1)
+    err = np.argmax(np.array(probs), 1) != np.array(labels)
+    thresholds = np.linspace(-40, 40,5000)  # Possible thresholds
+    max_loss = 10000
+    for t in thresholds:
+        l = np.abs(np.mean((scores<t)) - np.mean(err))  #np.abs(
+        # print(l, t)
+        if l < max_loss:
+            max_loss = l
+            threshold = t
+
+    print('Threshold for {} = {}'.format(name, threshold))
+    return threshold
+
+
+def calc_gen_threshold_MCC(scores, logits, labels, name='classifier'):
     """
     Calculate the threshold for generalization error based on the scores
     """

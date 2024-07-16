@@ -43,7 +43,7 @@ from sklearn.metrics import confusion_matrix, matthews_corrcoef, roc_auc_score, 
 from train_task_distillation import get_dataset, get_CLIP_text_encodings, build_classifier
 
 from models.mapping import TaskMapping, MultiHeadedAttentionSimilarity, MultiHeadedAttention, print_layers, MeanAggregator, MaxAggregator
-from utils_proj import SimpleDINOLoss, compute_accuracy, compute_similarities, CutMix, MyAugMix, find_normalization_parameters, get_score, calc_gen_threshold, calc_accuracy_from_scores, compute_gde_scores, compute_ts, compute_auroc_fpr
+from utils_proj import SimpleDINOLoss, compute_accuracy, compute_similarities, CutMix, MyAugMix, find_normalization_parameters, get_score, calc_gen_threshold,calc_gen_threshold_MCC, calc_accuracy_from_scores, compute_gde_scores, compute_ts, compute_auroc_fpr
 from models.cluster import ClusterCreater
 
 
@@ -706,8 +706,10 @@ def main(args):
             val_scores, tscaler = compute_ts(val_logits_list, val_labels_list, val_logits_list, tscaler=None, mode='val')
 
 
-
-        threshold = calc_gen_threshold(val_scores, val_logits_list, val_labels_list, name='classifier')
+        if args.threshold_by=='mcc':
+            threshold = calc_gen_threshold_MCC(val_scores, val_logits_list, val_labels_list, name='classifier')
+        else:
+            threshold = calc_gen_threshold(val_scores, val_logits_list, val_labels_list, name='classifier')
 
         # Just for verification
         estimated_val_acc, val_estimated_success_failure_idx = calc_accuracy_from_scores(val_scores, threshold)
@@ -1216,6 +1218,8 @@ if __name__ == "__main__":
     # add calib_domain
     parser.add_argument('--calib_domain', type=str, default="photo", help='Domain to use for calibration')
     parser.add_argument('--train_domain', type=str, default="photo", help='Domain to use for training')
+    #add thresholdby
+    parser.add_argument('--threshold_by', type=str, default='mcc', help='Threshold using mcc score or accuracy')
     args = parser.parse_args()
     device='cuda' if torch.cuda.is_available() else 'cpu'
     args.device = device
