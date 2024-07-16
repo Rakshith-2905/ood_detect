@@ -423,21 +423,25 @@ def main(args):
             "epoch": start_epoch}
 
     if args.resume_checkpoint_path:
-        state = fabric.load(args.resume_checkpoint_path)
+        fabric.load(args.resume_checkpoint_path, state)
         start_epoch = state["epoch"]
 
         # Load the model and optimizer
-        clip_model = state["clip_model"]
-        classifier = state["classifier"]
-        pim_model = state["pim_model"]
-        aggregator = state["aggregator"]
-        optimizer = state["optimizer"]
-        scheduler = state["scheduler"]
-
+        # clip_model = state["clip_model"]
+        # classifier = state["classifier"]
+        # pim_model = state["pim_model"]
+        # aggregator = state["aggregator"]
+        # optimizer = state["optimizer"]
+        # scheduler = state["scheduler"]
+        # takr tje  last learning rate and restart the scheduler
+        
+        scheduler = torch.optim.lr_scheduler.MultiStepLR(optimizer, milestones=[60, 120, 160,200,240,280,320,360], gamma=0.2)
+        state['scheduler'] = scheduler
         fabric.print(f"Loaded checkpoint from {args.resume_checkpoint_path} at epoch {start_epoch}")
     if start_epoch >= args.num_epochs:
         fabric.print(f"Already finished training for {args.num_epochs} epochs. Exiting...")
         return
+    
 
     best_val_loss = float("inf")
     for epoch in range(start_epoch, args.num_epochs):
