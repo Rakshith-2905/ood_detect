@@ -193,6 +193,7 @@ def calc_gen_threshold(scores, logits, labels, name='classifier'):
     """
     Calculate the threshold for generalization error based on the scores
     """
+    print("Calculating threshold for Generalization Error")
     #NOTE: To be used only with ID data
     scores = scores.cpu().data.numpy()
     probs = F.softmax(logits, dim=1).cpu().data.numpy()
@@ -217,6 +218,8 @@ def calc_gen_threshold_MCC(scores, logits, labels, name='classifier'):
     """
     Calculate the threshold for generalization error based on the scores
     """
+
+    print("Calculating threshold for MCC")
     #NOTE: To be used only with ID data
     scores = scores.cpu().data.numpy()
     probs = F.softmax(logits, dim=1).cpu().data.numpy()

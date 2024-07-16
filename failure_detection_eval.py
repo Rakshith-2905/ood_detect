@@ -102,7 +102,12 @@ def get_failure_results(val_task_logits_list, val_labels_list, val_scores,
 
 
     if not threshold:
-        threshold = calc_gen_threshold(val_scores, val_task_logits_list, val_labels_list, name='pim')
+
+        if args.threshold_by=='mcc':
+            threshold = calc_gen_threshold_MCC(val_scores, val_task_logits_list, val_labels_list, name='classifier')
+        else:
+            threshold = calc_gen_threshold(val_scores, val_task_logits_list, val_labels_list, name='classifier')
+
 
     # Calculate estimated accuracy based on the provided scores and threshold
     estimated_val_acc, val_estimated_success_failure_idx = calc_accuracy_from_scores(val_scores, threshold)
@@ -683,13 +688,14 @@ def main(args):
 
             val_task_model_acc, val_labels_list, val_logits_list, val_probs_list = evaluate_classifier(val_loader, classifier, device=device)
 
-            torch.save({'logits': val_logits_list, 'labels': val_labels_list, 'probs': val_probs_list}, file_path)
+            torch.save({'logits': val_logits_list, 'labels': val_labels_list, 'probs': val_probs_list, 'accuracy': val_task_model_acc}, file_path)
         else:
             print(f'Loading features and logits from {file_path}')
             val_data = torch.load(file_path)
             val_logits_list = val_data['logits']
             val_labels_list = val_data['labels']
             val_probs_list = val_data['probs']
+            val_task_model_acc = val_data['accuracy']
             
 
         if args.score in ['msp', 'pe', 'energy', 'max_logit']:
@@ -1401,8 +1407,9 @@ python failure_detection_eval.py \
 --augmix_prob 0.2 \
 --cutmix_prob 0.2 \
 --resume_checkpoint_path logs/cats_dogs/resnet18/mapper/_agg_mean_bs_512_lr_0.001_augmix_prob_0.2_cutmix_prob_0.2_scheduler_warmup_epoch_10_layer_model.layer1/pim_weights_best.pth \
---method baseline \
---score gde 
+--method pim \
+--score cross_entropy \
+--threshold_by mcc
 
 
 
