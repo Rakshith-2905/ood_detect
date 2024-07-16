@@ -36,13 +36,13 @@ def save_data_to_file(data, filename):
 
 # File paths and usage
 source_file_path = 'pacs_core_concepts.json'  # Specify the path to your input JSON file
-output_file_path = 'pacs_core_concepts_75_corrupted.json'  # Specify the filename to save the corrupted data
+output_file_path = 'pacs_core_concepts_30_corrupted.json'  # Specify the filename to save the corrupted data
 
 # Load data from the source JSON file
 data = load_json_from_file(source_file_path)
 
 # Corrupt the data
-corruption_percentage = 0.75  # 25% of elements in each list will be corrupted
+corruption_percentage = 0.30  # 25% of elements in each list will be corrupted
 modified_data = corrupt_data(data, corruption_percentage)
 
 # Save the corrupted data to a file
