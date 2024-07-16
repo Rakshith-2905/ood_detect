@@ -88,7 +88,7 @@ python failure_detection_eval.py \
     --classifier_name vit_b_16 \
     --classifier_checkpoint_path logs/cats_dogs/vit_b_16/classifier_seed42/checkpoint_99.pth \
     --use_imagenet_pretrained \
-    --attribute_aggregation max \
+    --attribute_aggregation mean \
     --clip_model_name ViT-B/32 \
     --prompt_path data/cats_dogs/cats_dogss_CLIP_ViT-B_32_text_embeddings.pth \
     --num_epochs 200 \
@@ -104,7 +104,7 @@ python failure_detection_eval.py \
     --num_nodes 1 \
     --augmix_prob 0.2 \
     --cutmix_prob 0.2 \
-    --resume_checkpoint_path logs/cats_dogs/vit_b_16/mapper/_agg_max_bs_64_lr_0.001_augmix_prob_0.2_cutmix_prob_0.2_scheduler_warmup_epoch_0_layer_model.encoder.layers.encoder_layer_1/pim_weights_best.pth \
+    --resume_checkpoint_path logs/cats_dogs/vit_b_16/mapper/_agg_mean_bs_64_lr_0.001_augmix_prob_0.2_cutmix_prob_0.2_scheduler_warmup_epoch_0_layer_model.encoder.layers.encoder_layer_1/pim_weights_best.pth \
     --method pim \
     --score cross_entropy
 
